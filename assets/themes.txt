@@ -1,0 +1,81 @@
+# OpenChess theme manifest
+# board <key> <Label>  /  piece <key> <Label>
+# Labels derived from GiorgioMegrelli/chess.com-boards-and-pieces (default-config.json).
+# Assets are (c) chess.com and used here for personal/educational purposes.
+board 9rdwe Green
+board dark_wood Wood
+board glass Glass
+board brown Brown
+board icy_sea Icy Sea
+board newspaper Newspaper
+board walnut Walnut
+board sky Sky
+board lolz Lolz
+board stone Stone
+board bases Bases
+board 8_bit 8-Bit
+board marble Marble
+board purple Purple
+board translucent Overlay
+board metal Metal
+board tournament Tournament
+board dash Dash
+board burled_wood Burled Wood
+board blue Dark Blue
+board bubblegum Bubblegum
+board checkers Checkers
+board graffiti Graffiti
+board light Light
+board neon Neon
+board orange Orange
+board parchment Parchment
+board red Red
+board sand Sand
+board tan Tan
+board 4fs27 Blue
+board g715q Pink
+board my2xa Chess The Musical
+board bju81 Event - Naroditsky Memorial
+board z4m3d Event - Esports World Cup 2026
+board 6m5lc Sky and Sea
+board ohdxn Band Class
+piece ejgfv Neo
+piece 8qetl Neo Angle
+piece game_room Game Room
+piece wood Wood
+piece glass Glass
+piece gothic Gothic
+piece classic Classic
+piece metal Metal
+piece bases Bases
+piece neo_wood Neo-Wood
+piece icy_sea Icy Sea
+piece club Club
+piece ocean Ocean
+piece newspaper Newspaper
+piece space Space
+piece cases Cases
+piece condal Condal
+piece 3d_chesskid 3D - ChessKid
+piece 8_bit 8-Bit
+piece marble Marble
+piece book Book
+piece alpha Alpha
+piece bubblegum Bubblegum
+piece dash Dash
+piece graffiti Graffiti
+piece light Light
+piece lolz Lolz
+piece luca Luca
+piece maya Maya
+piece modern Modern
+piece nature Nature
+piece neon Neon
+piece sky Sky
+piece tigers Tigers
+piece tournament Tournament
+piece vintage Vintage
+piece 3d_wood Real 3D
+piece 3d_staunton 3D - Staunton
+piece 3d_plastic 3D - Plastic
+piece ca09k Band Class

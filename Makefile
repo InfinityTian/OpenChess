@@ -1,0 +1,75 @@
+CC      = cc
+CFLAGS  = -std=c11 -Wall -Wextra -O2 -g
+# SDL_net is optional: local multiplayer is compiled in when it is available.
+NET_PC := $(shell pkg-config --exists SDL2_net 2>/dev/null && echo SDL2_net)
+HAVE_SDL_NET := $(if $(NET_PC),1,0)
+
+SDL_PKGS   := sdl2 SDL2_ttf SDL2_image $(NET_PC)
+SDL_CFLAGS := $(shell pkg-config --cflags $(SDL_PKGS) 2>/dev/null)
+SDL_LIBS   := $(shell pkg-config --libs $(SDL_PKGS) 2>/dev/null)
+
+CFLAGS += -DHAVE_SDL_NET=$(HAVE_SDL_NET)
+
+BIN      = openchess
+SRC_CORE = src/board.c src/move.c src/pgn.c src/fen.c src/ai.c src/themes.c src/paths.c
+OBJ_CORE = $(SRC_CORE:.c=.o)
+NET_SRC  = src/net.c
+
+all: $(BIN)
+
+$(BIN): src/main.c src/gui.c $(NET_SRC) $(OBJ_CORE)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@ $(SDL_LIBS)
+
+%.o: %.c
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
+
+tests/test_gui: tests/test_gui.c src/gui.c $(NET_SRC) $(OBJ_CORE)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@ $(SDL_LIBS)
+
+tests/test_net: tests/test_net.c $(NET_SRC)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@ $(SDL_LIBS)
+
+tests/test_local: tests/test_local.c src/gui.c $(NET_SRC) $(OBJ_CORE)
+	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@ $(SDL_LIBS)
+
+tests/test_rules: tests/test_rules.c $(OBJ_CORE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+tests/test_fen: tests/test_fen.c $(OBJ_CORE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+tests/test_ai: tests/test_ai.c $(OBJ_CORE)
+	$(CC) $(CFLAGS) $^ -o $@
+
+test: tests/test_rules tests/test_fen tests/test_ai tests/test_net tests/test_local tests/test_gui
+	./tests/test_rules
+	./tests/test_fen
+	./tests/test_ai
+	./tests/test_net
+	./tests/test_local
+	./tests/test_gui
+	@rm -f gui_smoke.bmp
+
+run: $(BIN)
+	./$(BIN)
+
+# --- install / packaging --------------------------------------------------
+
+PREFIX ?=
+install: $(BIN)
+	PREFIX="$(PREFIX)" ./install.sh
+
+uninstall:
+	PREFIX="$(PREFIX)" ./uninstall.sh
+
+app: $(BIN)
+	./scripts/make_app.sh
+
+dmg: $(BIN)
+	./scripts/make_dmg.sh
+
+clean:
+	rm -f $(BIN) chess tests/test_rules tests/test_fen tests/test_ai tests/test_net tests/test_local tests/test_gui gui_smoke.bmp $(OBJ_CORE)
+	rm -rf dist
+
+.PHONY: all test run clean install uninstall app dmg

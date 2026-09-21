@@ -1,0 +1,26 @@
+# Build output
+/openchess
+/chess
+*.o
+*.a
+*.dSYM/
+*.dSYM
+
+# Test binaries and scratch
+/tests/test_rules
+/tests/test_fen
+/tests/test_ai
+/tests/test_net
+/tests/test_local
+/tests/test_gui
+gui_smoke.bmp
+
+# Packaging output
+/dist/
+*.dmg
+
+# Local configuration (created at runtime)
+chess.conf
+
+# macOS
+.DS_Store

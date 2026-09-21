@@ -1,0 +1,15 @@
+# Chess GUI configuration. Copy to chess.conf to override the defaults.
+# Lines are `key = value`; anything after `#` is a comment.
+
+# Board theme: any key from assets/themes.txt (e.g. icy_sea, brown, marble).
+board = icy_sea
+
+# Piece set: any key from assets/themes.txt (e.g. cases, neo, classic, glyph).
+pieces = cases
+
+# Move animation: arcade | slide | fade | none
+animation = arcade
+
+# Stockfish engine binary for singleplayer. Optional; when omitted a
+# `stockfish` binary is looked up in the usual locations and on PATH.
+# engine = /opt/homebrew/bin/stockfish
