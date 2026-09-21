@@ -62,11 +62,32 @@ config file.
     effect.
 - Your choice is applied immediately and saved to `chess.conf`.
 
-### Board flipping
+### Board flipping and resizing
 
 - **Ctrl+F** flips the board manually.
 - In Singleplayer and Local Multiplayer the board is automatically oriented to
   your colour at the start.
+- **Resize**: drag the grip in the board's bottom-right corner to change the
+  square size; the window follows. You can also resize the window normally and
+  the board scales to fit. The square size is saved as `board_size`.
+
+### Engine and evaluation (Analysis)
+
+- Open the **Engine** screen from the welcome menu or with **Ctrl+E** while
+  playing. Pick an engine detected on your `PATH`, or type a custom executable
+  path (Tab to edit the field, Enter to apply). The choice is saved as `engine`.
+- In Analysis the selected engine analyses the current position continuously: a
+  vertical **evaluation bar** is drawn to the left of the board and the numeric
+  score and search depth appear in the panel. It restarts after every move,
+  undo, restart or FEN load.
+
+### Export as PGN
+
+- Press **Ctrl+S** or click **PGN** (only when at least one move has been made).
+- Type a file name and press **Enter**; the game is written to
+  `~/.local/share/openchess/games/<name>.pgn` (honouring `XDG_DATA_HOME`) with
+  `Event/Site/Date/Round/White/Black/Result` headers and the movetext.
+- The status message shows the full path. **Esc** cancels.
 
 ### Keyboard reference
 
@@ -75,11 +96,14 @@ config file.
 | `Enter` | Reveal SAN box / submit typed move |
 | `Esc` | Cancel entry, clear selection, or go back |
 | `Ctrl+B` / `Ctrl+P` / `Ctrl+M` | Cycle board / pieces / animation |
+| `Ctrl+E` | Engine selection |
+| `Ctrl+S` | Export game as PGN |
 | `Ctrl+F` | Flip board |
 | `Ctrl+U` | Undo (not in multiplayer) |
 | `Ctrl+R` | Restart (not in multiplayer) |
 | `Ctrl+C` | Copy FEN |
 | `Ctrl+Q` | Quit |
+| Board corner drag | Resize the board |
 | Arrows / `W` `S` | Menu navigation |
 | `Tab`, `1` `2` `3` | Appearance tabs / host-join fields |
 
@@ -91,6 +115,7 @@ config file.
 board = icy_sea      # any key from assets/themes.txt
 pieces = cases       # any key from assets/themes.txt
 animation = arcade   # arcade | slide | fade | none
+board_size = 88      # square size in points (44-150)
 engine = /opt/homebrew/bin/stockfish   # optional
 ```
 
@@ -146,10 +171,27 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
   - 棋盘与棋子显示实时缩略图；动画标签会逐项预览效果。
 - 选择即时生效并保存到 `chess.conf`。
 
-### 棋盘翻转
+### 棋盘翻转与缩放
 
 - **Ctrl+F** 手动翻转。
 - 单人/本地多人开局时会自动朝向你的颜色。
+- **缩放**：拖动棋盘右下角手柄可改变格子大小，窗口会随之调整；也可直接缩放系统
+  窗口，棋盘会自动适配。格子大小会保存为 `board_size`。
+
+### 引擎与评估（分析模式）
+
+- 可从欢迎菜单或游戏中按 **Ctrl+E** 打开 **Engine** 界面。选择在 `PATH` 中检测到
+  的引擎，或输入自定义可执行文件路径（Tab 编辑，Enter 应用）。选择保存为 `engine`。
+- 分析模式下所选引擎会持续分析当前局面：棋盘左侧显示垂直**评估条**，面板中显示
+  分数与搜索深度。每步走子、悔棋、重开或载入 FEN 后都会重新分析。
+
+### 导出 PGN
+
+- 按 **Ctrl+S** 或点击 **PGN** 按钮（至少走过一步时可用）。
+- 输入文件名后按 **Enter**，对局会写入
+  `~/.local/share/openchess/games/<name>.pgn`（遵循 `XDG_DATA_HOME`），包含
+  `Event/Site/Date/Round/White/Black/Result` 头部与着法文本。
+- 状态栏会显示完整路径，**Esc** 取消。
 
 ### 键盘速查
 
@@ -158,11 +200,14 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 | `Enter` | 显示 SAN 输入框 / 提交着法 |
 | `Esc` | 取消输入、清除选择或返回 |
 | `Ctrl+B` / `Ctrl+P` / `Ctrl+M` | 循环切换棋盘 / 棋子 / 动画 |
+| `Ctrl+E` | 引擎选择 |
+| `Ctrl+S` | 导出对局为 PGN |
 | `Ctrl+F` | 翻转棋盘 |
 | `Ctrl+U` | 悔棋（多人模式不可用） |
 | `Ctrl+R` | 重新开始（多人模式不可用） |
 | `Ctrl+C` | 复制 FEN |
 | `Ctrl+Q` | 退出 |
+| 拖动棋盘角 | 缩放棋盘 |
 | 方向键 / `W` `S` | 菜单导航 |
 | `Tab`、`1` `2` `3` | 外观标签页 / 主机-加入字段 |
 
@@ -174,6 +219,7 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 board = icy_sea      # assets/themes.txt 中的任意键
 pieces = cases       # assets/themes.txt 中的任意键
 animation = arcade   # arcade | slide | fade | none
+board_size = 88      # 格子大小（44-150）
 engine = /opt/homebrew/bin/stockfish   # 可选
 ```
 

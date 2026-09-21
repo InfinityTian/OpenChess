@@ -250,3 +250,67 @@ void move_to_san(const Board *before, Move m, char *out, size_t n)
     strncpy(out, buf, n - 1);
     out[n - 1] = '\0';
 }
+
+/* --- PGN export --- */
+
+const char *pgn_result(const Board *b, GameState state)
+{
+    switch (state) {
+        case CHECKMATE:
+            return (b->side == WHITE) ? "0-1" : "1-0";
+        case STALEMATE:
+        case INSUFFICIENT_MATERIAL:
+            return "1/2-1/2";
+        default:
+            return "*";
+    }
+}
+
+static void write_header(FILE *f, const char *tag, const char *value)
+{
+    fprintf(f, "[%s \"", tag);
+    for (const char *p = value; p && *p; p++) {
+        if (*p == '"' || *p == '\\') fputc('\\', f);
+        fputc(*p, f);
+    }
+    fprintf(f, "\"]\n");
+}
+
+void pgn_write(FILE *f, const char moves[][8], int ply,
+               const char *event, const char *site, const char *date,
+               int round, const char *white, const char *black,
+               const char *result)
+{
+    if (!f) return;
+
+    write_header(f, "Event",  event  && *event  ? event  : "?");
+    write_header(f, "Site",   site   && *site   ? site   : "?");
+    write_header(f, "Date",   date   && *date   ? date   : "????.??.??");
+    char roundbuf[16];
+    snprintf(roundbuf, sizeof roundbuf, "%d", round > 0 ? round : 1);
+    write_header(f, "Round",  roundbuf);
+    write_header(f, "White",  white  && *white  ? white  : "?");
+    write_header(f, "Black",  black  && *black  ? black  : "?");
+    write_header(f, "Result", result && *result ? result : "*");
+    fputc('\n', f);
+
+    int col = 0;
+    for (int i = 0; i < ply; i++) {
+        char tok[32];
+        if (i % 2 == 0) snprintf(tok, sizeof tok, "%d. %s", i / 2 + 1, moves[i]);
+        else            snprintf(tok, sizeof tok, "%s", moves[i]);
+
+        int len = (int)strlen(tok);
+        if (col > 0 && col + 1 + len > 80) { fputc('\n', f); col = 0; }
+        else if (col > 0) { fputc(' ', f); col++; }
+        fputs(tok, f);
+        col += len;
+    }
+
+    const char *res = (result && *result) ? result : "*";
+    int len = (int)strlen(res);
+    if (col > 0 && col + 1 + len > 80) { fputc('\n', f); col = 0; }
+    else if (col > 0) { fputc(' ', f); col++; }
+    fputs(res, f);
+    fputc('\n', f);
+}

@@ -3,7 +3,9 @@
 
 #include "board.h"
 #include "move.h"
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 /*
  * Try to parse a SAN move (one move, e.g. "Nf3", "exd5", "O-O-O", "e8=Q+")
@@ -31,5 +33,19 @@ int san_classify(const Board *b, const char *san);
  * `b` must be the board before the move is made.
  */
 void move_to_san(const Board *b, Move m, char *out, size_t n);
+
+/*
+ * PGN result token ("1-0", "0-1", "1/2-1/2" or "*") for a finished position.
+ */
+const char *pgn_result(const Board *b, GameState state);
+
+/*
+ * Write a complete PGN (headers + movetext) for a game.
+ * `moves` holds one SAN string per ply (each NUL-terminated, e.g. Gui.move_san).
+ */
+void pgn_write(FILE *f, const char moves[][8], int ply,
+               const char *event, const char *site, const char *date,
+               int round, const char *white, const char *black,
+               const char *result);
 
 #endif

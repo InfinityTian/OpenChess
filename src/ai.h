@@ -38,6 +38,12 @@ void ai_set_depth(AiEngine *ai, int depth);   /* >0 overrides movetime */
 /* Begin searching the position `b`. */
 void ai_go(AiEngine *ai, const Board *b);
 
+/* Begin an unbounded search (used for live analysis; stop with ai_stop_search). */
+void ai_go_infinite(AiEngine *ai, const Board *b);
+
+/* Most recent "info" score, from the side-to-move's perspective. */
+bool ai_get_eval(const AiEngine *ai, int *cp, int *mate, int *depth);
+
 /* Ask the engine to abort the current search (its pending bestmove is ignored). */
 void ai_stop_search(AiEngine *ai);
 

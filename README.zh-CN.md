@@ -18,6 +18,11 @@
     （本机或局域网）。
 - **外观选择器**：用缩略图浏览全部棋盘与棋子，预览动画并即时应用；选择会保存到
   `chess.conf`。
+- **引擎选择**：从自动检测到的 UCI 引擎或自定义路径中选择；用于单人模式与分析。
+- **实时评估条**：分析模式下棋盘左侧显示 Stockfish 评估条与分数/深度。
+- **可调整窗口与棋盘**：拖动棋盘右下角手柄即可缩放棋盘，窗口随之调整，系统窗口
+  也可自由缩放。
+- **导出 PGN**：按 `Ctrl+S`（或 **PGN** 按钮）保存对局（含头部与结果）。
 - **FEN**：从 FEN 字符串载入局面，并可复制当前局面。
 - **按需 SAN 输入**：按回车显示输入框，输入 SAN（`e4`、`Nf3`、`O-O-O`、
   `e8=Q+`），再按回车落子。
@@ -92,11 +97,14 @@ make dmg        # 生成 dist/OpenChess.app 与 dist/OpenChess.dmg
 | **Esc** | 取消 SAN/FEN 输入、清除选择或返回 |
 | **Ctrl+B / Ctrl+P / Ctrl+M** | 循环切换棋盘 / 棋子 / 动画 |
 | **Styles** 按钮 | 打开可视化外观选择器 |
+| **Ctrl+E** | 打开引擎选择界面 |
+| **Ctrl+S** | 导出对局为 PGN |
 | **Ctrl+F** | 翻转棋盘 |
 | **Ctrl+U** | 悔棋（多人模式禁用） |
 | **Ctrl+R** | 重新开始（多人模式禁用） |
 | **Ctrl+C** | 复制当前局面为 FEN |
 | **Ctrl+Q** | 退出 |
+| 拖动棋盘角 | 缩放棋盘 |
 
 ## 配置
 
@@ -107,6 +115,7 @@ OpenChess 会读取 `chess.conf`（开发环境）或
 board = icy_sea      # assets/themes.txt 中的任意键
 pieces = cases       # assets/themes.txt 中的任意键
 animation = arcade   # arcade | slide | fade | none
+board_size = 88      # 格子大小（44-150）
 engine = /opt/homebrew/bin/stockfish   # 可选
 ```
 

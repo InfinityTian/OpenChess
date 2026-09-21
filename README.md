@@ -24,6 +24,14 @@ FEN import/export, board flipping, move animations, and SAN text entry.
     (localhost or LAN).
 - **Appearance picker** – browse every board and piece set with thumbnails,
   preview animations, and apply live. Choices are remembered in `chess.conf`.
+- **Engine selection** – pick a detected UCI engine or a custom path; used by
+  Singleplayer and by live Analysis.
+- **Live evaluation bar** – in Analysis a Stockfish evaluation bar sits beside
+  the board with score/depth readout.
+- **Resizable window and board** – drag the grip in the board's bottom-right
+  corner to resize the board; the window follows, and the OS window is resizable.
+- **Export as PGN** – press `Ctrl+S` (or the **PGN** button) to save the game
+  with headers and result.
 - **FEN** – load a position from a FEN string and copy the current position.
 - **On-demand SAN input** – press Enter to reveal a move box, type SAN
   (`e4`, `Nf3`, `O-O-O`, `e8=Q+`), press Enter to play.
@@ -87,11 +95,14 @@ Full details and controls: [`docs/USAGE.md`](docs/USAGE.md) and
 | **Esc** | Cancel SAN/FEN entry, clear selection, or go back |
 | **Ctrl+B / Ctrl+P / Ctrl+M** | Cycle board / pieces / animation |
 | **Styles** button | Open the visual appearance picker |
+| **Ctrl+E** | Open the engine selection screen |
+| **Ctrl+S** | Export the game as PGN |
 | **Ctrl+F** | Flip the board |
 | **Ctrl+U** | Undo (disabled in multiplayer) |
 | **Ctrl+R** | Restart (disabled in multiplayer) |
 | **Ctrl+C** | Copy the current position as FEN |
 | **Ctrl+Q** | Quit |
+| Board corner drag | Resize the board |
 
 ### Configuration
 
@@ -102,6 +113,7 @@ OpenChess reads `chess.conf` (development) or `~/.config/openchess/chess.conf`
 board = icy_sea      # any key from assets/themes.txt
 pieces = cases       # any key from assets/themes.txt
 animation = arcade   # arcade | slide | fade | none
+board_size = 88      # square size in points (44-150)
 engine = /opt/homebrew/bin/stockfish   # optional
 ```
 
@@ -217,6 +229,7 @@ OpenChess 会读取 `chess.conf`（开发环境）或
 board = icy_sea      # assets/themes.txt 中的任意键
 pieces = cases       # assets/themes.txt 中的任意键
 animation = arcade   # arcade | slide | fade | none
+board_size = 88      # 格子大小（44-150）
 engine = /opt/homebrew/bin/stockfish   # 可选
 ```
 

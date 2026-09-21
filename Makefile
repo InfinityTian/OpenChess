@@ -10,6 +10,9 @@ SDL_LIBS   := $(shell pkg-config --libs $(SDL_PKGS) 2>/dev/null)
 
 CFLAGS += -DHAVE_SDL_NET=$(HAVE_SDL_NET)
 
+VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.0.0)
+CFLAGS  += -DOPENCHESS_VERSION=\"$(VERSION)\"
+
 BIN      = openchess
 SRC_CORE = src/board.c src/move.c src/pgn.c src/fen.c src/ai.c src/themes.c src/paths.c
 OBJ_CORE = $(SRC_CORE:.c=.o)
@@ -38,12 +41,16 @@ tests/test_rules: tests/test_rules.c $(OBJ_CORE)
 tests/test_fen: tests/test_fen.c $(OBJ_CORE)
 	$(CC) $(CFLAGS) $^ -o $@
 
+tests/test_pgn: tests/test_pgn.c $(OBJ_CORE)
+	$(CC) $(CFLAGS) $^ -o $@
+
 tests/test_ai: tests/test_ai.c $(OBJ_CORE)
 	$(CC) $(CFLAGS) $^ -o $@
 
-test: tests/test_rules tests/test_fen tests/test_ai tests/test_net tests/test_local tests/test_gui
+test: tests/test_rules tests/test_fen tests/test_pgn tests/test_ai tests/test_net tests/test_local tests/test_gui
 	./tests/test_rules
 	./tests/test_fen
+	./tests/test_pgn
 	./tests/test_ai
 	./tests/test_net
 	./tests/test_local
@@ -69,7 +76,7 @@ dmg: $(BIN)
 	./scripts/make_dmg.sh
 
 clean:
-	rm -f $(BIN) chess tests/test_rules tests/test_fen tests/test_ai tests/test_net tests/test_local tests/test_gui gui_smoke.bmp $(OBJ_CORE)
+	rm -f $(BIN) chess tests/test_rules tests/test_fen tests/test_pgn tests/test_ai tests/test_net tests/test_local tests/test_gui gui_smoke.bmp $(OBJ_CORE)
 	rm -rf dist
 
 .PHONY: all test run clean install uninstall app dmg

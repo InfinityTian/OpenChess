@@ -4,6 +4,7 @@
 #include <SDL_image.h>
 #include <SDL_ttf.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Headless smoke test: create the GUI offscreen, play some moves, render a
@@ -97,6 +98,21 @@ int main(void)
     if (g->scene != SCENE_GAME || g->mode != MODE_ANALYSIS) {
         fprintf(stderr, "menu did not start analysis mode\n");
         return 1;
+    }
+
+    /* analysis engine: live evaluation arrives (when an engine is present) */
+    if (g->engine_path[0]) {
+        Uint32 et = SDL_GetTicks();
+        int guard = 0;
+        while (!g->eval_valid && guard++ < 600) {
+            gui_tick(g, et);
+            SDL_Delay(10);
+            et += 10;
+        }
+        if (!g->eval_valid) {
+            fprintf(stderr, "analysis evaluation did not arrive\n");
+            return 1;
+        }
     }
 
     /* play some moves into the gui board */
@@ -210,6 +226,49 @@ int main(void)
     }
     if (strcmp(g->move_san[0], "e4") != 0) {
         fprintf(stderr, "move list SAN wrong: %s\n", g->move_san[0]);
+        return 1;
+    }
+
+    /* ---- PGN export through the save prompt ---- */
+    setenv("XDG_DATA_HOME", "/tmp/openchess-test-data", 1);
+    snprintf(g->white_name, sizeof g->white_name, "Alice");
+    snprintf(g->black_name, sizeof g->black_name, "Bob");
+    SDL_Event save = {0};
+    save.type = SDL_KEYDOWN;
+    save.key.keysym.sym = SDLK_s;
+    save.key.keysym.mod = KMOD_LCTRL;
+    gui_handle_event(g, &save);
+    if (!g->pgn_prompt) {
+        fprintf(stderr, "Ctrl+S did not open the PGN prompt\n");
+        return 1;
+    }
+    const char *nm = "smoke";
+    for (const char *p = nm; *p; p++) {
+        SDL_Event te = {0};
+        te.type = SDL_TEXTINPUT;
+        te.text.text[0] = *p;
+        te.text.text[1] = '\0';
+        gui_handle_event(g, &te);
+    }
+    SDL_Event ent = {0};
+    ent.type = SDL_KEYDOWN;
+    ent.key.keysym.sym = SDLK_RETURN;
+    gui_handle_event(g, &ent);
+    if (g->pgn_prompt) {
+        fprintf(stderr, "PGN prompt did not close after save\n");
+        return 1;
+    }
+    FILE *pf = fopen("/tmp/openchess-test-data/openchess/games/smoke.pgn", "r");
+    if (!pf) {
+        fprintf(stderr, "PGN file was not written\n");
+        return 1;
+    }
+    char pgbuf[1024];
+    size_t pgn = fread(pgbuf, 1, sizeof pgbuf - 1, pf);
+    pgbuf[pgn] = '\0';
+    fclose(pf);
+    if (!strstr(pgbuf, "[White \"Alice\"]") || !strstr(pgbuf, "1. e4")) {
+        fprintf(stderr, "PGN content unexpected:\n%s\n", pgbuf);
         return 1;
     }
 
@@ -442,6 +501,44 @@ int main(void)
         return 1;
     }
     g->config_dirty = false;    /* don't write a config during tests */
+
+    /* ---- drag the board corner to resize it ---- */
+    g->scene = SCENE_GAME;
+    g->mode = MODE_ANALYSIS;
+    int sq_before = g->sq;
+    int winw_before = g->win_w;
+    int gx = g->board_x + 8 * g->sq - 9;
+    int gy = g->board_y + 8 * g->sq - 9;
+
+    SDL_Event rd = {0};
+    rd.type = SDL_MOUSEBUTTONDOWN;
+    rd.button.button = SDL_BUTTON_LEFT;
+    rd.button.x = gx; rd.button.y = gy;
+    gui_handle_event(g, &rd);
+    if (!g->resizing_board) {
+        fprintf(stderr, "board grip did not start a resize\n");
+        return 1;
+    }
+    SDL_Event rm = {0};
+    rm.type = SDL_MOUSEMOTION;
+    rm.motion.x = gx + 56; rm.motion.y = gy + 56;
+    rm.motion.state = SDL_BUTTON_LMASK;
+    gui_handle_event(g, &rm);
+    if (g->sq <= sq_before || g->win_w <= winw_before) {
+        fprintf(stderr, "board did not grow (sq %d->%d)\n", sq_before, g->sq);
+        return 1;
+    }
+    SDL_Event ru = {0};
+    ru.type = SDL_MOUSEBUTTONUP;
+    ru.button.button = SDL_BUTTON_LEFT;
+    ru.button.x = gx + 56; ru.button.y = gy + 56;
+    gui_handle_event(g, &ru);
+    if (g->resizing_board) {
+        fprintf(stderr, "board resize did not end on mouse up\n");
+        return 1;
+    }
+    gui_render(g, ren);          /* resized layout renders */
+    g->config_dirty = false;
 
     if (SDL_SaveBMP(surf, "gui_smoke.bmp") != 0) {
         fprintf(stderr, "savebmp: %s\n", SDL_GetError());

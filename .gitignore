@@ -9,6 +9,7 @@
 # Test binaries and scratch
 /tests/test_rules
 /tests/test_fen
+/tests/test_pgn
 /tests/test_ai
 /tests/test_net
 /tests/test_local

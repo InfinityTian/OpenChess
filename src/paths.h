@@ -1,6 +1,8 @@
 #ifndef PATHS_H
 #define PATHS_H
 
+#include <stddef.h>
+
 /*
  * Runtime location of the assets and configuration, resolved relative to the
  * running executable so installed builds ($PREFIX/bin/openchess +
@@ -18,5 +20,11 @@ const char *path_config(void);
 
 /* Create the parent directory of `file` (best effort). */
 void path_make_parent(const char *file);
+
+/* Directory where exported PGN games are stored. */
+const char *path_games_dir(void);
+
+/* Build "<games>/<name>.pgn" (name sanitised) into `out`. */
+void path_game_file(char *out, size_t n, const char *name);
 
 #endif

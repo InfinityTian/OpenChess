@@ -7,6 +7,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include <time.h>
+#include <unistd.h>
 #include <SDL_image.h>
 
 #define GUI_PI 3.14159265358979323846f
@@ -31,6 +33,67 @@ static ThemeEntry *cur_piece(Gui *g)
     if (!g->pieces.items || g->piece_index < 0 || g->piece_index >= g->pieces.count)
         return NULL;
     return &g->pieces.items[g->piece_index];
+}
+
+/*
+ * Derive the panel/window geometry from the current board square size. The
+ * window always wraps the board plus the fixed-width side panel.
+ */
+static void layout_recompute(Gui *g)
+{
+    if (g->sq < MIN_SQ) g->sq = MIN_SQ;
+    if (g->sq > MAX_SQ) g->sq = MAX_SQ;
+
+    g->board_x = BOARD_X;
+    g->board_y = BOARD_Y;
+    g->panel_x = g->board_x + 8 * g->sq + 24;
+    g->win_w   = g->panel_x + PANEL_W;
+    int need_h = g->board_y + 8 * g->sq + 28;
+    g->win_h   = need_h > WIN_H ? need_h : WIN_H;
+}
+
+/* The drag handle lives at the board's bottom-right screen corner. */
+static void board_grip_rect(const Gui *g, SDL_Rect *r)
+{
+    r->w = 18;
+    r->h = 18;
+    r->x = g->board_x + 8 * g->sq - r->w;
+    r->y = g->board_y + 8 * g->sq - r->h;
+}
+
+/* Resize the OS window to match the current layout (board-driven resize). */
+static void apply_window_size(Gui *g)
+{
+    if (!g->win) return;
+    g->board_driven_resize = true;
+    SDL_SetWindowSize(g->win, g->win_w, g->win_h);
+}
+
+/* ---- live analysis evaluation ---- */
+
+static void eval_stop(Gui *g)
+{
+    if (g->eval_ai) ai_stop_search(g->eval_ai);
+    g->eval_valid = false;
+}
+
+/* (Re)start the analysis engine on the current position. */
+static void eval_restart(Gui *g)
+{
+    if (!g->engine_path[0]) return;
+    if (!g->eval_ai) g->eval_ai = ai_start(g->engine_path);
+    if (!g->eval_ai) { g->eval_valid = false; return; }
+    ai_stop_search(g->eval_ai);
+    g->eval_side = g->board.side;
+    ai_go_infinite(g->eval_ai, &g->board);
+    g->eval_valid = false;
+}
+
+/* Re-analyse after the position changed (analysis mode only). */
+static void analysis_refresh(Gui *g)
+{
+    if (g->mode == MODE_ANALYSIS && g->scene == SCENE_GAME)
+        eval_restart(g);
 }
 
 /* filenames indexed by Piece (WP..BK) */
@@ -175,18 +238,18 @@ static int window_sq(const Gui *g, int sq, SDL_Rect *out)
 {
     int col, row;
     sq_screen(g, sq, &col, &row);
-    out->x = BOARD_X + col * SQ_SIZE;
-    out->y = BOARD_Y + row * SQ_SIZE;
-    out->w = SQ_SIZE;
-    out->h = SQ_SIZE;
+    out->x = g->board_x + col * g->sq;
+    out->y = g->board_y + row * g->sq;
+    out->w = g->sq;
+    out->h = g->sq;
     return 0;
 }
 
 static int sq_from_pos(const Gui *g, int px, int py)
 {
-    if (px < BOARD_X || py < BOARD_Y) return -1;
-    int col = (px - BOARD_X) / SQ_SIZE;
-    int row = (py - BOARD_Y) / SQ_SIZE;
+    if (px < g->board_x || py < g->board_y) return -1;
+    int col = (px - g->board_x) / g->sq;
+    int row = (py - g->board_y) / g->sq;
     return screen_sq(g, col, row);
 }
 
@@ -196,8 +259,8 @@ static void piece_center(const Gui *g, int sq, float *cx, float *cy)
 {
     int col, row;
     sq_screen(g, sq, &col, &row);
-    *cx = BOARD_X + col * SQ_SIZE + SQ_SIZE / 2.0f;
-    *cy = BOARD_Y + row * SQ_SIZE + SQ_SIZE / 2.0f;
+    *cx = g->board_x + col * g->sq + g->sq / 2.0f;
+    *cy = g->board_y + row * g->sq + g->sq / 2.0f;
 }
 
 static bool pt_in(const SDL_Rect *r, int x, int y)
@@ -257,6 +320,26 @@ static void load_piece_style(Gui *g)
         destroy_piece_textures(g);
     }
     build_glyph_textures(g);
+}
+
+/* Rebuild the glyph piece font/textures after the square size changed. Image
+ * piece sets are resolution independent, so they need no work. */
+static void reload_piece_font(Gui *g)
+{
+    ThemeEntry *pt = cur_piece(g);
+    if (!pt || pt->path[0] || !g->ren) return;   /* only the glyph set scales */
+
+    if (g->font_piece[0]) TTF_CloseFont(g->font_piece[0]);
+    if (g->font_piece[1]) TTF_CloseFont(g->font_piece[1]);
+    g->font_piece[0] = g->font_piece[1] = NULL;
+
+    const char *fpath = find_font();
+    if (fpath) {
+        int px = (int)lroundf(g->sq * g->ui_scale);
+        g->font_piece[0] = TTF_OpenFont(fpath, px);
+        g->font_piece[1] = TTF_OpenFont(fpath, px);
+    }
+    load_piece_style(g);
 }
 
 static void load_board_style(Gui *g)
@@ -339,6 +422,7 @@ static bool load_fen(Gui *g, const char *fen)
     g->ply = 0;
     reset_board_state(g);
     fen_refresh(g);
+    analysis_refresh(g);
     return true;
 }
 
@@ -400,6 +484,7 @@ static void push_move(Gui *g, Move m)
     san_close_box(g);
     recompute_state(g);
     fen_refresh(g);
+    analysis_refresh(g);
 }
 
 static void set_msg(Gui *g, const char *fmt, const char *arg)
@@ -431,6 +516,7 @@ static void do_undo(Gui *g)
         g->board = g->before[g->ply];
         reset_board_state(g);
         fen_refresh(g);
+        analysis_refresh(g);
     }
 }
 
@@ -445,6 +531,7 @@ static void do_restart(Gui *g)
     reset_board_state(g);
     fen_refresh(g);
     if (g->mode == MODE_SINGLE && g->ai) ai_new_game(g->ai);
+    analysis_refresh(g);
 }
 
 /* Try to apply typed SAN text. Returns true on success. */
@@ -552,33 +639,38 @@ static void resolve_promotion(Gui *g, Piece promo)
     }
 }
 
-static void btn_rects(SDL_Rect *undo, SDL_Rect *restart)
+static void btn_rects(const Gui *g, SDL_Rect *undo, SDL_Rect *restart)
 {
-    undo->x = PANEL_X;          undo->y = WIN_H - 120; undo->w = 96; undo->h = 40;
-    restart->x = PANEL_X + 104; restart->y = WIN_H - 120; restart->w = 96; restart->h = 40;
+    undo->x = g->panel_x;          undo->y = g->win_h - 120; undo->w = 80; undo->h = 40;
+    restart->x = g->panel_x + 88;  restart->y = g->win_h - 120; restart->w = 80; restart->h = 40;
 }
 
-static void styles_btn_rect(SDL_Rect *out)
+static void styles_btn_rect(const Gui *g, SDL_Rect *out)
 {
-    out->x = PANEL_X + 208; out->y = WIN_H - 120; out->w = 96; out->h = 40;
+    out->x = g->panel_x + 176; out->y = g->win_h - 120; out->w = 80; out->h = 40;
 }
 
-static void input_rect(SDL_Rect *out)
+static void pgn_btn_rect(const Gui *g, SDL_Rect *out)
 {
-    out->x = PANEL_X; out->y = WIN_H - 200; out->w = 320; out->h = 40;
+    out->x = g->panel_x + 264; out->y = g->win_h - 120; out->w = 80; out->h = 40;
 }
 
-static void menu_btn_rect(SDL_Rect *out)
+static void input_rect(const Gui *g, SDL_Rect *out)
 {
-    out->x = PANEL_X + 312; out->y = WIN_H - 120; out->w = 100; out->h = 40;
+    out->x = g->panel_x; out->y = g->win_h - 200; out->w = 320; out->h = 40;
+}
+
+static void menu_btn_rect(const Gui *g, SDL_Rect *out)
+{
+    out->x = g->panel_x + 352; out->y = g->win_h - 120; out->w = 80; out->h = 40;
 }
 
 /* FEN load/copy controls sit between the move list and the HUD. */
-static void fen_rects(SDL_Rect *field, SDL_Rect *load, SDL_Rect *copy)
+static void fen_rects(const Gui *g, SDL_Rect *field, SDL_Rect *load, SDL_Rect *copy)
 {
-    field->x = PANEL_X;       field->y = BOARD_Y + 420; field->w = 252; field->h = 34;
-    load->x  = PANEL_X + 260; load->y  = field->y;       load->w  = 54;  load->h  = 34;
-    copy->x  = PANEL_X + 320; copy->y  = field->y;       copy->w  = 54;  copy->h  = 34;
+    field->x = g->panel_x;       field->y = g->board_y + 420; field->w = 252; field->h = 34;
+    load->x  = g->panel_x + 260; load->y  = field->y;       load->w  = 54;  load->h  = 34;
+    copy->x  = g->panel_x + 320; copy->y  = field->y;       copy->w  = 54;  copy->h  = 34;
 }
 
 /* ------------------------------------------------------------------ */
@@ -586,13 +678,15 @@ static void fen_rects(SDL_Rect *field, SDL_Rect *load, SDL_Rect *copy)
 /* ------------------------------------------------------------------ */
 
 static void open_appearance(Gui *g, Scene return_to);
+static void open_engine_scene(Gui *g, Scene return_to);
 
-#define MENU_COUNT 5
+#define MENU_COUNT 6
 static const char *MENU_ITEMS[MENU_COUNT] = {
     "Singleplayer (vs AI)",
     "Analysis (both sides)",
     "Local Multiplayer",
     "Appearance (boards & pieces)",
+    "Engine (settings)",
     "Quit",
 };
 
@@ -612,12 +706,12 @@ static const AiLevel AI_LEVELS[3] = {
 };
 #define AI_LEVEL_COUNT 3
 
-static void menu_item_rect(int i, SDL_Rect *r)
+static void menu_item_rect(const Gui *g, int i, SDL_Rect *r)
 {
     r->w = 440;
     r->h = 54;
-    r->x = (WIN_W - r->w) / 2;
-    r->y = 300 + i * (r->h + 14);
+    r->x = (g->win_w - r->w) / 2;
+    r->y = 250 + i * (r->h + 14);
 }
 
 static void start_analysis(Gui *g)
@@ -626,6 +720,8 @@ static void start_analysis(Gui *g)
     g->mode = MODE_ANALYSIS;
     g->flipped = false;
     g->auto_flip = false;
+    snprintf(g->white_name, sizeof g->white_name, "White");
+    snprintf(g->black_name, sizeof g->black_name, "Black");
     g->menu_msg[0] = 0;
     g->msg[0] = 0;
     g->input.len = 0;
@@ -637,6 +733,7 @@ static void start_analysis(Gui *g)
     g->ply = 0;
     reset_board_state(g);
     fen_refresh(g);
+    eval_restart(g);
 }
 
 static void go_to_menu(Gui *g)
@@ -657,14 +754,23 @@ static void go_to_menu(Gui *g)
     }
     g->net_waiting = false;
     g->net_sent_ply = 0;
+    eval_stop(g);
     g->scene = SCENE_MENU;
 }
 
 static void start_single(Gui *g)
 {
+    eval_stop(g);
     g->scene = SCENE_GAME;
     g->mode = MODE_SINGLE;
     g->human_color = (g->setup_side == 1) ? BLACK : WHITE;
+    if (g->human_color == WHITE) {
+        snprintf(g->white_name, sizeof g->white_name, "You");
+        snprintf(g->black_name, sizeof g->black_name, "Stockfish");
+    } else {
+        snprintf(g->white_name, sizeof g->white_name, "Stockfish");
+        snprintf(g->black_name, sizeof g->black_name, "You");
+    }
     g->auto_flip = true;
     g->flipped = (g->human_color == BLACK);
     g->ai_skill = AI_LEVELS[g->setup_level].skill;
@@ -694,8 +800,11 @@ static void start_single(Gui *g)
 
 static void enter_local_game(Gui *g, Color side)
 {
+    eval_stop(g);
     g->scene = SCENE_GAME;
     g->mode = MODE_LOCAL;
+    snprintf(g->white_name, sizeof g->white_name, "Host");
+    snprintf(g->black_name, sizeof g->black_name, "Guest");
     g->local_color = side;
     g->auto_flip = true;
     g->flipped = (side == BLACK);
@@ -734,10 +843,10 @@ static void promo_rects(Gui *g, SDL_Rect out[4])
     SDL_Rect sqr;
     window_sq(g, g->promo_to, &sqr);
     int y0 = sqr.y - 90;
-    if (y0 < BOARD_Y) y0 = sqr.y + SQ_SIZE + 10;
+    if (y0 < g->board_y) y0 = sqr.y + g->sq + 10;
     int x0 = sqr.x - 8;
-    if (x0 < BOARD_X) x0 = sqr.x;
-    if (x0 + 4 * 54 > BOARD_X + 8 * SQ_SIZE) x0 = BOARD_X + 8 * SQ_SIZE - 4 * 54;
+    if (x0 < g->board_x) x0 = sqr.x;
+    if (x0 + 4 * 54 > g->board_x + 8 * g->sq) x0 = g->board_x + 8 * g->sq - 4 * 54;
     out[0] = (SDL_Rect){x0, y0, 50, 46};
     out[1] = (SDL_Rect){x0 + 54, y0, 50, 46};
     out[2] = (SDL_Rect){x0 + 108, y0, 50, 46};
@@ -788,6 +897,7 @@ void gui_load_config(Gui *g, const char *path)
 
     char line[256];
     char vboard[64] = "", vpieces[64] = "", vanim[64] = "", vengine[512] = "";
+    char vboardsize[16] = "";
     while (fgets(line, sizeof line, f)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
@@ -808,6 +918,7 @@ void gui_load_config(Gui *g, const char *path)
         else if (strcmp(key, "pieces") == 0) snprintf(vpieces, sizeof vpieces, "%s", val);
         else if (strcmp(key, "animation") == 0) snprintf(vanim, sizeof vanim, "%s", val);
         else if (strcmp(key, "engine") == 0) snprintf(vengine, sizeof vengine, "%s", rawval);
+        else if (strcmp(key, "board_size") == 0) snprintf(vboardsize, sizeof vboardsize, "%s", val);
     }
     fclose(f);
 
@@ -819,6 +930,14 @@ void gui_load_config(Gui *g, const char *path)
     if (vengine[0]) {
         const char *ep = ai_find_engine(vengine);
         if (ep) snprintf(g->engine_path, sizeof g->engine_path, "%s", ep);
+    }
+
+    if (vboardsize[0]) {
+        int sz = atoi(vboardsize);
+        if (sz >= MIN_SQ && sz <= MAX_SQ) {
+            g->sq = sz;
+            layout_recompute(g);
+        }
     }
 }
 
@@ -838,6 +957,7 @@ void gui_save_config(Gui *g)
     if (g->pieces.items && g->piece_index >= 0 && g->piece_index < g->pieces.count)
         fprintf(f, "pieces = %s\n", g->pieces.items[g->piece_index].key);
     fprintf(f, "animation = %s\n", ANIM_KEYS[g->anim_style]);
+    fprintf(f, "board_size = %d\n", g->sq);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     fclose(f);
 }
@@ -892,6 +1012,8 @@ Gui *gui_create(void)
     Gui *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     g->ui_scale = 1.0f;
+    g->sq = SQ_SIZE;
+    layout_recompute(g);
     g->scene = SCENE_MENU;
     g->mode = MODE_ANALYSIS;
     g->menu_index = 1;          /* Analysis is the default selection */
@@ -909,6 +1031,8 @@ Gui *gui_create(void)
     g->setup_field = 0;
     g->setup_side = 0;
     g->setup_level = 1;         /* Medium */
+    snprintf(g->white_name, sizeof g->white_name, "White");
+    snprintf(g->black_name, sizeof g->black_name, "Black");
     g->hj_focus = 0;
     snprintf(g->config_path, sizeof g->config_path, "%s", path_config());
     snprintf(g->net_addr, sizeof g->net_addr, "127.0.0.1");
@@ -924,13 +1048,22 @@ Gui *gui_create(void)
 void gui_init_assets(Gui *g, SDL_Renderer *ren)
 {
     g->ren = ren;
+    g->win = SDL_RenderGetWindow(ren);
+
+    /* Apply the configured board/window size and forbid shrinking below a
+     * usable layout (smallest board + panel). */
+    if (g->win) {
+        int min_w = BOARD_X + 8 * MIN_SQ + 24 + PANEL_W;
+        SDL_SetWindowMinimumSize(g->win, min_w, WIN_H);
+        SDL_SetWindowSize(g->win, g->win_w, g->win_h);
+    }
 
     /* Render at the display's native pixel density (e.g. 2x on Retina) while
      * keeping all layout and input in logical points. Textures/fonts are built
      * at `ui_scale` density and mapped back down by the render scale. */
-    int ow = WIN_W, oh = WIN_H;
+    int ow = g->win_w, oh = g->win_h;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
-    float scale = (float)ow / (float)WIN_W;
+    float scale = (float)ow / (float)g->win_w;
     if (scale < 1.0f) scale = 1.0f;
     g->ui_scale = scale;
     SDL_RenderSetScale(ren, scale, scale);
@@ -939,8 +1072,8 @@ void gui_init_assets(Gui *g, SDL_Renderer *ren)
     if (!fpath) {
         fprintf(stderr, "no suitable font found\n");
     } else {
-        g->font_piece[0] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * scale));
-        g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * scale));
+        g->font_piece[0] = TTF_OpenFont(fpath, (int)lroundf(g->sq * scale));
+        g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(g->sq * scale));
         g->font_ui      = TTF_OpenFont(fpath, (int)lroundf(22 * scale));
         g->font_small   = TTF_OpenFont(fpath, (int)lroundf(15 * scale));
         if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui || !g->font_small)
@@ -964,6 +1097,7 @@ void gui_destroy(Gui *g)
 {
     if (!g) return;
     if (g->ai) ai_stop(g->ai);
+    if (g->eval_ai) ai_stop(g->eval_ai);
     if (g->net) {
         if (net_state(g->net) == NET_STATE_CONNECTED) net_send(g->net, "BYE");
         net_close(g->net);
@@ -1056,7 +1190,8 @@ static void menu_activate(Gui *g)
             g->scene = SCENE_HOSTJOIN;
             break;
         case 3: open_appearance(g, SCENE_MENU); break;
-        case 4: g->quit = true; break;
+        case 4: open_engine_scene(g, SCENE_MENU); break;
+        case 5: g->quit = true; break;
         default:
             snprintf(g->menu_msg, sizeof g->menu_msg,
                      "'%s' is not available yet", MENU_ITEMS[g->menu_index]);
@@ -1079,7 +1214,7 @@ static void handle_menu_mousedown(Gui *g)
 {
     for (int i = 0; i < MENU_COUNT; i++) {
         SDL_Rect r;
-        menu_item_rect(i, &r);
+        menu_item_rect(g, i, &r);
         if (!pt_in(&r, g->mouse.x, g->mouse.y)) continue;
         g->menu_index = i;
         if (menu_enabled(i)) {
@@ -1096,7 +1231,7 @@ static void handle_menu_mousemotion(Gui *g)
 {
     for (int i = 0; i < MENU_COUNT; i++) {
         SDL_Rect r;
-        menu_item_rect(i, &r);
+        menu_item_rect(g, i, &r);
         if (pt_in(&r, g->mouse.x, g->mouse.y) && menu_enabled(i)) {
             g->menu_index = i;
             return;
@@ -1106,21 +1241,21 @@ static void handle_menu_mousemotion(Gui *g)
 
 /* ---- singleplayer setup ---- */
 
-static void setup_rects(SDL_Rect sides[2], SDL_Rect levels[3],
+static void setup_rects(const Gui *g, SDL_Rect sides[2], SDL_Rect levels[3],
                         SDL_Rect *start, SDL_Rect *back)
 {
     int bw = 120, bh = 48, gap = 20;
-    int x0 = (WIN_W - (2 * bw + gap)) / 2;
+    int x0 = (g->win_w - (2 * bw + gap)) / 2;
     sides[0] = (SDL_Rect){ x0, 300, bw, bh };
     sides[1] = (SDL_Rect){ x0 + bw + gap, 300, bw, bh };
 
     int lg = 16;
-    int lx = (WIN_W - (3 * bw + 2 * lg)) / 2;
+    int lx = (g->win_w - (3 * bw + 2 * lg)) / 2;
     for (int i = 0; i < 3; i++)
         levels[i] = (SDL_Rect){ lx + i * (bw + lg), 420, bw, bh };
 
-    start->w = 150; start->h = 46; start->x = WIN_W / 2 - 160; start->y = 540;
-    back->w  = 150; back->h  = 46; back->x  = WIN_W / 2 + 10;  back->y  = 540;
+    start->w = 150; start->h = 46; start->x = g->win_w / 2 - 160; start->y = 540;
+    back->w  = 150; back->h  = 46; back->x  = g->win_w / 2 + 10;  back->y  = 540;
 }
 
 static void setup_change(Gui *g, int dir)
@@ -1156,7 +1291,7 @@ static void handle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 static void handle_setup_mousedown(Gui *g)
 {
     SDL_Rect sides[2], levels[3], start, back;
-    setup_rects(sides, levels, &start, &back);
+    setup_rects(g, sides, levels, &start, &back);
     SDL_Point p = g->mouse;
 
     for (int i = 0; i < 2; i++)
@@ -1169,15 +1304,15 @@ static void handle_setup_mousedown(Gui *g)
 
 /* ---- local multiplayer host/join ---- */
 
-static void hj_rects(SDL_Rect *addr, SDL_Rect *port, SDL_Rect *host,
+static void hj_rects(const Gui *g, SDL_Rect *addr, SDL_Rect *port, SDL_Rect *host,
                      SDL_Rect *join, SDL_Rect *back)
 {
-    int fx = WIN_W / 2 - 200;
+    int fx = g->win_w / 2 - 200;
     addr->x = fx; addr->y = 290; addr->w = 400; addr->h = 44;
     port->x = fx; port->y = 360; port->w = 200; port->h = 44;
-    host->x = WIN_W / 2 - 250; host->y = 470; host->w = 150; host->h = 48;
-    join->x = WIN_W / 2 - 75;  join->y = 470; join->w = 150; join->h = 48;
-    back->x = WIN_W / 2 + 100; back->y = 470; back->w = 150; back->h = 48;
+    host->x = g->win_w / 2 - 250; host->y = 470; host->w = 150; host->h = 48;
+    join->x = g->win_w / 2 - 75;  join->y = 470; join->w = 150; join->h = 48;
+    back->x = g->win_w / 2 + 100; back->y = 470; back->w = 150; back->h = 48;
 }
 
 static unsigned short hj_port(Gui *g)
@@ -1258,7 +1393,7 @@ static void handle_hostjoin_textinput(Gui *g, const SDL_TextInputEvent *te)
 static void handle_hostjoin_mousedown(Gui *g)
 {
     SDL_Rect addr, port, host, join, back;
-    hj_rects(&addr, &port, &host, &join, &back);
+    hj_rects(g, &addr, &port, &host, &join, &back);
     SDL_Point p = g->mouse;
 
     if (pt_in(&addr, p.x, p.y)) { g->hj_focus = 0; return; }
@@ -1274,30 +1409,30 @@ static void handle_hostjoin_mousedown(Gui *g)
 #define APE_ROWS 3
 #define APE_PER_PAGE (APE_COLS * APE_ROWS)
 
-static void ape_tab_rect(int i, SDL_Rect *r)
+static void ape_tab_rect(const Gui *g, int i, SDL_Rect *r)
 {
     int tw = 170, th = 40, gap = 20;
-    int x0 = (WIN_W - (3 * tw + 2 * gap)) / 2;
+    int x0 = (g->win_w - (3 * tw + 2 * gap)) / 2;
     r->x = x0 + i * (tw + gap);
     r->y = 96;
     r->w = tw;
     r->h = th;
 }
 
-static void ape_cell_rect(int j, SDL_Rect *r)
+static void ape_cell_rect(const Gui *g, int j, SDL_Rect *r)
 {
     int cw = 170, ch = 150, gap = 12;
-    int x0 = (WIN_W - (APE_COLS * cw + (APE_COLS - 1) * gap)) / 2;
+    int x0 = (g->win_w - (APE_COLS * cw + (APE_COLS - 1) * gap)) / 2;
     r->x = x0 + (j % APE_COLS) * (cw + gap);
     r->y = 170 + (j / APE_COLS) * (ch + gap);
     r->w = cw;
     r->h = ch;
 }
 
-static void ape_back_rect(SDL_Rect *r)
+static void ape_back_rect(const Gui *g, SDL_Rect *r)
 {
     r->w = 140; r->h = 42;
-    r->x = WIN_W - 180; r->y = WIN_H - 70;
+    r->x = g->win_w - 180; r->y = g->win_h - 70;
 }
 
 static int appearance_count(Gui *g, int tab)
@@ -1367,11 +1502,11 @@ static void handle_appearance_mousedown(Gui *g)
 
     for (int i = 0; i < 3; i++) {
         SDL_Rect r;
-        ape_tab_rect(i, &r);
+        ape_tab_rect(g, i, &r);
         if (pt_in(&r, p.x, p.y)) { g->ape_tab = i; return; }
     }
     SDL_Rect back;
-    ape_back_rect(&back);
+    ape_back_rect(g, &back);
     if (pt_in(&back, p.x, p.y)) { g->scene = g->ape_return_scene; return; }
 
     int tab = g->ape_tab;
@@ -1381,13 +1516,160 @@ static void handle_appearance_mousedown(Gui *g)
         int idx = start + j;
         if (idx >= n) break;
         SDL_Rect c;
-        ape_cell_rect(j, &c);
+        ape_cell_rect(g, j, &c);
         if (pt_in(&c, p.x, p.y)) {
             g->ape_sel[tab] = idx;
             appearance_apply(g);
             return;
         }
     }
+}
+
+/* ---- engine selection ---- */
+
+#define ENGINE_MAX 8
+
+static void detect_engines(Gui *g)
+{
+    g->engine_count = 0;
+
+    static const char *names[] = {
+        "stockfish", "lc0", "komodo", "ethereal", "berserk", "arasan",
+        "crafty", "fruit", "glaurung", "houdini", "rubichess", "fire",
+        NULL
+    };
+
+    const char *path = getenv("PATH");
+    if (path) {
+        char *dup = strdup(path);
+        if (dup) {
+            for (char *dir = strtok(dup, ":"); dir && g->engine_count < ENGINE_MAX;
+                 dir = strtok(NULL, ":")) {
+                for (int i = 0; names[i] && g->engine_count < ENGINE_MAX; i++) {
+                    char full[512];
+                    snprintf(full, sizeof full, "%s/%s", dir, names[i]);
+                    if (access(full, X_OK) != 0) continue;
+                    bool seen = false;
+                    for (int j = 0; j < g->engine_count; j++)
+                        if (strcmp(g->engine_candidates[j], full) == 0) seen = true;
+                    if (!seen)
+                        snprintf(g->engine_candidates[g->engine_count++],
+                                 sizeof g->engine_candidates[0], "%s", full);
+                }
+            }
+            free(dup);
+        }
+    }
+
+    if (g->engine_path[0] && g->engine_count < ENGINE_MAX) {
+        bool seen = false;
+        for (int i = 0; i < g->engine_count; i++)
+            if (strcmp(g->engine_candidates[i], g->engine_path) == 0) seen = true;
+        if (!seen)
+            snprintf(g->engine_candidates[g->engine_count++],
+                     sizeof g->engine_candidates[0], "%s", g->engine_path);
+    }
+}
+
+static void apply_engine(Gui *g, const char *path)
+{
+    if (!path || !*path) return;
+
+    if (g->eval_ai) { ai_stop(g->eval_ai); g->eval_ai = NULL; }
+    if (g->ai) { ai_stop(g->ai); g->ai = NULL; }
+
+    snprintf(g->engine_path, sizeof g->engine_path, "%s", path);
+    g->config_dirty = true;
+
+    AiEngine *probe = ai_start(g->engine_path);
+    if (!probe) {
+        snprintf(g->engine_status, sizeof g->engine_status,
+                 "Failed to start: %s", path);
+        return;
+    }
+    ai_stop(probe);
+    snprintf(g->engine_status, sizeof g->engine_status, "Engine: %s", path);
+
+    if (g->mode == MODE_ANALYSIS && g->scene == SCENE_GAME) eval_restart(g);
+}
+
+static void open_engine_scene(Gui *g, Scene return_to)
+{
+    detect_engines(g);
+    g->engine_sel = 0;
+    for (int i = 0; i < g->engine_count; i++)
+        if (strcmp(g->engine_candidates[i], g->engine_path) == 0) g->engine_sel = i;
+    g->engine_custom_focus = (g->engine_count == 0);
+    snprintf(g->engine_custom, sizeof g->engine_custom, "%s", g->engine_path);
+    g->engine_status[0] = 0;
+    g->engine_return_scene = return_to;
+    g->scene = SCENE_ENGINE;
+}
+
+static void engine_rects(const Gui *g, SDL_Rect items[ENGINE_MAX],
+                         SDL_Rect *custom, SDL_Rect *back)
+{
+    int x = 80, y0 = 150, w = g->win_w - 160, h = 40, gap = 8;
+    for (int i = 0; i < ENGINE_MAX; i++)
+        items[i] = (SDL_Rect){ x, y0 + i * (h + gap), w, h };
+    custom->x = 80; custom->y = g->win_h - 150; custom->w = g->win_w - 260; custom->h = 40;
+    back->w = 140; back->h = 42; back->x = g->win_w - 160; back->y = g->win_h - 90;
+}
+
+static void handle_engine_keydown(Gui *g, const SDL_KeyboardEvent *ke)
+{
+    SDL_Keycode k = ke->keysym.sym;
+    bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+
+    if (ctrl && k == SDLK_q) { g->quit = true; return; }
+    if (k == SDLK_ESCAPE) { g->scene = g->engine_return_scene; return; }
+    if (k == SDLK_TAB) { g->engine_custom_focus = !g->engine_custom_focus; return; }
+
+    if (g->engine_custom_focus) {
+        if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+            size_t n = strlen(g->engine_custom);
+            if (n) g->engine_custom[n - 1] = '\0';
+            return;
+        }
+        if (k == SDLK_RETURN || k == SDLK_KP_ENTER) apply_engine(g, g->engine_custom);
+        return;
+    }
+
+    if (k == SDLK_UP) { if (g->engine_sel > 0) g->engine_sel--; return; }
+    if (k == SDLK_DOWN) {
+        if (g->engine_sel + 1 < g->engine_count) g->engine_sel++;
+        return;
+    }
+    if ((k == SDLK_RETURN || k == SDLK_KP_ENTER) && g->engine_count > 0)
+        apply_engine(g, g->engine_candidates[g->engine_sel]);
+}
+
+static void handle_engine_textinput(Gui *g, const SDL_TextInputEvent *te)
+{
+    if (!g->engine_custom_focus) return;
+    size_t n = strlen(g->engine_custom);
+    for (const char *p = te->text; *p; p++) {
+        if (n + 1 >= sizeof g->engine_custom) break;
+        if (*p >= 0x20 && *p < 0x7f) g->engine_custom[n++] = *p;
+    }
+    g->engine_custom[n] = '\0';
+}
+
+static void handle_engine_mousedown(Gui *g)
+{
+    SDL_Rect items[ENGINE_MAX], custom, back;
+    engine_rects(g, items, &custom, &back);
+    SDL_Point p = g->mouse;
+
+    for (int i = 0; i < g->engine_count; i++)
+        if (pt_in(&items[i], p.x, p.y)) {
+            g->engine_sel = i;
+            g->engine_custom_focus = false;
+            apply_engine(g, g->engine_candidates[i]);
+            return;
+        }
+    if (pt_in(&custom, p.x, p.y)) { g->engine_custom_focus = true; return; }
+    if (pt_in(&back, p.x, p.y)) { g->scene = g->engine_return_scene; return; }
 }
 
 /* ---- game ---- */
@@ -1400,10 +1682,60 @@ static void copy_fen_to_clipboard(Gui *g)
     else set_msg(g, "Clipboard unavailable", NULL);
 }
 
+/* ---- PGN export ---- */
+
+static void pgn_open_prompt(Gui *g)
+{
+    if (g->ply <= 0) { set_msg(g, "No moves to export", NULL); return; }
+    san_close_box(g);
+    g->fen_active = false;
+    g->pgn_prompt = true;
+    g->pgn_len = 0;
+    g->pgn_name[0] = '\0';
+}
+
+static void pgn_save(Gui *g)
+{
+    if (g->pgn_len == 0) return;
+
+    char path[1200];
+    path_game_file(path, sizeof path, g->pgn_name);
+    path_make_parent(path);
+
+    FILE *f = fopen(path, "w");
+    if (!f) { set_msg(g, "Could not write PGN", NULL); return; }
+
+    char date[16] = "????.??.??";
+    time_t t = time(NULL);
+    struct tm *tmv = localtime(&t);
+    if (tmv)
+        snprintf(date, sizeof date, "%04d.%02d.%02d",
+                 tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday);
+
+    const char *result = pgn_result(&g->board, g->state);
+    pgn_write(f, (const char (*)[8])g->move_san, g->ply,
+              "OpenChess", "OpenChess", date, 1,
+              g->white_name, g->black_name, result);
+    fclose(f);
+
+    g->pgn_prompt = false;
+    set_msg(g, "Saved PGN: %s", path);
+}
+
 static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 {
     SDL_Keycode k = ke->keysym.sym;
     bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+
+    if (g->pgn_prompt) {
+        if (k == SDLK_ESCAPE) { g->pgn_prompt = false; return; }
+        if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+            if (g->pgn_len > 0) g->pgn_name[--g->pgn_len] = '\0';
+            return;
+        }
+        if (k == SDLK_RETURN || k == SDLK_KP_ENTER) pgn_save(g);
+        return;
+    }
 
     if (k == SDLK_ESCAPE) {
         if (g->fen_active) { g->fen_active = false; fen_refresh(g); return; }
@@ -1427,6 +1759,8 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     if (ctrl && k == SDLK_p) { gui_cycle_pieces(g); return; }
     if (ctrl && k == SDLK_m) { gui_cycle_anim(g); return; }
     if (ctrl && k == SDLK_c) { copy_fen_to_clipboard(g); return; }
+    if (ctrl && k == SDLK_e) { open_engine_scene(g, SCENE_GAME); return; }
+    if (ctrl && k == SDLK_s) { pgn_open_prompt(g); return; }
     if (ctrl && k == SDLK_f) {
         g->flipped = !g->flipped;
         g->auto_flip = false;
@@ -1473,6 +1807,15 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
 static void handle_game_textinput(Gui *g, const SDL_TextInputEvent *te)
 {
+    if (g->pgn_prompt) {
+        for (const char *p = te->text; *p; p++) {
+            if (g->pgn_len >= (int)sizeof g->pgn_name - 1) break;
+            if (*p >= 0x20 && *p < 0x7f) g->pgn_name[g->pgn_len++] = *p;
+        }
+        g->pgn_name[g->pgn_len] = '\0';
+        return;
+    }
+
     if (g->fen_active) {
         for (const char *p = te->text; *p; p++) {
             if (g->fen_len >= FEN_MAX - 1) break;
@@ -1495,10 +1838,13 @@ static void handle_game_mousedown(Gui *g)
     SDL_Point p = g->mouse;
     g->dragging = false;
 
-    SDL_Rect undo, restart, styles, menu;
-    btn_rects(&undo, &restart);
-    styles_btn_rect(&styles);
-    menu_btn_rect(&menu);
+    if (g->pgn_prompt) return;   /* modal: keyboard only */
+
+    SDL_Rect undo, restart, styles, pgn, menu;
+    btn_rects(g, &undo, &restart);
+    styles_btn_rect(g, &styles);
+    pgn_btn_rect(g, &pgn);
+    menu_btn_rect(g, &menu);
     if (pt_in(&undo, p.x, p.y)) {
         if (g->mode == MODE_LOCAL) set_msg(g, "Undo disabled in multiplayer", NULL);
         else do_undo(g);
@@ -1510,12 +1856,24 @@ static void handle_game_mousedown(Gui *g)
         return;
     }
     if (pt_in(&styles, p.x, p.y)) { open_appearance(g, SCENE_GAME); return; }
+    if (pt_in(&pgn, p.x, p.y)) { pgn_open_prompt(g); return; }
     if (pt_in(&menu, p.x, p.y)) { go_to_menu(g); return; }
+
+    /* Dragging the board's corner grip resizes the board (and window). */
+    SDL_Rect grip;
+    board_grip_rect(g, &grip);
+    if (pt_in(&grip, p.x, p.y)) {
+        g->resizing_board = true;
+        g->resize_start_sq = g->sq;
+        g->resize_start_mx = p.x;
+        g->resize_start_my = p.y;
+        return;
+    }
 
     /* FEN controls are analysis-only. */
     if (g->mode == MODE_ANALYSIS) {
         SDL_Rect field, load, copy;
-        fen_rects(&field, &load, &copy);
+        fen_rects(g, &field, &load, &copy);
         if (pt_in(&load, p.x, p.y)) {
             g->fen_active = false;
             san_close_box(g);
@@ -1537,7 +1895,7 @@ static void handle_game_mousedown(Gui *g)
 
     /* Clicking the SAN box reveals it; clicking elsewhere dismisses it. */
     SDL_Rect ib;
-    input_rect(&ib);
+    input_rect(g, &ib);
     if (pt_in(&ib, p.x, p.y)) {
         if (!g->san_open) san_open_box(g);
         g->input.active = g->san_open;
@@ -1588,11 +1946,62 @@ static void handle_game_mouseup(Gui *g)
     SDL_Point p = g->mouse;
     g->dragging = false;
 
+    if (g->resizing_board) {
+        g->resizing_board = false;
+        g->config_dirty = true;      /* board_size persisted on exit */
+        return;
+    }
+
     if (g->promo_from >= 0) return; /* handled on down */
 
     int sq = sq_from_pos(g, p.x, p.y);
     if (sq < 0) return;
     if (g->selected >= 0) try_move_to(g, sq);
+}
+
+/* Board-corner drag: grow/shrink the square size and resize the window. */
+static void handle_board_resize(Gui *g)
+{
+    int dx = g->mouse.x - g->resize_start_mx;
+    int dy = g->mouse.y - g->resize_start_my;
+    int delta = dx > dy ? dx : dy;
+
+    int sq = g->resize_start_sq + delta / 8;
+    if (sq < MIN_SQ) sq = MIN_SQ;
+    if (sq > MAX_SQ) sq = MAX_SQ;
+    if (sq == g->sq) return;
+
+    g->sq = sq;
+    layout_recompute(g);
+    reload_piece_font(g);
+    apply_window_size(g);
+}
+
+/* OS window resize: scale the board to the newly available space. */
+static void handle_window_resize(Gui *g, int w, int h)
+{
+    if (g->board_driven_resize) {
+        g->board_driven_resize = false;
+        g->win_w = w;
+        g->win_h = h;
+        return;
+    }
+
+    int avail_w = w - (BOARD_X + PANEL_W);
+    int avail_h = h - (BOARD_Y + 28);
+    int side = avail_w < avail_h ? avail_w : avail_h;
+    int sq = side / 8;
+    if (sq < MIN_SQ) sq = MIN_SQ;
+    if (sq > MAX_SQ) sq = MAX_SQ;
+
+    bool changed = (sq != g->sq);
+    g->sq = sq;
+    g->board_x = BOARD_X;
+    g->board_y = BOARD_Y;
+    g->panel_x = g->board_x + 8 * g->sq + 24;
+    g->win_w = w;
+    g->win_h = h;
+    if (changed) reload_piece_font(g);
 }
 
 void gui_handle_event(Gui *g, const SDL_Event *e)
@@ -1601,10 +2010,22 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
         case SDL_QUIT:
             g->quit = true;
             return;
+        case SDL_WINDOWEVENT:
+            if (e->window.event == SDL_WINDOWEVENT_RESIZED ||
+                e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                int w = e->window.data1, h = e->window.data2;
+                if (g->win) SDL_GetWindowSize(g->win, &w, &h);
+                handle_window_resize(g, w, h);
+            }
+            return;
         case SDL_MOUSEMOTION:
             g->mouse.x = e->motion.x;
             g->mouse.y = e->motion.y;
             if (g->scene == SCENE_MENU) { handle_menu_mousemotion(g); return; }
+            if (g->resizing_board && (e->motion.state & SDL_BUTTON_LMASK)) {
+                handle_board_resize(g);
+                return;
+            }
             if (e->motion.state & SDL_BUTTON_LMASK) {
                 if (g->selected >= 0 || g->promo_from >= 0) g->dragging = true;
             }
@@ -1617,6 +2038,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_mousedown(g);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_mousedown(g);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_mousedown(g);
+            else if (g->scene == SCENE_ENGINE) handle_engine_mousedown(g);
             else handle_game_mousedown(g);
             return;
         case SDL_MOUSEBUTTONUP:
@@ -1630,11 +2052,13 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_keydown(g, &e->key);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_keydown(g, &e->key);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_keydown(g, &e->key);
+            else if (g->scene == SCENE_ENGINE) handle_engine_keydown(g, &e->key);
             else handle_game_keydown(g, &e->key);
             return;
         case SDL_TEXTINPUT:
             if (g->scene == SCENE_GAME) handle_game_textinput(g, &e->text);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_textinput(g, &e->text);
+            else if (g->scene == SCENE_ENGINE) handle_engine_textinput(g, &e->text);
             return;
         default:
             return;
@@ -1737,8 +2161,23 @@ void gui_tick(Gui *g, Uint32 now)
     }
     if (g->scene != SCENE_GAME) return;
 
-    if (g->mode == MODE_SINGLE) single_tick(g, now);
-    else if (g->mode == MODE_LOCAL) local_tick(g);
+    if (g->mode == MODE_SINGLE) {
+        single_tick(g, now);
+    } else if (g->mode == MODE_LOCAL) {
+        local_tick(g);
+    } else if (g->eval_ai) {
+        /* live analysis: drain info lines and refresh the evaluation */
+        char uci[8];
+        ai_poll_bestmove(g->eval_ai, uci);
+        int cp, mate, depth;
+        if (ai_get_eval(g->eval_ai, &cp, &mate, &depth)) {
+            if (g->eval_side == BLACK) { cp = -cp; mate = -mate; }
+            g->eval_cp = cp;
+            g->eval_mate = mate;
+            g->eval_depth = depth;
+            g->eval_valid = true;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1754,7 +2193,7 @@ static float ease_out_back(float t)
 }
 
 /* Compute the flying piece transform for a given animation style. */
-static void anim_piece_transform(AnimStyle style, float t,
+static void anim_piece_transform(const Gui *g, AnimStyle style, float t,
                                  float fx, float fy, float tx, float ty,
                                  float *x, float *y, float *scale, float *alpha)
 {
@@ -1762,7 +2201,7 @@ static void anim_piece_transform(AnimStyle style, float t,
         case ANIM_ARCADE: {
             float e = ease_out_back(t);
             *x = fx + (tx - fx) * e;
-            *y = fy + (ty - fy) * e - 0.16f * SQ_SIZE * sinf(GUI_PI * t);
+            *y = fy + (ty - fy) * e - 0.16f * g->sq * sinf(GUI_PI * t);
             *scale = 1.0f + 0.12f * sinf(GUI_PI * t);
             *alpha = 1.0f;
             break;
@@ -1816,7 +2255,7 @@ static void draw_board_squares(Gui *g, SDL_Renderer *ren)
 {
     ThemeEntry *bt = cur_board(g);
     if (g->tex_board) {
-        SDL_Rect dst = { BOARD_X, BOARD_Y, 8 * SQ_SIZE, 8 * SQ_SIZE };
+        SDL_Rect dst = { g->board_x, g->board_y, 8 * g->sq, 8 * g->sq };
         SDL_RenderCopy(ren, g->tex_board, NULL, &dst);
         return;
     }
@@ -1824,8 +2263,8 @@ static void draw_board_squares(Gui *g, SDL_Renderer *ren)
     unsigned char *dark  = bt ? bt->dark  : (unsigned char[]){ 181, 136, 99 };
     for (int rank = 0; rank < 8; rank++)
         for (int file = 0; file < 8; file++) {
-            SDL_Rect rc = { BOARD_X + file * SQ_SIZE, BOARD_Y + (7 - rank) * SQ_SIZE,
-                            SQ_SIZE, SQ_SIZE };
+            SDL_Rect rc = { g->board_x + file * g->sq, g->board_y + (7 - rank) * g->sq,
+                            g->sq, g->sq };
             if ((rank + file) % 2 == 0)
                 set_render_color(ren, light[0], light[1], light[2]);
             else
@@ -1849,16 +2288,16 @@ static void draw_coordinates(Gui *g)
         char c[2] = { (char)('a' + file), 0 };
         SDL_Color color = ((file + rank) % 2 == 0) ? cdark : clite;
         render_text(g, g->font_small, c,
-                    BOARD_X + col * SQ_SIZE + SQ_SIZE - 14,
-                    BOARD_Y + 7 * SQ_SIZE + SQ_SIZE - 20, color);
+                    g->board_x + col * g->sq + g->sq - 14,
+                    g->board_y + 7 * g->sq + g->sq - 20, color);
     }
     for (int row = 0; row < 8; row++) {
         int sq = screen_sq(g, 0, row);
         int file = sq % 8, rank = sq / 8;
         char c[2] = { (char)('1' + rank), 0 };
         SDL_Color color = ((file + rank) % 2 == 0) ? cdark : clite;
-        render_text(g, g->font_small, c, BOARD_X + 5,
-                    BOARD_Y + row * SQ_SIZE + 4, color);
+        render_text(g, g->font_small, c, g->board_x + 5,
+                    g->board_y + row * g->sq + 4, color);
     }
 }
 
@@ -1889,7 +2328,7 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
             if (p == EMPTY) continue;
             float cx, cy;
             piece_center(g, sq, &cx, &cy);
-            render_piece_box(g, ren, p, cx, cy, SQ_SIZE, 1.0f);
+            render_piece_box(g, ren, p, cx, cy, g->sq, 1.0f);
         }
 
     /* queued-but-pending moves: draw the position before those moves */
@@ -1897,10 +2336,10 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
         AnimStep *s = &g->anim_queue[i];
         float cx, cy;
         piece_center(g, s->from, &cx, &cy);
-        render_piece_box(g, ren, s->piece, cx, cy, SQ_SIZE, 1.0f);
+        render_piece_box(g, ren, s->piece, cx, cy, g->sq, 1.0f);
         if (s->cap_sq >= 0 && s->captured != EMPTY) {
             piece_center(g, s->cap_sq, &cx, &cy);
-            render_piece_box(g, ren, s->captured, cx, cy, SQ_SIZE, 1.0f);
+            render_piece_box(g, ren, s->captured, cx, cy, g->sq, 1.0f);
         }
     }
 
@@ -1915,47 +2354,47 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
             float cx, cy, sc, al;
             piece_center(g, s->cap_sq, &cx, &cy);
             captured_transform(g->anim_style, t, &sc, &al);
-            render_piece_box(g, ren, s->captured, cx, cy, SQ_SIZE * sc, al);
+            render_piece_box(g, ren, s->captured, cx, cy, g->sq * sc, al);
         }
 
         float fx, fy, tx, ty, x, y, sc, al;
         piece_center(g, s->from, &fx, &fy);
         piece_center(g, s->to, &tx, &ty);
-        anim_piece_transform(g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
-        render_piece_box(g, ren, s->piece, x, y, SQ_SIZE * sc, al);
+        anim_piece_transform(g, g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
+        render_piece_box(g, ren, s->piece, x, y, g->sq * sc, al);
 
         if (s->has_rook) {
             piece_center(g, s->rfrom, &fx, &fy);
             piece_center(g, s->rto, &tx, &ty);
-            anim_piece_transform(g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
-            render_piece_box(g, ren, s->rook, x, y, SQ_SIZE * sc, al);
+            anim_piece_transform(g, g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
+            render_piece_box(g, ren, s->rook, x, y, g->sq * sc, al);
         }
     }
 }
 
-static void draw_square_highlight(Gui *gui, SDL_Renderer *ren, int sq,
+static void draw_square_highlight(Gui *g, SDL_Renderer *ren, int sq,
                                   Uint8 r, Uint8 gg, Uint8 b)
 {
     SDL_Rect rc;
-    window_sq(gui, sq, &rc);
+    window_sq(g, sq, &rc);
     set_render_color(ren, r, gg, b);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     SDL_RenderFillRect(ren, &rc);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
-static void draw_target_dot(Gui *gui, SDL_Renderer *ren, int sq, bool capture)
+static void draw_target_dot(Gui *g, SDL_Renderer *ren, int sq, bool capture)
 {
     SDL_Rect rc;
-    window_sq(gui, sq, &rc);
+    window_sq(g, sq, &rc);
     set_render_color(ren, 40, 90, 40);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     if (capture) {
-        SDL_Rect ring = { rc.x + 4, rc.y + 4, SQ_SIZE - 8, SQ_SIZE - 8 };
+        SDL_Rect ring = { rc.x + 4, rc.y + 4, g->sq - 8, g->sq - 8 };
         SDL_RenderDrawRect(ren, &ring);
     } else {
         int cr = 12;
-        SDL_Rect dot = { rc.x + SQ_SIZE / 2 - cr, rc.y + SQ_SIZE / 2 - cr, cr * 2, cr * 2 };
+        SDL_Rect dot = { rc.x + g->sq / 2 - cr, rc.y + g->sq / 2 - cr, cr * 2, cr * 2 };
         SDL_RenderFillRect(ren, &dot);
     }
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
@@ -1994,7 +2433,7 @@ static void render_status(Gui *g)
                  g->board.side == WHITE ? "White" : "Black",
                  in_check(&g->board, g->board.side) ? " - CHECK" : "");
     }
-    render_text(g, g->font_ui, line, PANEL_X, BOARD_Y, (SDL_Color){ 240, 220, 130, 255 });
+    render_text(g, g->font_ui, line, g->panel_x, g->board_y, (SDL_Color){ 240, 220, 130, 255 });
 
     if (g->mode == MODE_SINGLE) {
         char info[96];
@@ -2002,7 +2441,7 @@ static void render_status(Gui *g)
                  g->human_color == WHITE ? "White" : "Black",
                  AI_LEVELS[g->setup_level].label,
                  g->ai_thinking ? "   (thinking...)" : "");
-        render_text(g, g->font_small, info, PANEL_X, BOARD_Y + 30,
+        render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 150, 210, 230, 255 });
     } else if (g->mode == MODE_LOCAL) {
         bool ok = g->net && net_state(g->net) == NET_STATE_CONNECTED;
@@ -2010,26 +2449,70 @@ static void render_status(Gui *g)
         snprintf(info, sizeof info, "You: %s    %s",
                  g->local_color == WHITE ? "White" : "Black",
                  ok ? "opponent connected" : "opponent disconnected");
-        render_text(g, g->font_small, info, PANEL_X, BOARD_Y + 30,
+        render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
+                    (SDL_Color){ 150, 210, 230, 255 });
+    } else if (g->mode == MODE_ANALYSIS) {
+        char info[96];
+        if (!g->eval_ai)
+            snprintf(info, sizeof info, "Analysis: no engine");
+        else if (!g->eval_valid)
+            snprintf(info, sizeof info, "Analysis: thinking...");
+        else if (g->eval_mate != 0)
+            snprintf(info, sizeof info, "Eval: %sM%d   (depth %d)",
+                     g->eval_mate > 0 ? "+" : "-",
+                     g->eval_mate > 0 ? g->eval_mate : -g->eval_mate,
+                     g->eval_depth);
+        else
+            snprintf(info, sizeof info, "Eval: %+.2f   (depth %d)",
+                     g->eval_cp / 100.0, g->eval_depth);
+        render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 150, 210, 230, 255 });
     }
+}
+
+/* Vertical evaluation bar to the left of the board (analysis mode). */
+static void draw_eval_bar(Gui *g, SDL_Renderer *ren)
+{
+    if (g->mode != MODE_ANALYSIS || !g->eval_valid) return;
+
+    int x = 2, w = 10;
+    int y = g->board_y, h = 8 * g->sq;
+
+    set_render_color(ren, 25, 25, 30);
+    SDL_Rect bg = { x, y, w, h };
+    SDL_RenderFillRect(ren, &bg);
+
+    float f;
+    if (g->eval_mate != 0)
+        f = g->eval_mate > 0 ? 1.0f : 0.0f;
+    else
+        f = 1.0f / (1.0f + expf(-(float)g->eval_cp / 400.0f));
+
+    int wh = (int)(h * f);
+    SDL_Rect white = { x, y + h - wh, w, wh };
+    set_render_color(ren, 235, 235, 235);
+    SDL_RenderFillRect(ren, &white);
+
+    SDL_Rect border = { x, y, w, h };
+    set_render_color(ren, 130, 130, 140);
+    SDL_RenderDrawRect(ren, &border);
 }
 
 static void render_move_list(Gui *g)
 {
     SDL_Color c = { 230, 225, 215, 255 };
-    int y = BOARD_Y + 78;
-    render_text(g, g->font_small, "Moves:", PANEL_X, y - 22, c);
+    int y = g->board_y + 78;
+    render_text(g, g->font_small, "Moves:", g->panel_x, y - 22, c);
     int start = g->ply > 16 ? g->ply - 16 : 0;
     for (int i = start; i < g->ply; i++) {
         int num = i / 2 + 1;
         if (i % 2 == 0) {
             char header[16];
             snprintf(header, sizeof header, "%d.", num);
-            render_text(g, g->font_small, header, PANEL_X, y, (SDL_Color){ 150, 150, 150, 255 });
-            render_text(g, g->font_small, g->move_san[i], PANEL_X + 42, y, c);
+            render_text(g, g->font_small, header, g->panel_x, y, (SDL_Color){ 150, 150, 150, 255 });
+            render_text(g, g->font_small, g->move_san[i], g->panel_x + 42, y, c);
         } else {
-            render_text(g, g->font_small, g->move_san[i], PANEL_X + 150, y, c);
+            render_text(g, g->font_small, g->move_san[i], g->panel_x + 150, y, c);
         }
         y += 20;
     }
@@ -2038,16 +2521,16 @@ static void render_move_list(Gui *g)
 static void render_san_hint(Gui *g)
 {
     SDL_Rect ib;
-    input_rect(&ib);
-    render_text(g, g->font_small, "Press Enter to type a move", PANEL_X, ib.y + 12,
+    input_rect(g, &ib);
+    render_text(g, g->font_small, "Press Enter to type a move", g->panel_x, ib.y + 12,
                 (SDL_Color){ 120, 130, 140, 255 });
 }
 
 static void render_input_box(Gui *g, SDL_Renderer *ren)
 {
     SDL_Rect ib;
-    input_rect(&ib);
-    render_text(g, g->font_small, "Type a move (SAN):", PANEL_X, ib.y - 22,
+    input_rect(g, &ib);
+    render_text(g, g->font_small, "Type a move (SAN):", g->panel_x, ib.y - 22,
                 (SDL_Color){ 200, 200, 200, 255 });
     draw_rect(ren, &ib, 30, 30, 32, true);
     draw_rect(ren, &ib, 60, 60, 70, false);
@@ -2077,9 +2560,9 @@ static void render_input_box(Gui *g, SDL_Renderer *ren)
 static void render_fen_box(Gui *g, SDL_Renderer *ren)
 {
     SDL_Rect field, load, copy;
-    fen_rects(&field, &load, &copy);
+    fen_rects(g, &field, &load, &copy);
 
-    render_text(g, g->font_small, "FEN:", PANEL_X, field.y - 20,
+    render_text(g, g->font_small, "FEN:", g->panel_x, field.y - 20,
                 (SDL_Color){ 200, 200, 200, 255 });
 
     draw_rect(ren, &field, 30, 30, 32, true);
@@ -2126,16 +2609,18 @@ static void render_text_centered_rect(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
 
 static void render_buttons(Gui *g, SDL_Renderer *ren)
 {
-    SDL_Rect undo, restart, styles, menu;
-    btn_rects(&undo, &restart);
-    styles_btn_rect(&styles);
-    menu_btn_rect(&menu);
+    SDL_Rect undo, restart, styles, pgn, menu;
+    btn_rects(g, &undo, &restart);
+    styles_btn_rect(g, &styles);
+    pgn_btn_rect(g, &pgn);
+    menu_btn_rect(g, &menu);
     render_text_centered_rect(g, ren, &undo, "Undo");
     render_text_centered_rect(g, ren, &restart, "Restart");
     render_text_centered_rect(g, ren, &styles, "Styles");
+    render_text_centered_rect(g, ren, &pgn, "PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
-    render_text(g, g->font_small, "Ctrl+U undo   Ctrl+R restart   Ctrl+F flip", PANEL_X, undo.y + 48,
-                (SDL_Color){ 130, 130, 130, 255 });
+    render_text(g, g->font_small, "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip",
+                g->panel_x, undo.y + 48, (SDL_Color){ 130, 130, 130, 255 });
 }
 
 static void render_hud(Gui *g)
@@ -2145,10 +2630,10 @@ static void render_hud(Gui *g)
              theme_label(&g->boards, g->board_index),
              theme_label(&g->pieces, g->piece_index),
              ANIM_LABELS[g->anim_style]);
-    render_text(g, g->font_small, line, PANEL_X, WIN_H - 268,
+    render_text(g, g->font_small, line, g->panel_x, g->win_h - 268,
                 (SDL_Color){ 150, 200, 215, 255 });
     render_text(g, g->font_small, "Ctrl+B board   Ctrl+P pieces   Ctrl+M anim",
-                PANEL_X, WIN_H - 250, (SDL_Color){ 120, 140, 150, 255 });
+                g->panel_x, g->win_h - 250, (SDL_Color){ 120, 140, 150, 255 });
 }
 
 static void render_setup(Gui *g, SDL_Renderer *ren)
@@ -2156,13 +2641,13 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     SDL_RenderClear(ren);
 
-    render_text_centered(g, g->font_ui, "Singleplayer", WIN_W / 2, 150,
+    render_text_centered(g, g->font_ui, "Singleplayer", g->win_w / 2, 150,
                          (SDL_Color){ 235, 225, 200, 255 });
 
     SDL_Rect sides[2], levels[3], start, back;
-    setup_rects(sides, levels, &start, &back);
+    setup_rects(g, sides, levels, &start, &back);
 
-    render_text_centered(g, g->font_small, "Play as", WIN_W / 2, 268,
+    render_text_centered(g, g->font_small, "Play as", g->win_w / 2, 268,
                          (SDL_Color){ 150, 180, 200, 255 });
     const char *side_labels[2] = { "White", "Black" };
     for (int i = 0; i < 2; i++) {
@@ -2174,7 +2659,7 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
                              (SDL_Color){ 235, 235, 235, 255 });
     }
 
-    render_text_centered(g, g->font_small, "Difficulty", WIN_W / 2, 388,
+    render_text_centered(g, g->font_small, "Difficulty", g->win_w / 2, 388,
                          (SDL_Color){ 150, 180, 200, 255 });
     for (int i = 0; i < AI_LEVEL_COUNT; i++) {
         bool sel = (g->setup_field == 1 && g->setup_level == i);
@@ -2199,14 +2684,14 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
     if (!engine_ok)
         render_text_centered(g, g->font_small,
                              "Stockfish not found - run 'brew install stockfish'",
-                             WIN_W / 2, 610, (SDL_Color){ 255, 140, 120, 255 });
+                             g->win_w / 2, 610, (SDL_Color){ 255, 140, 120, 255 });
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, WIN_W / 2, 640,
+        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 640,
                              (SDL_Color){ 255, 170, 120, 255 });
 
     render_text_centered(g, g->font_small,
                          "Left/Right change    Up/Down field    Enter start    Esc back",
-                         WIN_W / 2, WIN_H - 80,
+                         g->win_w / 2, g->win_h - 80,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
@@ -2227,11 +2712,11 @@ static void render_hostjoin(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     SDL_RenderClear(ren);
 
-    render_text_centered(g, g->font_ui, "Local Multiplayer", WIN_W / 2, 150,
+    render_text_centered(g, g->font_ui, "Local Multiplayer", g->win_w / 2, 150,
                          (SDL_Color){ 235, 225, 200, 255 });
 
     SDL_Rect addr, port, host, join, back;
-    hj_rects(&addr, &port, &host, &join, &back);
+    hj_rects(g, &addr, &port, &host, &join, &back);
 
     hj_field(g, ren, &addr, g->net_addr, g->hj_focus == 0, "Opponent address");
     hj_field(g, ren, &port, g->net_port, g->hj_focus == 1, "Port");
@@ -2256,15 +2741,15 @@ static void render_hostjoin(Gui *g, SDL_Renderer *ren)
 
     render_text_centered(g, g->font_small,
                          "Host = White, Join = Black.  Start the host first.",
-                         WIN_W / 2, 560, (SDL_Color){ 140, 170, 190, 255 });
+                         g->win_w / 2, 560, (SDL_Color){ 140, 170, 190, 255 });
 
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, WIN_W / 2, 600,
+        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 600,
                              (SDL_Color){ 255, 180, 120, 255 });
 
     render_text_centered(g, g->font_small,
                          "Tab/Up/Down field    type to edit    Enter activate    Esc back",
-                         WIN_W / 2, WIN_H - 80,
+                         g->win_w / 2, g->win_h - 80,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
@@ -2402,7 +2887,7 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
         float fx = inner.x + side * 0.25f, fy = inner.y + side * 0.75f;
         float tx = inner.x + side * 0.75f, ty = inner.y + side * 0.25f;
         float x, y, sc, al;
-        anim_piece_transform((AnimStyle)idx, t, fx, fy, tx, ty, &x, &y, &sc, &al);
+        anim_piece_transform(g, (AnimStyle)idx, t, fx, fy, tx, ty, &x, &y, &sc, &al);
         render_piece_box(g, ren, WN, x, y, side * 0.34f * sc, al);
     }
 
@@ -2418,13 +2903,13 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     SDL_RenderClear(ren);
 
-    render_text_centered(g, g->font_ui, "Appearance", WIN_W / 2, 30,
+    render_text_centered(g, g->font_ui, "Appearance", g->win_w / 2, 30,
                          (SDL_Color){ 235, 225, 200, 255 });
 
     static const char *tabs[3] = { "Boards", "Pieces", "Animation" };
     for (int i = 0; i < 3; i++) {
         SDL_Rect r;
-        ape_tab_rect(i, &r);
+        ape_tab_rect(g, i, &r);
         bool on = (i == g->ape_tab);
         draw_rect(ren, &r, on ? 70 : 40, on ? 80 : 50, on ? 100 : 60, true);
         if (on) draw_rect(ren, &r, 90, 150, 200, false);
@@ -2441,7 +2926,7 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
         int idx = start + j;
         if (idx >= n) break;
         SDL_Rect c;
-        ape_cell_rect(j, &c);
+        ape_cell_rect(g, j, &c);
         draw_ape_cell(g, ren, tab, idx, &c, idx == sel);
     }
 
@@ -2449,16 +2934,67 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     if (pages < 1) pages = 1;
     char info[64];
     snprintf(info, sizeof info, "%d / %d    page %d/%d", sel + 1, n, page + 1, pages);
-    render_text_centered(g, g->font_small, info, WIN_W / 2, 662,
+    render_text_centered(g, g->font_small, info, g->win_w / 2, 662,
                          (SDL_Color){ 150, 170, 190, 255 });
 
     SDL_Rect back;
-    ape_back_rect(&back);
+    ape_back_rect(g, &back);
     render_text_centered_rect(g, ren, &back, "Back");
 
     render_text_centered(g, g->font_small,
                          "Arrows select    Tab / 1-2-3 switch tab    Enter apply    Esc back",
-                         WIN_W / 2, WIN_H - 40,
+                         g->win_w / 2, g->win_h - 40,
+                         (SDL_Color){ 110, 120, 130, 255 });
+}
+
+static void render_engine(Gui *g, SDL_Renderer *ren)
+{
+    set_render_color(ren, 22, 26, 34);
+    SDL_RenderClear(ren);
+
+    render_text_centered(g, g->font_ui, "Engine", g->win_w / 2, 40,
+                         (SDL_Color){ 235, 225, 200, 255 });
+    char cur[600];
+    snprintf(cur, sizeof cur, "Current: %s",
+             g->engine_path[0] ? g->engine_path : "(none)");
+    render_text_centered(g, g->font_small, cur, g->win_w / 2, 78,
+                         (SDL_Color){ 150, 180, 200, 255 });
+
+    SDL_Rect items[ENGINE_MAX], custom, back;
+    engine_rects(g, items, &custom, &back);
+
+    for (int i = 0; i < g->engine_count; i++) {
+        bool sel = (i == g->engine_sel);
+        draw_rect(ren, &items[i], sel ? 60 : 36, sel ? 70 : 40, sel ? 85 : 48, true);
+        if (sel) draw_rect(ren, &items[i], 90, 150, 200, false);
+        render_text(g, g->font_small, g->engine_candidates[i],
+                    items[i].x + 10, items[i].y + 10, (SDL_Color){ 225, 230, 235, 255 });
+    }
+    if (g->engine_count == 0)
+        render_text_centered(g, g->font_small,
+                             "No engines found on PATH - enter a path below",
+                             g->win_w / 2, 170, (SDL_Color){ 200, 150, 140, 255 });
+
+    render_text(g, g->font_small, "Custom engine path (Tab to edit, Enter to apply):",
+                custom.x, custom.y - 22, (SDL_Color){ 150, 180, 200, 255 });
+    draw_rect(ren, &custom, 30, 30, 32, true);
+    draw_rect(ren, &custom,
+              g->engine_custom_focus ? 90 : 60,
+              g->engine_custom_focus ? 140 : 60,
+              g->engine_custom_focus ? 200 : 70, false);
+    render_text(g, g->font_small, g->engine_custom, custom.x + 10, custom.y + 10,
+                (SDL_Color){ 225, 230, 235, 255 });
+
+    if (g->engine_status[0])
+        render_text_centered(g, g->font_small, g->engine_status,
+                             g->win_w / 2, custom.y + 46,
+                             (SDL_Color){ 150, 210, 170, 255 });
+
+    render_text_centered_rect(g, ren, &back, "Back");
+
+    render_text_centered(g, g->font_small,
+                         "Up/Down select    Enter apply    Tab edit path    Esc back",
+                         g->win_w / 2, g->win_h - 40,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
@@ -2467,14 +3003,14 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     SDL_RenderClear(ren);
 
-    render_text_centered(g, g->font_piece[0], "Chess", WIN_W / 2, 130,
+    render_text_centered(g, g->font_piece[0], "Chess", g->win_w / 2, 130,
                          (SDL_Color){ 235, 225, 200, 255 });
-    render_text_centered(g, g->font_small, "C / SDL chess board", WIN_W / 2, 236,
+    render_text_centered(g, g->font_small, "C / SDL chess board", g->win_w / 2, 236,
                          (SDL_Color){ 130, 170, 190, 255 });
 
     for (int i = 0; i < MENU_COUNT; i++) {
         SDL_Rect r;
-        menu_item_rect(i, &r);
+        menu_item_rect(g, i, &r);
         bool sel = (i == g->menu_index);
         bool en = menu_enabled(i);
 
@@ -2488,17 +3024,55 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
         SDL_Color tc = !en ? (SDL_Color){ 100, 105, 115, 255 }
                       : sel ? (SDL_Color){ 245, 245, 245, 255 }
                             : (SDL_Color){ 205, 210, 220, 255 };
-        render_text_centered(g, g->font_ui, MENU_ITEMS[i], WIN_W / 2, r.y + 13, tc);
+        render_text_centered(g, g->font_ui, MENU_ITEMS[i], g->win_w / 2, r.y + 13, tc);
     }
 
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, WIN_W / 2, WIN_H - 150,
+        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, g->win_h - 150,
                              (SDL_Color){ 255, 170, 120, 255 });
 
     render_text_centered(g, g->font_small,
                          "Up/Down select    Enter choose    Ctrl+Q quit",
-                         WIN_W / 2, WIN_H - 80,
+                         g->win_w / 2, g->win_h - 80,
                          (SDL_Color){ 110, 120, 130, 255 });
+}
+
+static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
+{
+    if (!g->pgn_prompt) return;
+
+    int bw = 460, bh = 150;
+    SDL_Rect box = { (g->win_w - bw) / 2, (g->win_h - bh) / 2, bw, bh };
+    draw_rect(ren, &box, 40, 44, 52, true);
+    draw_rect(ren, &box, 120, 130, 150, false);
+
+    render_text(g, g->font_ui, "Save PGN as:", box.x + 20, box.y + 16,
+                (SDL_Color){ 235, 235, 235, 255 });
+
+    SDL_Rect field = { box.x + 20, box.y + 52, bw - 40, 40 };
+    draw_rect(ren, &field, 25, 25, 30, true);
+    draw_rect(ren, &field, 90, 140, 200, false);
+
+    const char *shown = g->pgn_len ? g->pgn_name : "game";
+    SDL_Color tc = g->pgn_len ? (SDL_Color){ 235, 235, 235, 255 }
+                              : (SDL_Color){ 110, 110, 115, 255 };
+    SDL_RenderSetClipRect(ren, &field);
+    render_text(g, g->font_ui, shown, field.x + 8, field.y + 8, tc);
+    if (g->pgn_len) {
+        int w = 0, h = 0;
+        TTF_SizeUTF8(g->font_ui, g->pgn_name, &w, &h);
+        float sc = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+        int lw = (int)lroundf(w / sc);
+        set_render_color(ren, 240, 240, 240);
+        SDL_Rect caret = { field.x + 10 + lw, field.y + 8, 2, field.h - 16 };
+        SDL_RenderFillRect(ren, &caret);
+    }
+    SDL_RenderSetClipRect(ren, NULL);
+
+    render_text_centered(g, g->font_small,
+                         "Enter save    Esc cancel    (games are stored under ~/.local/share/openchess/games)",
+                         box.x + bw / 2, box.y + bh - 26,
+                         (SDL_Color){ 150, 160, 175, 255 });
 }
 
 static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
@@ -2508,6 +3082,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     draw_board_squares(g, ren);
     draw_coordinates(g);
+    draw_eval_bar(g, ren);
 
     if (g->ply > 0) {
         Move m = g->history[g->ply - 1];
@@ -2532,11 +3107,25 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     draw_piece_layer(g, ren, now);
 
+    /* Board resize grip (three diagonal ticks in the bottom-right corner). */
+    {
+        SDL_Rect grip;
+        board_grip_rect(g, &grip);
+        set_render_color(ren, 150, 155, 165);
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        for (int i = 0; i < 3; i++) {
+            SDL_RenderDrawLine(ren,
+                               grip.x + grip.w - 3 - i * 5, grip.y + grip.h - 1,
+                               grip.x + grip.w - 1, grip.y + grip.h - 3 - i * 5);
+        }
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+    }
+
     if (g->promo_from >= 0) draw_promo_chooser(g, ren);
 
     if (g->dragging && g->selected >= 0) {
         render_piece_box(g, ren, g->board.board[g->selected],
-                         (float)g->mouse.x, (float)g->mouse.y, SQ_SIZE + 18, 1.0f);
+                         (float)g->mouse.x, (float)g->mouse.y, g->sq + 18, 1.0f);
         SDL_Rect rc;
         window_sq(g, g->selected, &rc);
         set_render_color(ren, 0, 0, 0);
@@ -2554,9 +3143,11 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     render_buttons(g, ren);
 
     if (g->msg[0] && SDL_GetTicks() < g->msg_until) {
-        render_text(g, g->font_small, g->msg, PANEL_X, WIN_H - 150,
+        render_text(g, g->font_small, g->msg, g->panel_x, g->win_h - 150,
                     (SDL_Color){ 255, 160, 120, 255 });
     }
+
+    render_pgn_prompt(g, ren);
 }
 
 void gui_render(Gui *g, SDL_Renderer *ren)
@@ -2572,6 +3163,8 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         render_hostjoin(g, ren);
     else if (g->scene == SCENE_APPEARANCE)
         render_appearance(g, ren);
+    else if (g->scene == SCENE_ENGINE)
+        render_engine(g, ren);
     else
         render_game(g, ren, now);
 

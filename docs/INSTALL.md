@@ -66,9 +66,10 @@ xattr -dr com.apple.quarantine /Applications/OpenChess.app
 | --- | --- | --- | --- |
 | Assets | `./assets` | `$PREFIX/share/openchess/assets` | `Contents/Resources/assets` |
 | Config | `./chess.conf` | `~/.config/openchess/chess.conf` | `~/.config/openchess/chess.conf` |
+| Exported games | `~/.local/share/openchess/games` | same | same |
 
 Overrides: `OPENCHESS_ASSETS` (assets directory) and `OPENCHESS_CONFIG`
-(config file path).
+(config file path). `XDG_DATA_HOME` changes where exported PGN games are saved.
 
 ### Troubleshooting
 
@@ -144,9 +145,10 @@ xattr -dr com.apple.quarantine /Applications/OpenChess.app
 | --- | --- | --- | --- |
 | 资源 | `./assets` | `$PREFIX/share/openchess/assets` | `Contents/Resources/assets` |
 | 配置 | `./chess.conf` | `~/.config/openchess/chess.conf` | `~/.config/openchess/chess.conf` |
+| 导出对局 | `~/.local/share/openchess/games` | 同上 | 同上 |
 
 可用环境变量覆盖：`OPENCHESS_ASSETS`（资源目录）、`OPENCHESS_CONFIG`
-（配置文件路径）。
+（配置文件路径）。导出 PGN 的位置可通过 `XDG_DATA_HOME` 改变。
 
 ### 常见问题
 

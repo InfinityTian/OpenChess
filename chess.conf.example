@@ -10,6 +10,9 @@ pieces = cases
 # Move animation: arcade | slide | fade | none
 animation = arcade
 
+# Square size in points (44-150). Also adjustable by dragging the board corner.
+board_size = 88
+
 # Stockfish engine binary for singleplayer. Optional; when omitted a
 # `stockfish` binary is looked up in the usual locations and on PATH.
 # engine = /opt/homebrew/bin/stockfish

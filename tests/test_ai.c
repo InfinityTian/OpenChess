@@ -72,6 +72,25 @@ static void test_engine(AiEngine *ai)
     printf("engine finds mate in one ('%s')  ok\n", uci);
 }
 
+static void test_eval(AiEngine *ai)
+{
+    Board b;
+    board_reset(&b);
+    ai_go_infinite(ai, &b);
+
+    bool got = false;
+    int cp = 0, mate = 0, depth = 0;
+    for (int i = 0; i < 400 && !got; i++) {
+        char uci[8];
+        ai_poll_bestmove(ai, uci);
+        if (ai_get_eval(ai, &cp, &mate, &depth) && depth > 0) got = true;
+        nap(10);
+    }
+    ai_stop_search(ai);
+    CHECK(got);
+    printf("engine eval: cp=%d mate=%d depth=%d  ok\n", cp, mate, depth);
+}
+
 int main(void)
 {
     test_uci_to_move();
@@ -90,6 +109,7 @@ int main(void)
     }
     CHECK(ai_alive(ai));
     test_engine(ai);
+    test_eval(ai);
     ai_stop(ai);
 
     if (failures == 0) {

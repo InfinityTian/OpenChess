@@ -10,12 +10,18 @@
 #include <SDL_ttf.h>
 #include <stdbool.h>
 
+/* Default layout (also used by main.c and the tests). The live values are the
+ * Gui fields board_x/board_y/sq/panel_x/win_w/win_h, which change on resize. */
 #define SQ_SIZE     88
 #define BOARD_X     16
 #define BOARD_Y     28
 #define PANEL_X     (BOARD_X + 8 * SQ_SIZE + 24)
+#define PANEL_W     436
 #define WIN_W       1180
 #define WIN_H       760
+
+#define MIN_SQ      44
+#define MAX_SQ      150
 
 #define MAX_PLY     1024
 
@@ -44,6 +50,7 @@ typedef enum {
     SCENE_SINGLE_SETUP,   /* choose side + difficulty */
     SCENE_HOSTJOIN,       /* local multiplayer host/join */
     SCENE_APPEARANCE,     /* board/piece/animation picker */
+    SCENE_ENGINE,         /* engine selection */
     SCENE_GAME,
 } Scene;
 
@@ -102,6 +109,23 @@ typedef struct {
     bool   ai_thinking;
     Uint32 ai_think_start;
 
+    /* live analysis evaluation (MODE_ANALYSIS) */
+    AiEngine *eval_ai;
+    Color  eval_side;
+    int    eval_cp;
+    int    eval_mate;
+    int    eval_depth;
+    bool   eval_valid;
+
+    /* engine picker */
+    char   engine_candidates[16][512];
+    int    engine_count;
+    int    engine_sel;
+    bool   engine_custom_focus;
+    char   engine_custom[512];
+    char   engine_status[128];
+    Scene  engine_return_scene;
+
     /* local multiplayer */
     Net   *net;
     Color  local_color;
@@ -128,12 +152,35 @@ typedef struct {
     char   msg[160];
     Uint32 msg_until;
 
+    /* PGN export */
+    bool   pgn_prompt;
+    char   pgn_name[64];
+    int    pgn_len;
+    char   white_name[64];
+    char   black_name[64];
+
     /* drag feedback */
     bool   dragging;
     SDL_Point mouse;
 
+    SDL_Window   *win;
     SDL_Renderer *ren;
     float         ui_scale;     /* device pixels per logical point (>= 1.0) */
+
+    /* Live layout (see DEFAULT macros above); changed by resizing. */
+    int    sq;          /* square size in logical points */
+    int    board_x;
+    int    board_y;
+    int    panel_x;
+    int    win_w;
+    int    win_h;
+
+    /* board-corner drag state */
+    bool   resizing_board;
+    int    resize_start_sq;
+    int    resize_start_mx;
+    int    resize_start_my;
+    bool   board_driven_resize; /* next window-resize event came from us */
 
     /* runtime theme lists + current selection */
     ThemeList boards;

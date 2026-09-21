@@ -24,6 +24,11 @@ struct AiEngine {
     int    depth;
     bool   searching;
     bool   alive;
+    /* latest "info" score (side-to-move perspective) */
+    int    last_cp;
+    int    last_mate;
+    int    last_depth;
+    bool   has_eval;
 };
 
 /* ------------------------------------------------------------------ */
@@ -287,6 +292,8 @@ void ai_go(AiEngine *ai, const Board *b)
     if (!ai || !ai->alive || !b) return;
 
     ai_drain(ai);   /* discard anything left over from a previous search */
+    ai->has_eval = false;
+    ai->last_cp = ai->last_mate = ai->last_depth = 0;
 
     char fen[128];
     fen_generate(b, fen, sizeof fen);
@@ -304,11 +311,58 @@ void ai_go(AiEngine *ai, const Board *b)
     ai->searching = true;
 }
 
+void ai_go_infinite(AiEngine *ai, const Board *b)
+{
+    if (!ai || !ai->alive || !b) return;
+
+    ai_drain(ai);
+    ai->has_eval = false;
+    ai->last_cp = ai->last_mate = ai->last_depth = 0;
+
+    char fen[128];
+    fen_generate(b, fen, sizeof fen);
+
+    char cmd[160];
+    snprintf(cmd, sizeof cmd, "position fen %s\n", fen);
+    ai_send(ai, cmd);
+    ai_send(ai, "go infinite\n");
+    ai->searching = true;
+}
+
+bool ai_get_eval(const AiEngine *ai, int *cp, int *mate, int *depth)
+{
+    if (!ai || !ai->has_eval) return false;
+    if (cp)    *cp = ai->last_cp;
+    if (mate)  *mate = ai->last_mate;
+    if (depth) *depth = ai->last_depth;
+    return true;
+}
+
 void ai_stop_search(AiEngine *ai)
 {
     if (!ai || !ai->alive || !ai->searching) return;
     ai_send(ai, "stop\n");
     ai->searching = false;
+}
+
+static void parse_info(AiEngine *ai, const char *line)
+{
+    if (strncmp(line, "info ", 5) != 0) return;
+
+    const char *p;
+    if ((p = strstr(line, " depth "))) {
+        int d = atoi(p + 7);
+        if (d > 0) ai->last_depth = d;
+    }
+    if ((p = strstr(line, "score mate "))) {
+        ai->last_mate = atoi(p + 11);
+        ai->last_cp = 0;
+        ai->has_eval = true;
+    } else if ((p = strstr(line, "score cp "))) {
+        ai->last_cp = atoi(p + 9);
+        ai->last_mate = 0;
+        ai->has_eval = true;
+    }
 }
 
 bool ai_poll_bestmove(AiEngine *ai, char out_uci[8])
@@ -319,7 +373,10 @@ bool ai_poll_bestmove(AiEngine *ai, char out_uci[8])
 
     char line[512];
     while (ai_next_line(ai, line, sizeof line)) {
-        if (strncmp(line, "bestmove ", 9) != 0) continue;
+        if (strncmp(line, "bestmove ", 9) != 0) {
+            parse_info(ai, line);
+            continue;
+        }
         const char *tok = line + 9;
         size_t i = 0;
         while (tok[i] && !isspace((unsigned char)tok[i]) && i < 7) {

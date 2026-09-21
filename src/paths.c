@@ -1,10 +1,12 @@
 #include "paths.h"
 
+#include <ctype.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -108,6 +110,51 @@ const char *path_config(void)
     else
         snprintf(s_config, sizeof s_config, "chess.conf");
     return s_config;
+}
+
+const char *path_games_dir(void)
+{
+    static char dir[PATHS_MAX];
+    if (dir[0]) return dir;
+
+    const char *xdg = getenv("XDG_DATA_HOME");
+    const char *home = getenv("HOME");
+    if (xdg && *xdg)
+        snprintf(dir, sizeof dir, "%s/openchess/games", xdg);
+    else if (home && *home)
+        snprintf(dir, sizeof dir, "%s/.local/share/openchess/games", home);
+    else
+        snprintf(dir, sizeof dir, "games");
+    return dir;
+}
+
+void path_game_file(char *out, size_t n, const char *name)
+{
+    if (!out || n == 0) return;
+
+    char clean[256];
+    size_t k = 0;
+    for (const char *p = name; p && *p && k + 1 < sizeof clean; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isalnum(c) || c == ' ' || c == '-' || c == '_' || c == '.')
+            clean[k++] = (char)c;
+        else
+            clean[k++] = '_';
+    }
+    clean[k] = '\0';
+
+    /* trim leading dots/spaces and a trailing ".pgn" (case-insensitive) */
+    char *s = clean;
+    while (*s == '.' || *s == ' ') s++;
+    if (*s == '\0') snprintf(clean, sizeof clean, "game");
+    else if (s != clean) memmove(clean, s, strlen(s) + 1);
+
+    size_t len = strlen(clean);
+    if (len < 4 || strcasecmp(clean + len - 4, ".pgn") != 0) {
+        if (len + 4 < sizeof clean) strcat(clean, ".pgn");
+    }
+
+    snprintf(out, n, "%s/%s", path_games_dir(), clean);
 }
 
 void path_make_parent(const char *file)
