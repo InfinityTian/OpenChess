@@ -115,6 +115,7 @@ typedef struct {
     int    eval_cp;
     int    eval_mate;
     int    eval_depth;
+    bool   eval_has_mate;
     bool   eval_valid;
 
     /* engine picker */

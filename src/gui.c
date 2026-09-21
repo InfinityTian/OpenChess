@@ -303,6 +303,20 @@ static void set_mouse(Gui *g, int x, int y)
 {
     g->mouse_win.x = x;
     g->mouse_win.y = y;
+
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    /* Use SDL's own window->logical conversion: it accounts for the renderer's
+     * actual scale, DPI scale and viewport, so input always matches what is
+     * drawn (avoiding a bias as the UI is magnified). */
+    if (g->ren) {
+        float lx = 0.0f, ly = 0.0f;
+        SDL_RenderWindowToLogical(g->ren, x, y, &lx, &ly);
+        g->mouse.x = (int)lroundf(lx);
+        g->mouse.y = (int)lroundf(ly);
+        return;
+    }
+#endif
+
     float z = g->zoom > 0.0f ? g->zoom : 1.0f;
     g->mouse.x = (int)lroundf((float)x / z);
     g->mouse.y = (int)lroundf((float)y / z);
@@ -2037,19 +2051,20 @@ static void handle_window_resize(Gui *g, int w, int h)
     /* Display density may differ from gui_init_assets if the window moved. */
     int ow = w, oh = h;
     SDL_GetRendererOutputSize(g->ren, &ow, &oh);
-    float density = (w > 0) ? (float)ow / (float)w : 1.0f;
+    float density = (float)ow / (float)w;
     if (density < 1.0f) density = 1.0f;
+    bool density_changed = (density != g->ui_scale);
     g->ui_scale = density;
 
     float z = (float)w / (float)g->win_w;
     float zy = (float)h / (float)g->win_h;
     if (zy < z) z = zy;
     z = clamp_zoom(z);
-    if (z == g->zoom) { apply_render_scale(g); return; }
-
+    bool zoom_changed = (z != g->zoom);
     g->zoom = z;
+
     apply_render_scale(g);
-    rebuild_fonts(g);
+    if (zoom_changed || density_changed) rebuild_fonts(g);
 }
 
 void gui_handle_event(Gui *g, const SDL_Event *e)
@@ -2060,7 +2075,8 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             return;
         case SDL_WINDOWEVENT:
             if (e->window.event == SDL_WINDOWEVENT_RESIZED ||
-                e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+                e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+                e->window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED) {
                 int w = e->window.data1, h = e->window.data2;
                 if (g->win) SDL_GetWindowSize(g->win, &w, &h);
                 handle_window_resize(g, w, h);
@@ -2220,6 +2236,7 @@ void gui_tick(Gui *g, Uint32 now)
             g->eval_cp = cp;
             g->eval_mate = mate;
             g->eval_depth = depth;
+            g->eval_has_mate = ai_eval_has_mate(g->eval_ai);
             g->eval_valid = true;
         }
     }
@@ -2502,7 +2519,10 @@ static void render_status(Gui *g)
             snprintf(info, sizeof info, "Analysis: no engine");
         else if (!g->eval_valid)
             snprintf(info, sizeof info, "Analysis: thinking...");
-        else if (g->eval_mate != 0)
+        else if (g->eval_has_mate && g->eval_mate == 0)
+            snprintf(info, sizeof info, "Eval: checkmate (%s wins)",
+                     g->eval_side == WHITE ? "Black" : "White");
+        else if (g->eval_has_mate)
             snprintf(info, sizeof info, "Eval: %sM%d   (depth %d)",
                      g->eval_mate > 0 ? "+" : "-",
                      g->eval_mate > 0 ? g->eval_mate : -g->eval_mate,
@@ -2528,10 +2548,13 @@ static void draw_eval_bar(Gui *g, SDL_Renderer *ren)
     SDL_RenderFillRect(ren, &bg);
 
     float f;
-    if (g->eval_mate != 0)
-        f = g->eval_mate > 0 ? 1.0f : 0.0f;
-    else
+    if (g->eval_has_mate) {
+        if (g->eval_mate > 0)      f = 1.0f;   /* White mates */
+        else if (g->eval_mate < 0) f = 0.0f;   /* Black mates */
+        else f = (g->eval_side == WHITE) ? 0.0f : 1.0f;  /* side to move is mated */
+    } else {
         f = 1.0f / (1.0f + expf(-(float)g->eval_cp / 400.0f));
+    }
 
     int wh = (int)(h * f);
     SDL_Rect white = { x, y + h - wh, w, wh };
@@ -3204,6 +3227,10 @@ void gui_render(Gui *g, SDL_Renderer *ren)
 {
     Uint32 now = SDL_GetTicks();
     gui_anim_advance(g, now);
+
+    /* Keep the drawing scale in sync with the intended magnification even if
+     * SDL reset it (e.g. after a window/display change). */
+    apply_render_scale(g);
 
     if (g->scene == SCENE_MENU)
         render_menu(g, ren);

@@ -28,6 +28,7 @@ struct AiEngine {
     int    last_cp;
     int    last_mate;
     int    last_depth;
+    bool   last_mate_set;   /* the score came from a "score mate" line */
     bool   has_eval;
 };
 
@@ -287,16 +288,35 @@ void ai_set_depth(AiEngine *ai, int depth)
     if (ai) ai->depth = depth > 0 ? depth : 0;
 }
 
+/*
+ * Make sure the engine has actually aborted any running search and processed
+ * every command sent so far. Without this, a "position"/"go" issued while an
+ * infinite search is still running is ignored and the engine keeps evaluating
+ * the old position.
+ */
+static void ai_sync(AiEngine *ai)
+{
+    if (!ai || !ai->alive) return;
+    ai_send(ai, "stop\n");
+    ai_send(ai, "isready\n");
+    ai_wait_for(ai, "readyok", 3000);
+    ai->searching = false;
+    ai_drain(ai);
+}
+
 void ai_go(AiEngine *ai, const Board *b)
 {
     if (!ai || !ai->alive || !b) return;
 
-    ai_drain(ai);   /* discard anything left over from a previous search */
+    ai_sync(ai);   /* ensure a previous search is finished */
     ai->has_eval = false;
+    ai->last_mate_set = false;
     ai->last_cp = ai->last_mate = ai->last_depth = 0;
 
     char fen[128];
     fen_generate(b, fen, sizeof fen);
+    if (getenv("OPENCHESS_DEBUG_UCI"))
+        fprintf(stderr, "uci: position fen %s\n", fen);
 
     char cmd[160];
     snprintf(cmd, sizeof cmd, "position fen %s\n", fen);
@@ -315,12 +335,15 @@ void ai_go_infinite(AiEngine *ai, const Board *b)
 {
     if (!ai || !ai->alive || !b) return;
 
-    ai_drain(ai);
+    ai_sync(ai);
     ai->has_eval = false;
+    ai->last_mate_set = false;
     ai->last_cp = ai->last_mate = ai->last_depth = 0;
 
     char fen[128];
     fen_generate(b, fen, sizeof fen);
+    if (getenv("OPENCHESS_DEBUG_UCI"))
+        fprintf(stderr, "uci: position fen %s\n", fen);
 
     char cmd[160];
     snprintf(cmd, sizeof cmd, "position fen %s\n", fen);
@@ -338,9 +361,14 @@ bool ai_get_eval(const AiEngine *ai, int *cp, int *mate, int *depth)
     return true;
 }
 
+bool ai_eval_has_mate(const AiEngine *ai)
+{
+    return ai && ai->has_eval && ai->last_mate_set;
+}
+
 void ai_stop_search(AiEngine *ai)
 {
-    if (!ai || !ai->alive || !ai->searching) return;
+    if (!ai || !ai->alive) return;
     ai_send(ai, "stop\n");
     ai->searching = false;
 }
@@ -357,10 +385,12 @@ static void parse_info(AiEngine *ai, const char *line)
     if ((p = strstr(line, "score mate "))) {
         ai->last_mate = atoi(p + 11);
         ai->last_cp = 0;
+        ai->last_mate_set = true;
         ai->has_eval = true;
     } else if ((p = strstr(line, "score cp "))) {
         ai->last_cp = atoi(p + 9);
         ai->last_mate = 0;
+        ai->last_mate_set = false;
         ai->has_eval = true;
     }
 }

@@ -540,6 +540,34 @@ int main(void)
     gui_render(g, ren);          /* resized layout renders */
     g->config_dirty = false;
 
+    /* ---- clicking a square while magnified still selects that square ---- */
+    {
+        board_reset(&g->board);
+        g->state = game_state(&g->board);
+        g->flipped = false;
+        g->selected = -1;
+
+        int e2 = algebraic_to_sq("e2");
+        int file = e2 % 8, rank = e2 / 8;
+        int col = g->flipped ? 7 - file : file;
+        int row = g->flipped ? rank : 7 - rank;
+        int bx = g->board_x + col * g->sq + g->sq / 2;
+        int by = g->board_y + row * g->sq + g->sq / 2;
+        SDL_Event md = {0};
+        md.type = SDL_MOUSEBUTTONDOWN;
+        md.button.button = SDL_BUTTON_LEFT;
+        md.button.x = (int)(bx * g->zoom + 0.5f);
+        md.button.y = (int)(by * g->zoom + 0.5f);
+        g->selected = -1;
+        gui_handle_event(g, &md);
+        if (g->selected != e2) {
+            fprintf(stderr, "magnified click mapping wrong (selected=%d want=%d)\n",
+                    g->selected, e2);
+            return 1;
+        }
+        g->selected = -1;
+    }
+
     if (SDL_SaveBMP(surf, "gui_smoke.bmp") != 0) {
         fprintf(stderr, "savebmp: %s\n", SDL_GetError());
         return 1;

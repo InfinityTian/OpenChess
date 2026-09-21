@@ -44,6 +44,9 @@ void ai_go_infinite(AiEngine *ai, const Board *b);
 /* Most recent "info" score, from the side-to-move's perspective. */
 bool ai_get_eval(const AiEngine *ai, int *cp, int *mate, int *depth);
 
+/* True when the most recent score was a "score mate N" line (N may be 0). */
+bool ai_eval_has_mate(const AiEngine *ai);
+
 /* Ask the engine to abort the current search (its pending bestmove is ignored). */
 void ai_stop_search(AiEngine *ai);
 

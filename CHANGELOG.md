@@ -4,6 +4,24 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-09-21
+
+### Fixed
+- **Analysis evaluation could get stuck.** A race in the UCI state tracking
+  meant a later re-analysis could skip the `stop` command, leaving Stockfish
+  searching an old position (a near-constant +0.1 even on a checkmate). The
+  engine is now synchronised (`stop` + `isready`/`readyok`) before each new
+  position, so the board is always the one being evaluated.
+- **Checkmate / mate scores** now show correctly on the evaluation bar and in
+  the panel (`1-0` / `0-1` / `+M#`), instead of a small centipawn score.
+- **Mouse bias when magnified.** Input now uses SDL's own
+  `SDL_RenderWindowToLogical` conversion (matching the renderer's actual scale
+  and DPI), the render scale is re-applied each frame, and display changes are
+  handled — so clicks and drags land exactly where things are drawn.
+
+### Added
+- `OPENCHESS_DEBUG_UCI=1` logs the exact `position fen …` sent to the engine.
+
 ## [1.1.1] - 2026-09-21
 
 ### Fixed
@@ -51,6 +69,7 @@ All notable changes to OpenChess. The format follows
 - Bilingual (English / 简体中文) documentation.
 - `install.sh` / `uninstall.sh` and macOS `.app`/`.dmg` packaging.
 
+[1.1.2]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.2
 [1.1.1]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.1
 [1.1.0]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.0
 [1.0.0]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.0.0

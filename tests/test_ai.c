@@ -89,6 +89,25 @@ static void test_eval(AiEngine *ai)
     ai_stop_search(ai);
     CHECK(got);
     printf("engine eval: cp=%d mate=%d depth=%d  ok\n", cp, mate, depth);
+
+    /* After restarts the engine must actually analyse the new position: a
+     * checkmated position must yield a mate score, not the previous eval. */
+    Board mb;
+    CHECK(fen_parse("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3", &mb));
+    CHECK(game_state(&mb) == CHECKMATE);
+
+    got = false;
+    ai_go_infinite(ai, &mb);
+    for (int i = 0; i < 400 && !got; i++) {
+        char uci[8];
+        ai_poll_bestmove(ai, uci);
+        if (ai_eval_has_mate(ai) && ai_get_eval(ai, &cp, &mate, &depth)) got = true;
+        nap(10);
+    }
+    ai_stop_search(ai);
+    CHECK(got);
+    CHECK(mate == 0);
+    printf("engine reports checkmate (mate=%d)  ok\n", mate);
 }
 
 int main(void)
