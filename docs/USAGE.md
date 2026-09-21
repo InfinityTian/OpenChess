@@ -67,9 +67,10 @@ config file.
 - **Ctrl+F** flips the board manually.
 - In Singleplayer and Local Multiplayer the board is automatically oriented to
   your colour at the start.
-- **Resize**: drag the grip in the board's bottom-right corner to change the
-  square size; the window follows. You can also resize the window normally and
-  the board scales to fit. The square size is saved as `board_size`.
+- **Resize / magnify**: the whole UI (board, pieces, panel text, buttons and
+  menus) scales together. Drag the grip in the board's bottom-right corner, or
+  resize the window normally. The resulting magnification is saved in
+  `chess.conf` as `board_size` (the equivalent square size, 44–150).
 
 ### Engine and evaluation (Analysis)
 
@@ -175,8 +176,9 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 
 - **Ctrl+F** 手动翻转。
 - 单人/本地多人开局时会自动朝向你的颜色。
-- **缩放**：拖动棋盘右下角手柄可改变格子大小，窗口会随之调整；也可直接缩放系统
-  窗口，棋盘会自动适配。格子大小会保存为 `board_size`。
+- **缩放 / 放大**：整个界面（棋盘、棋子、面板文字、按钮与菜单）会一起缩放。
+  可拖动棋盘右下角手柄，或直接缩放系统窗口。缩放比例以 `board_size`（等效格子大小，
+  44–150）保存到 `chess.conf`。
 
 ### 引擎与评估（分析模式）
 

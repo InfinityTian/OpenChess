@@ -505,8 +505,7 @@ int main(void)
     /* ---- drag the board corner to resize it ---- */
     g->scene = SCENE_GAME;
     g->mode = MODE_ANALYSIS;
-    int sq_before = g->sq;
-    int winw_before = g->win_w;
+    float zoom_before = g->zoom;
     int gx = g->board_x + 8 * g->sq - 9;
     int gy = g->board_y + 8 * g->sq - 9;
 
@@ -524,8 +523,9 @@ int main(void)
     rm.motion.x = gx + 56; rm.motion.y = gy + 56;
     rm.motion.state = SDL_BUTTON_LMASK;
     gui_handle_event(g, &rm);
-    if (g->sq <= sq_before || g->win_w <= winw_before) {
-        fprintf(stderr, "board did not grow (sq %d->%d)\n", sq_before, g->sq);
+    if (g->zoom <= zoom_before) {
+        fprintf(stderr, "UI did not magnify (zoom %.2f->%.2f)\n",
+                zoom_before, g->zoom);
         return 1;
     }
     SDL_Event ru = {0};

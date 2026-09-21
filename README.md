@@ -28,8 +28,9 @@ FEN import/export, board flipping, move animations, and SAN text entry.
   Singleplayer and by live Analysis.
 - **Live evaluation bar** – in Analysis a Stockfish evaluation bar sits beside
   the board with score/depth readout.
-- **Resizable window and board** – drag the grip in the board's bottom-right
-  corner to resize the board; the window follows, and the OS window is resizable.
+- **Resizable / magnifiable UI** – resize the window or drag the grip in the
+  board's bottom-right corner; the board, pieces, panel and menus all scale
+  together.
 - **Export as PGN** – press `Ctrl+S` (or the **PGN** button) to save the game
   with headers and result.
 - **FEN** – load a position from a FEN string and copy the current position.

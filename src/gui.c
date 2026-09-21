@@ -36,20 +36,32 @@ static ThemeEntry *cur_piece(Gui *g)
 }
 
 /*
- * Derive the panel/window geometry from the current board square size. The
- * window always wraps the board plus the fixed-width side panel.
+ * Reset to the fixed base layout. All geometry is expressed in these base
+ * coordinates; `zoom` magnifies the whole canvas to fit the window.
  */
-static void layout_recompute(Gui *g)
+static void layout_base(Gui *g)
 {
-    if (g->sq < MIN_SQ) g->sq = MIN_SQ;
-    if (g->sq > MAX_SQ) g->sq = MAX_SQ;
-
+    g->sq      = SQ_SIZE;
     g->board_x = BOARD_X;
     g->board_y = BOARD_Y;
     g->panel_x = g->board_x + 8 * g->sq + 24;
     g->win_w   = g->panel_x + PANEL_W;
-    int need_h = g->board_y + 8 * g->sq + 28;
-    g->win_h   = need_h > WIN_H ? need_h : WIN_H;
+    g->win_h   = WIN_H;
+}
+
+/* Device pixels per base unit = display density * user zoom. */
+static float eff_scale(const Gui *g)
+{
+    float s = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+    float z = g->zoom > 0.0f ? g->zoom : 1.0f;
+    return s * z;
+}
+
+static float clamp_zoom(float z)
+{
+    if (z < 0.5f) z = 0.5f;
+    if (z > 2.0f) z = 2.0f;
+    return z;
 }
 
 /* The drag handle lives at the board's bottom-right screen corner. */
@@ -61,12 +73,22 @@ static void board_grip_rect(const Gui *g, SDL_Rect *r)
     r->y = g->board_y + 8 * g->sq - r->h;
 }
 
-/* Resize the OS window to match the current layout (board-driven resize). */
+/* Apply the current magnification to the renderer. */
+static void apply_render_scale(Gui *g)
+{
+    if (!g->ren) return;
+    float s = eff_scale(g);
+    SDL_RenderSetScale(g->ren, s, s);
+}
+
+/* Resize the OS window so the magnified canvas fits exactly. */
 static void apply_window_size(Gui *g)
 {
     if (!g->win) return;
     g->board_driven_resize = true;
-    SDL_SetWindowSize(g->win, g->win_w, g->win_h);
+    SDL_SetWindowSize(g->win,
+                      (int)lroundf(g->win_w * g->zoom),
+                      (int)lroundf(g->win_h * g->zoom));
 }
 
 /* ---- live analysis evaluation ---- */
@@ -196,7 +218,7 @@ static void render_text(Gui *g, TTF_Font *font, const char *txt,
     SDL_Surface *s = TTF_RenderUTF8_Blended(font, txt, col);
     if (!s) return;
     SDL_Texture *t = SDL_CreateTextureFromSurface(ren, s);
-    float sc = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+    float sc = eff_scale(g);
     SDL_Rect rc = { x, y, (int)lroundf(s->w / sc), (int)lroundf(s->h / sc) };
     SDL_RenderCopy(ren, t, NULL, &rc);
     SDL_DestroyTexture(t);
@@ -229,9 +251,17 @@ static void render_text_centered(Gui *g, TTF_Font *font, const char *txt,
     if (!font || !txt || !*txt) return;
     int w = 0, h = 0;
     if (TTF_SizeUTF8(font, txt, &w, &h) != 0) return;
-    float sc = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+    float sc = eff_scale(g);
     int lw = (int)lroundf(w / sc);
     render_text(g, font, txt, cx - lw / 2, y, col);
+}
+
+/* Logical height of a rendered line, for vertical centering. */
+static int text_height(const Gui *g, TTF_Font *font)
+{
+    if (!font) return 0;
+    float sc = eff_scale(g);
+    return (int)lroundf((float)TTF_FontHeight(font) / sc);
 }
 
 static int window_sq(const Gui *g, int sq, SDL_Rect *out)
@@ -266,6 +296,16 @@ static void piece_center(const Gui *g, int sq, float *cx, float *cy)
 static bool pt_in(const SDL_Rect *r, int x, int y)
 {
     return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h;
+}
+
+/* Record a raw window event position and map it into base coordinates. */
+static void set_mouse(Gui *g, int x, int y)
+{
+    g->mouse_win.x = x;
+    g->mouse_win.y = y;
+    float z = g->zoom > 0.0f ? g->zoom : 1.0f;
+    g->mouse.x = (int)lroundf((float)x / z);
+    g->mouse.y = (int)lroundf((float)y / z);
 }
 
 /* ------------------------------------------------------------------ */
@@ -322,24 +362,31 @@ static void load_piece_style(Gui *g)
     build_glyph_textures(g);
 }
 
-/* Rebuild the glyph piece font/textures after the square size changed. Image
- * piece sets are resolution independent, so they need no work. */
-static void reload_piece_font(Gui *g)
+/* Reopen every font at the current magnification and rebuild the piece
+ * textures (needed after a zoom change; image sets are reloaded harmlessly). */
+static void rebuild_fonts(Gui *g)
 {
-    ThemeEntry *pt = cur_piece(g);
-    if (!pt || pt->path[0] || !g->ren) return;   /* only the glyph set scales */
-
     if (g->font_piece[0]) TTF_CloseFont(g->font_piece[0]);
     if (g->font_piece[1]) TTF_CloseFont(g->font_piece[1]);
+    if (g->font_ui) TTF_CloseFont(g->font_ui);
+    if (g->font_small) TTF_CloseFont(g->font_small);
     g->font_piece[0] = g->font_piece[1] = NULL;
+    g->font_ui = g->font_small = NULL;
 
     const char *fpath = find_font();
     if (fpath) {
-        int px = (int)lroundf(g->sq * g->ui_scale);
-        g->font_piece[0] = TTF_OpenFont(fpath, px);
-        g->font_piece[1] = TTF_OpenFont(fpath, px);
+        float sc = eff_scale(g);
+        g->font_piece[0] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
+        g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
+        g->font_ui      = TTF_OpenFont(fpath, (int)lroundf(22 * sc));
+        g->font_small   = TTF_OpenFont(fpath, (int)lroundf(15 * sc));
+        if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui || !g->font_small)
+            fprintf(stderr, "TTF_OpenFont: %s\n", TTF_GetError());
     }
-    load_piece_style(g);
+
+    /* Only the glyph set depends on the font size; image piece textures scale. */
+    ThemeEntry *pt = cur_piece(g);
+    if (!pt || !pt->path[0]) load_piece_style(g);
 }
 
 static void load_board_style(Gui *g)
@@ -706,12 +753,26 @@ static const AiLevel AI_LEVELS[3] = {
 };
 #define AI_LEVEL_COUNT 3
 
+#define MENU_TOP    200     /* below the title/subtitle */
+#define MENU_BOTTOM 110     /* reserved above the window bottom */
+#define MENU_ITEM_H 46
+#define MENU_GAP    12
+
+/* Responsive menu entries: fixed-size buttons centred vertically in the area
+ * between the subtitle and the footer, never overlapping either. */
 static void menu_item_rect(const Gui *g, int i, SDL_Rect *r)
 {
     r->w = 440;
-    r->h = 54;
+    if (r->w > g->win_w - 160) r->w = g->win_w - 160;
+    if (r->w < 240) r->w = 240;
+    r->h = MENU_ITEM_H;
     r->x = (g->win_w - r->w) / 2;
-    r->y = 250 + i * (r->h + 14);
+
+    int total = MENU_COUNT * r->h + (MENU_COUNT - 1) * MENU_GAP;
+    int area  = (g->win_h - MENU_BOTTOM) - MENU_TOP;
+    int start = MENU_TOP + (area - total) / 2;
+    if (start < MENU_TOP) start = MENU_TOP;
+    r->y = start + i * (r->h + MENU_GAP);
 }
 
 static void start_analysis(Gui *g)
@@ -934,10 +995,7 @@ void gui_load_config(Gui *g, const char *path)
 
     if (vboardsize[0]) {
         int sz = atoi(vboardsize);
-        if (sz >= MIN_SQ && sz <= MAX_SQ) {
-            g->sq = sz;
-            layout_recompute(g);
-        }
+        if (sz > 0) g->zoom = clamp_zoom((float)sz / (float)SQ_SIZE);
     }
 }
 
@@ -957,7 +1015,7 @@ void gui_save_config(Gui *g)
     if (g->pieces.items && g->piece_index >= 0 && g->piece_index < g->pieces.count)
         fprintf(f, "pieces = %s\n", g->pieces.items[g->piece_index].key);
     fprintf(f, "animation = %s\n", ANIM_KEYS[g->anim_style]);
-    fprintf(f, "board_size = %d\n", g->sq);
+    fprintf(f, "board_size = %d\n", (int)lroundf(SQ_SIZE * g->zoom));
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     fclose(f);
 }
@@ -1012,8 +1070,8 @@ Gui *gui_create(void)
     Gui *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     g->ui_scale = 1.0f;
-    g->sq = SQ_SIZE;
-    layout_recompute(g);
+    g->zoom = 1.0f;
+    layout_base(g);
     g->scene = SCENE_MENU;
     g->mode = MODE_ANALYSIS;
     g->menu_index = 1;          /* Analysis is the default selection */
@@ -1050,38 +1108,29 @@ void gui_init_assets(Gui *g, SDL_Renderer *ren)
     g->ren = ren;
     g->win = SDL_RenderGetWindow(ren);
 
-    /* Apply the configured board/window size and forbid shrinking below a
-     * usable layout (smallest board + panel). */
+    /* Size the window to the magnified base canvas and allow zooming out to 0.5. */
     if (g->win) {
-        int min_w = BOARD_X + 8 * MIN_SQ + 24 + PANEL_W;
-        SDL_SetWindowMinimumSize(g->win, min_w, WIN_H);
-        SDL_SetWindowSize(g->win, g->win_w, g->win_h);
+        SDL_SetWindowMinimumSize(g->win,
+                                 (int)lroundf(g->win_w * 0.5f),
+                                 (int)lroundf(g->win_h * 0.5f));
+        SDL_SetWindowSize(g->win,
+                          (int)lroundf(g->win_w * g->zoom),
+                          (int)lroundf(g->win_h * g->zoom));
     }
 
-    /* Render at the display's native pixel density (e.g. 2x on Retina) while
-     * keeping all layout and input in logical points. Textures/fonts are built
-     * at `ui_scale` density and mapped back down by the render scale. */
-    int ow = g->win_w, oh = g->win_h;
+    /* Display density = device pixels per window point (2 on Retina). The whole
+     * UI is drawn on the fixed base canvas and magnified by density * zoom. */
+    int ww = g->win_w, wh = g->win_h, ow = g->win_w, oh = g->win_h;
+    if (g->win) SDL_GetWindowSize(g->win, &ww, &wh);
     SDL_GetRendererOutputSize(ren, &ow, &oh);
-    float scale = (float)ow / (float)g->win_w;
-    if (scale < 1.0f) scale = 1.0f;
-    g->ui_scale = scale;
-    SDL_RenderSetScale(ren, scale, scale);
+    float density = (ww > 0) ? (float)ow / (float)ww : 1.0f;
+    if (density < 1.0f) density = 1.0f;
+    g->ui_scale = density;
 
-    const char *fpath = find_font();
-    if (!fpath) {
-        fprintf(stderr, "no suitable font found\n");
-    } else {
-        g->font_piece[0] = TTF_OpenFont(fpath, (int)lroundf(g->sq * scale));
-        g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(g->sq * scale));
-        g->font_ui      = TTF_OpenFont(fpath, (int)lroundf(22 * scale));
-        g->font_small   = TTF_OpenFont(fpath, (int)lroundf(15 * scale));
-        if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui || !g->font_small)
-            fprintf(stderr, "TTF_OpenFont: %s\n", TTF_GetError());
-    }
-
+    apply_render_scale(g);
+    rebuild_fonts(g);
+    load_piece_style(g);       /* ensure the initial piece textures exist */
     load_board_style(g);
-    load_piece_style(g);
 }
 
 static void destroy_thumbs(SDL_Texture ***arr, int n)
@@ -1864,9 +1913,9 @@ static void handle_game_mousedown(Gui *g)
     board_grip_rect(g, &grip);
     if (pt_in(&grip, p.x, p.y)) {
         g->resizing_board = true;
-        g->resize_start_sq = g->sq;
-        g->resize_start_mx = p.x;
-        g->resize_start_my = p.y;
+        g->resize_start_zoom = g->zoom;
+        g->resize_start_mx = g->mouse_win.x;
+        g->resize_start_my = g->mouse_win.y;
         return;
     }
 
@@ -1959,49 +2008,48 @@ static void handle_game_mouseup(Gui *g)
     if (g->selected >= 0) try_move_to(g, sq);
 }
 
-/* Board-corner drag: grow/shrink the square size and resize the window. */
+/* Board-corner drag magnifies the whole UI and resizes the window to fit. */
 static void handle_board_resize(Gui *g)
 {
-    int dx = g->mouse.x - g->resize_start_mx;
-    int dy = g->mouse.y - g->resize_start_my;
+    int dx = g->mouse_win.x - g->resize_start_mx;
+    int dy = g->mouse_win.y - g->resize_start_my;
     int delta = dx > dy ? dx : dy;
 
-    int sq = g->resize_start_sq + delta / 8;
-    if (sq < MIN_SQ) sq = MIN_SQ;
-    if (sq > MAX_SQ) sq = MAX_SQ;
-    if (sq == g->sq) return;
+    float z = g->resize_start_zoom + (float)delta / (float)(8 * SQ_SIZE);
+    z = clamp_zoom(z);
+    if (z == g->zoom) return;
 
-    g->sq = sq;
-    layout_recompute(g);
-    reload_piece_font(g);
+    g->zoom = z;
+    apply_render_scale(g);
+    rebuild_fonts(g);
     apply_window_size(g);
 }
 
-/* OS window resize: scale the board to the newly available space. */
+/* OS window resize: refit the base canvas (uniform magnification). */
 static void handle_window_resize(Gui *g, int w, int h)
 {
     if (g->board_driven_resize) {
         g->board_driven_resize = false;
-        g->win_w = w;
-        g->win_h = h;
         return;
     }
+    if (w <= 0 || h <= 0) return;
 
-    int avail_w = w - (BOARD_X + PANEL_W);
-    int avail_h = h - (BOARD_Y + 28);
-    int side = avail_w < avail_h ? avail_w : avail_h;
-    int sq = side / 8;
-    if (sq < MIN_SQ) sq = MIN_SQ;
-    if (sq > MAX_SQ) sq = MAX_SQ;
+    /* Display density may differ from gui_init_assets if the window moved. */
+    int ow = w, oh = h;
+    SDL_GetRendererOutputSize(g->ren, &ow, &oh);
+    float density = (w > 0) ? (float)ow / (float)w : 1.0f;
+    if (density < 1.0f) density = 1.0f;
+    g->ui_scale = density;
 
-    bool changed = (sq != g->sq);
-    g->sq = sq;
-    g->board_x = BOARD_X;
-    g->board_y = BOARD_Y;
-    g->panel_x = g->board_x + 8 * g->sq + 24;
-    g->win_w = w;
-    g->win_h = h;
-    if (changed) reload_piece_font(g);
+    float z = (float)w / (float)g->win_w;
+    float zy = (float)h / (float)g->win_h;
+    if (zy < z) z = zy;
+    z = clamp_zoom(z);
+    if (z == g->zoom) { apply_render_scale(g); return; }
+
+    g->zoom = z;
+    apply_render_scale(g);
+    rebuild_fonts(g);
 }
 
 void gui_handle_event(Gui *g, const SDL_Event *e)
@@ -2019,8 +2067,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             }
             return;
         case SDL_MOUSEMOTION:
-            g->mouse.x = e->motion.x;
-            g->mouse.y = e->motion.y;
+            set_mouse(g, e->motion.x, e->motion.y);
             if (g->scene == SCENE_MENU) { handle_menu_mousemotion(g); return; }
             if (g->resizing_board && (e->motion.state & SDL_BUTTON_LMASK)) {
                 handle_board_resize(g);
@@ -2032,8 +2079,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             return;
         case SDL_MOUSEBUTTONDOWN:
             if (e->button.button != SDL_BUTTON_LEFT) return;
-            g->mouse.x = e->button.x;
-            g->mouse.y = e->button.y;
+            set_mouse(g, e->button.x, e->button.y);
             if (g->scene == SCENE_MENU) handle_menu_mousedown(g);
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_mousedown(g);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_mousedown(g);
@@ -2043,8 +2089,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             return;
         case SDL_MOUSEBUTTONUP:
             if (e->button.button != SDL_BUTTON_LEFT) return;
-            g->mouse.x = e->button.x;
-            g->mouse.y = e->button.y;
+            set_mouse(g, e->button.x, e->button.y);
             if (g->scene == SCENE_GAME) handle_game_mouseup(g);
             return;
         case SDL_KEYDOWN:
@@ -2541,7 +2586,7 @@ static void render_input_box(Gui *g, SDL_Renderer *ren)
         SDL_Surface *s = TTF_RenderUTF8_Blended(g->font_ui, g->input.text,
                                                 (SDL_Color){ 255, 255, 255, 255 });
         if (s) {
-            float sc = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+            float sc = eff_scale(g);
             tw = (int)lroundf(s->w / sc);
             SDL_FreeSurface(s);
         }
@@ -2577,7 +2622,7 @@ static void render_fen_box(Gui *g, SDL_Renderer *ren)
     if (g->fen_active) {
         int w = 0, h = 0;
         TTF_SizeUTF8(g->font_small, g->fen_text, &w, &h);
-        float sc = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+        float sc = eff_scale(g);
         int lw = (int)lroundf(w / sc);
         int cx = field.x + 8 + lw;
         if (cx > field.x + field.w - 3) cx = field.x + field.w - 3;
@@ -2603,7 +2648,8 @@ static void render_text_centered_rect(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
 {
     draw_rect(ren, r, 45, 45, 50, true);
     draw_rect(ren, r, 120, 120, 130, false);
-    render_text_centered(g, g->font_ui, label, r->x + r->w / 2, r->y + 8,
+    int ty = r->y + (r->h - text_height(g, g->font_ui)) / 2;
+    render_text_centered(g, g->font_ui, label, r->x + r->w / 2, ty,
                          (SDL_Color){ 230, 230, 230, 255 });
 }
 
@@ -3003,10 +3049,13 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     SDL_RenderClear(ren);
 
-    render_text_centered(g, g->font_piece[0], "Chess", g->win_w / 2, 130,
+    render_text_centered(g, g->font_piece[0], "Chess", g->win_w / 2, 40,
                          (SDL_Color){ 235, 225, 200, 255 });
-    render_text_centered(g, g->font_small, "C / SDL chess board", g->win_w / 2, 236,
+    render_text_centered(g, g->font_small, "C / SDL chess board", g->win_w / 2,
+                         40 + text_height(g, g->font_piece[0]) + 10,
                          (SDL_Color){ 130, 170, 190, 255 });
+
+    int ty_off = (MENU_ITEM_H - text_height(g, g->font_ui)) / 2;
 
     for (int i = 0; i < MENU_COUNT; i++) {
         SDL_Rect r;
@@ -3024,16 +3073,17 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
         SDL_Color tc = !en ? (SDL_Color){ 100, 105, 115, 255 }
                       : sel ? (SDL_Color){ 245, 245, 245, 255 }
                             : (SDL_Color){ 205, 210, 220, 255 };
-        render_text_centered(g, g->font_ui, MENU_ITEMS[i], g->win_w / 2, r.y + 13, tc);
+        render_text_centered(g, g->font_ui, MENU_ITEMS[i], g->win_w / 2,
+                             r.y + ty_off, tc);
     }
 
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, g->win_h - 150,
-                             (SDL_Color){ 255, 170, 120, 255 });
+        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2,
+                             g->win_h - 118, (SDL_Color){ 255, 170, 120, 255 });
 
     render_text_centered(g, g->font_small,
                          "Up/Down select    Enter choose    Ctrl+Q quit",
-                         g->win_w / 2, g->win_h - 80,
+                         g->win_w / 2, g->win_h - 70,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
@@ -3061,7 +3111,7 @@ static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
     if (g->pgn_len) {
         int w = 0, h = 0;
         TTF_SizeUTF8(g->font_ui, g->pgn_name, &w, &h);
-        float sc = g->ui_scale > 0.0f ? g->ui_scale : 1.0f;
+        float sc = eff_scale(g);
         int lw = (int)lroundf(w / sc);
         set_render_color(ren, 240, 240, 240);
         SDL_Rect caret = { field.x + 10 + lw, field.y + 8, 2, field.h - 16 };

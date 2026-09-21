@@ -167,20 +167,24 @@ typedef struct {
     SDL_Renderer *ren;
     float         ui_scale;     /* device pixels per logical point (>= 1.0) */
 
-    /* Live layout (see DEFAULT macros above); changed by resizing. */
-    int    sq;          /* square size in logical points */
+    /* Base layout (see DEFAULT macros). Rendering happens on this fixed canvas;
+     * `zoom` magnifies the whole UI to fit the window. */
+    int    sq;          /* base square size in points */
     int    board_x;
     int    board_y;
     int    panel_x;
     int    win_w;
     int    win_h;
+    float  zoom;        /* whole-UI magnification (1.0 = base size) */
 
     /* board-corner drag state */
     bool   resizing_board;
-    int    resize_start_sq;
-    int    resize_start_mx;
+    float  resize_start_zoom;
+    int    resize_start_mx;     /* raw window x/y at drag start */
     int    resize_start_my;
     bool   board_driven_resize; /* next window-resize event came from us */
+
+    SDL_Point mouse_win;        /* raw event coordinates (window points) */
 
     /* runtime theme lists + current selection */
     ThemeList boards;
