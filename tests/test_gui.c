@@ -568,6 +568,41 @@ int main(void)
         g->selected = -1;
     }
 
+    /* ---- large (fullscreen-like) window: canvas centred, mapping exact ---- */
+    g->scene = SCENE_MENU;
+    SDL_SetWindowSize(g->win, 1600, 800);
+    SDL_Event wr = {0};
+    wr.type = SDL_WINDOWEVENT;
+    wr.window.event = SDL_WINDOWEVENT_SIZE_CHANGED;
+    wr.window.data1 = 1600;
+    wr.window.data2 = 800;
+    gui_handle_event(g, &wr);
+    gui_render(g, ren);          /* re-applies the centred view */
+
+    int wx = 0, wy = 0;
+    SDL_RenderLogicalToWindow(ren, 590.0f, 400.0f, &wx, &wy);
+    SDL_Event mm = {0};
+    mm.type = SDL_MOUSEMOTION;
+    mm.motion.x = wx;
+    mm.motion.y = wy;
+    gui_handle_event(g, &mm);
+    if (abs(g->mouse.x - 590) > 1 || abs(g->mouse.y - 400) > 1) {
+        fprintf(stderr, "large-window mapping wrong: base=(%d,%d) want=(590,400)\n",
+                g->mouse.x, g->mouse.y);
+        return 1;
+    }
+
+    int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    SDL_RenderLogicalToWindow(ren, 0.0f, 0.0f, &x0, &y0);
+    SDL_RenderLogicalToWindow(ren, (float)g->win_w, (float)g->win_h, &x1, &y1);
+    int winw = 0, winh = 0;
+    SDL_GetWindowSize(g->win, &winw, &winh);
+    if (abs(x0 - (winw - x1)) > 2 || abs(y0 - (winh - y1)) > 2) {
+        fprintf(stderr, "canvas not centred: x0=%d x1=%d winw=%d y0=%d y1=%d winh=%d\n",
+                x0, x1, winw, y0, y1, winh);
+        return 1;
+    }
+
     if (SDL_SaveBMP(surf, "gui_smoke.bmp") != 0) {
         fprintf(stderr, "savebmp: %s\n", SDL_GetError());
         return 1;

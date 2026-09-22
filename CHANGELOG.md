@@ -4,6 +4,16 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.3] - 2026-09-21
+
+### Fixed
+- **Large / fullscreen windows**: the UI canvas is now always scaled to fit the
+  window and **centred** (letterboxed) instead of being pinned to the top-left
+  with a capped zoom. The welcome menu stays on-screen and clicking an entry
+  (e.g. the bottom **Quit**) works where it is drawn.
+- Cleared the "board-driven resize" flag on mouse-up so a subsequent OS window
+  resize is no longer ignored.
+
 ## [1.1.2] - 2026-09-21
 
 ### Fixed
@@ -69,6 +79,7 @@ All notable changes to OpenChess. The format follows
 - Bilingual (English / 简体中文) documentation.
 - `install.sh` / `uninstall.sh` and macOS `.app`/`.dmg` packaging.
 
+[1.1.3]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.3
 [1.1.2]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.2
 [1.1.1]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.1
 [1.1.0]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.0

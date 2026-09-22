@@ -59,8 +59,18 @@ static float eff_scale(const Gui *g)
 
 static float clamp_zoom(float z)
 {
-    if (z < 0.5f) z = 0.5f;
-    if (z > 2.0f) z = 2.0f;
+    if (z < 0.25f) z = 0.25f;
+    if (z > 4.0f) z = 4.0f;
+    return z;
+}
+
+/* Fit the base canvas inside a window of w x h (never crops; may letterbox). */
+static float fit_zoom(float w, float h)
+{
+    float z = w / (float)WIN_W;
+    float zy = h / (float)WIN_H;
+    if (zy < z) z = zy;
+    if (z < 0.25f) z = 0.25f;
     return z;
 }
 
@@ -73,12 +83,33 @@ static void board_grip_rect(const Gui *g, SDL_Rect *r)
     r->y = g->board_y + 8 * g->sq - r->h;
 }
 
-/* Apply the current magnification to the renderer. */
+/* Apply the current magnification and centre the base canvas in the window. */
 static void apply_render_scale(Gui *g)
 {
     if (!g->ren) return;
-    float s = eff_scale(g);
-    SDL_RenderSetScale(g->ren, s, s);
+    float eff = eff_scale(g);
+
+    /* Set the scale first: SDL_RenderSetViewport interprets its rect in
+     * logical units (it multiplies by the current scale). */
+    SDL_RenderSetScale(g->ren, eff, eff);
+
+    int ow = g->win_w, oh = g->win_h;
+    SDL_GetRendererOutputSize(g->ren, &ow, &oh);
+
+    int cw = (int)lroundf((float)g->win_w * eff);
+    int ch = (int)lroundf((float)g->win_h * eff);
+    if (cw > ow) cw = ow;
+    if (ch > oh) ch = oh;
+    int vx = (ow - cw) / 2;
+    int vy = (oh - ch) / 2;
+
+    SDL_Rect vp = { (int)lroundf((float)vx / eff),
+                    (int)lroundf((float)vy / eff),
+                    g->win_w, g->win_h };
+    SDL_RenderSetViewport(g->ren, &vp);
+
+    /* Some SDL versions reset the scale in SetViewport: re-apply it. */
+    SDL_RenderSetScale(g->ren, eff, eff);
 }
 
 /* Resize the OS window so the magnified canvas fits exactly. */
@@ -2011,7 +2042,8 @@ static void handle_game_mouseup(Gui *g)
 
     if (g->resizing_board) {
         g->resizing_board = false;
-        g->config_dirty = true;      /* board_size persisted on exit */
+        g->board_driven_resize = false;  /* don't swallow the next OS resize */
+        g->config_dirty = true;          /* board_size persisted on exit */
         return;
     }
 
@@ -2056,10 +2088,7 @@ static void handle_window_resize(Gui *g, int w, int h)
     bool density_changed = (density != g->ui_scale);
     g->ui_scale = density;
 
-    float z = (float)w / (float)g->win_w;
-    float zy = (float)h / (float)g->win_h;
-    if (zy < z) z = zy;
-    z = clamp_zoom(z);
+    float z = fit_zoom((float)w, (float)h);
     bool zoom_changed = (z != g->zoom);
     g->zoom = z;
 
