@@ -1,5 +1,6 @@
 #include "gui.h"
 #include "paths.h"
+#include "audio.h"
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL_ttf.h>
@@ -58,8 +59,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    SDL_Renderer *ren = SDL_CreateRenderer(
-        win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    /* VSync is toggled at runtime from the max_fps setting. */
+    SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
     if (!ren) {
         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
         SDL_DestroyWindow(win);
@@ -75,20 +76,47 @@ int main(int argc, char **argv) {
     }
     gui_load_config(gui, path_config());
     gui_init_assets(gui, ren);
+    gui_apply_vsync(gui);
+
+    {
+        char snddir[1100];
+        snprintf(snddir, sizeof snddir, "%s/sounds", path_assets());
+        audio_init(snddir);
+        audio_set_enabled(gui->sound);
+    }
+
     SDL_StartTextInput();
 
     SDL_Event e;
+    const Uint64 freq = SDL_GetPerformanceFrequency();
+    Uint64 frame_start = SDL_GetPerformanceCounter();
     while (!gui_quit(gui)) {
         while (SDL_PollEvent(&e))
             gui_handle_event(gui, &e);
         gui_tick(gui, SDL_GetTicks());
         gui_render(gui, ren);
-        SDL_Delay(8);
+
+        /* Frame limiter: with a cap, wait out the remainder of the frame
+         * (coarse SDL_Delay + a short spin for sub-millisecond precision). */
+        int fps = gui->max_fps;
+        if (fps > 0) {
+            Uint64 target = freq / (Uint64)fps;
+            for (;;) {
+                Uint64 elapsed = SDL_GetPerformanceCounter() - frame_start;
+                if (elapsed >= target) break;
+                Uint64 remain = target - elapsed;
+                double ms = (double)remain * 1000.0 / (double)freq;
+                if (ms >= 2.0) SDL_Delay((Uint32)(ms - 1.0));
+                else SDL_Delay(0);
+            }
+        }
+        frame_start = SDL_GetPerformanceCounter();
     }
 
     SDL_StopTextInput();
     gui_save_config(gui);
     gui_destroy(gui);
+    audio_shutdown();
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     net_shutdown();

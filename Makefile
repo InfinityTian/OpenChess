@@ -7,15 +7,17 @@ EXE :=
 ifeq ($(OS),Windows_NT)
 EXE := .exe
 endif
-# SDL_net is optional: local multiplayer is compiled in when it is available.
-NET_PC := $(shell pkg-config --exists SDL2_net 2>/dev/null && echo SDL2_net)
+# SDL_net (local multiplayer) and SDL_mixer (sound) are optional.
+NET_PC   := $(shell pkg-config --exists SDL2_net 2>/dev/null && echo SDL2_net)
+MIX_PC   := $(shell pkg-config --exists SDL2_mixer 2>/dev/null && echo SDL2_mixer)
 HAVE_SDL_NET := $(if $(NET_PC),1,0)
+HAVE_SDL_MIXER := $(if $(MIX_PC),1,0)
 
-SDL_PKGS   := sdl2 SDL2_ttf SDL2_image $(NET_PC)
+SDL_PKGS   := sdl2 SDL2_ttf SDL2_image $(NET_PC) $(MIX_PC)
 SDL_CFLAGS := $(shell pkg-config --cflags $(SDL_PKGS) 2>/dev/null)
 SDL_LIBS   := $(shell pkg-config --libs $(SDL_PKGS) 2>/dev/null)
 
-CFLAGS += -DHAVE_SDL_NET=$(HAVE_SDL_NET)
+CFLAGS += -DHAVE_SDL_NET=$(HAVE_SDL_NET) -DHAVE_SDL_MIXER=$(HAVE_SDL_MIXER)
 
 VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 CFLAGS  += -DOPENCHESS_VERSION=\"$(VERSION)\"
@@ -24,22 +26,25 @@ BIN      = openchess$(EXE)
 SRC_CORE = src/board.c src/move.c src/pgn.c src/fen.c src/ai.c src/themes.c src/paths.c
 OBJ_CORE = $(SRC_CORE:.c=.o)
 NET_SRC  = src/net.c
+# Audio links SDL_mixer, so it only builds into the SDL binaries (not the pure
+# board/AI unit tests).
+AUDIO_SRC = src/audio.c
 
 all: $(BIN)
 
-$(BIN): src/main.c src/gui.c $(NET_SRC) $(OBJ_CORE)
+$(BIN): src/main.c src/gui.c $(NET_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@ $(SDL_LIBS)
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
-tests/test_gui: tests/test_gui.c src/gui.c $(NET_SRC) $(OBJ_CORE)
+tests/test_gui: tests/test_gui.c src/gui.c $(NET_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@$(EXE) $(SDL_LIBS)
 
 tests/test_net: tests/test_net.c $(NET_SRC)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@$(EXE) $(SDL_LIBS)
 
-tests/test_local: tests/test_local.c src/gui.c $(NET_SRC) $(OBJ_CORE)
+tests/test_local: tests/test_local.c src/gui.c $(NET_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $^ -o $@$(EXE) $(SDL_LIBS)
 
 tests/test_rules: tests/test_rules.c $(OBJ_CORE)

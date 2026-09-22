@@ -49,6 +49,7 @@ FEN import/export, board flipping, move animations, and SAN text entry.
 - A C11 compiler (`cc`/`clang`/`gcc`) and `make`, plus `pkg-config`.
 - **SDL2**, **SDL2_ttf**, **SDL2_image**.
 - **SDL2_net** – optional; needed only for Local Multiplayer.
+- **SDL2_mixer** – optional; needed only for move sounds.
 - **Stockfish** – optional; needed only for Singleplayer.
 
 See [`docs/BUILD.md`](docs/BUILD.md) for install commands per platform.

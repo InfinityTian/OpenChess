@@ -17,6 +17,14 @@ holder and want an asset removed, please open an issue.
 Labels in `assets/themes.txt` are derived from the same repository's
 `default-config.json`.
 
+### Sounds
+
+The audio files under `assets/sounds/` are the chess.com **default** sound theme,
+downloaded from
+`https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default.zip`
+(see `scripts/import_sounds.sh`). The sounds are the property of Chess.com and are
+bundled here for personal and educational use only.
+
 ### Fonts
 
 OpenChess does not bundle fonts; it uses a system font (Arial Unicode on macOS,
@@ -24,7 +32,7 @@ DejaVu Sans on Linux) for glyphs and UI text.
 
 ### Libraries
 
-- **SDL2**, **SDL2_ttf**, **SDL2_image**, **SDL2_net** — zlib license.
+- **SDL2**, **SDL2_ttf**, **SDL2_image**, **SDL2_net**, **SDL2_mixer** — zlib license.
 - **Stockfish** — GPLv3. It is an external program that OpenChess launches; it is
   not distributed with this project.
 
@@ -44,6 +52,13 @@ Source code is licensed under the MIT License — see [`LICENSE`](LICENSE).
 
 `assets/themes.txt` 中的名称来自同一仓库的 `default-config.json`。
 
+### 音效
+
+`assets/sounds/` 下的音效来自 chess.com 的 **default** 音效主题，下载自
+`https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default.zip`
+（见 `scripts/import_sounds.sh`）。音效版权归 Chess.com 所有，此处仅为个人学习
+与教育用途打包。
+
 ### 字体
 
 OpenChess 不打包字体，仅使用系统字体（macOS 为 Arial Unicode，Linux 为
@@ -51,7 +66,7 @@ DejaVu Sans）渲染字形与界面文字。
 
 ### 依赖库
 
-- **SDL2**、**SDL2_ttf**、**SDL2_image**、**SDL2_net** —— zlib 许可证。
+- **SDL2**、**SDL2_ttf**、**SDL2_image**、**SDL2_net**、**SDL2_mixer** —— zlib 许可证。
 - **Stockfish** —— GPLv3。它是由 OpenChess 启动的外部程序，本项目不附带分发。
 
 源代码采用 MIT 许可证 —— 详见 [`LICENSE`](LICENSE)。

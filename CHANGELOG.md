@@ -4,6 +4,23 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-09-22
+
+### Added
+- **Move sounds** using the chess.com *default* set: move (self/opponent),
+  capture, castle, check, promotion, illegal and game-end, via optional
+  **SDL2_mixer** (`scripts/import_sounds.sh` fetches `assets/sounds/`).
+- **Settings panel** with three tabs: **Engine** (engine picker + Lines/Threads/
+  Hash/Time/Depth), **Gameplay** (board, pieces, animation, Appearance picker)
+  and **Audio & Video** (Sound, Max FPS). `Ctrl+E` opens it; choices are saved to
+  `chess.conf`.
+- **High framerate up to 320 fps**: `max_fps` (`0` = vsync, or 60/120/144/240/320)
+  with a precise `SDL_GetPerformanceCounter` limiter and runtime vsync toggling.
+
+### Fixed
+- While dragging a piece, its origin square now shows the board texture instead
+  of a black square.
+
 ## [1.2.1] - 2026-09-22
 
 ### Fixed
@@ -162,6 +179,7 @@ All notable changes to OpenChess. The format follows
 - Bilingual (English / 简体中文) documentation.
 - `install.sh` / `uninstall.sh` and macOS `.app`/`.dmg` packaging.
 
+[1.2.2]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.2.2
 [1.2.1]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.2.1
 [1.2.0]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.2.0
 [1.1.5]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.5

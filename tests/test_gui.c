@@ -55,6 +55,8 @@ static int test_engine_config(void)
     a->eng_hash = 128;
     a->eng_time_ms = 500;
     a->eng_depth = 12;
+    a->sound = false;
+    a->max_fps = 144;
     a->config_dirty = true;
     snprintf(a->config_path, sizeof a->config_path, "/tmp/oc_engine_test.conf");
     gui_save_config(a);
@@ -64,7 +66,8 @@ static int test_engine_config(void)
     if (!b) return 1;
     gui_load_config(b, "/tmp/oc_engine_test.conf");
     int ok = b->eng_multipv == 3 && b->eng_threads == 4 && b->eng_hash == 128 &&
-             b->eng_time_ms == 500 && b->eng_depth == 12;
+             b->eng_time_ms == 500 && b->eng_depth == 12 &&
+             b->sound == false && b->max_fps == 144;
     gui_destroy(b);
     remove("/tmp/oc_engine_test.conf");
     if (!ok) {
@@ -662,10 +665,18 @@ int main(void)
         gui_render(g, ren);
     }
 
-    /* ---- engine screen renders with the settings controls ---- */
-    g->scene = SCENE_ENGINE;
-    gui_render(g, ren);
-    g->scene = SCENE_GAME;
+    /* ---- settings screen renders every tab ---- */
+    {
+        g->scene = SCENE_SETTINGS;
+        g->settings_tab = 0;
+        gui_render(g, ren);
+        g->settings_tab = 1;    /* Gameplay */
+        gui_render(g, ren);
+        g->settings_tab = 2;    /* Audio & Video */
+        gui_render(g, ren);
+        g->settings_tab = 0;
+        g->scene = SCENE_GAME;
+    }
 
     /* ---- drag the board corner to resize it ---- */
     g->scene = SCENE_GAME;

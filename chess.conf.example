@@ -24,3 +24,7 @@ engine_hash = 16     # transposition table size in MB
 engine_time = 0      # time limit in ms (0 = unlimited)
 engine_depth = 0     # depth limit (0 = unlimited)
 engine_arrows = 1    # draw the engine's best move as a green arrow (0/1)
+
+# Audio and display.
+sound = 1            # play move sounds (0/1); needs SDL2_mixer at build time
+max_fps = 0          # 0 = vsync; or a cap such as 60/120/144/240/320

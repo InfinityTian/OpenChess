@@ -18,13 +18,15 @@ Optional:
 
 - **SDL2_net** — enables Local Multiplayer. If absent, OpenChess builds and runs
   but the Local Multiplayer menu entry is disabled.
+- **SDL2_mixer** — enables move sounds. If absent, the build runs silently and
+  the Settings → Sound option has no effect.
 - **Stockfish** — the engine used by Singleplayer. If absent, Singleplayer
   reports "Stockfish not found".
 
 ### macOS (Homebrew)
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer stockfish
 ```
 
 ### Debian / Ubuntu
@@ -32,14 +34,16 @@ brew install sdl2 sdl2_ttf sdl2_image sdl2_net stockfish
 ```sh
 sudo apt update
 sudo apt install build-essential pkg-config \
-    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
+    libsdl2-mixer-dev stockfish
 ```
 
 ### Fedora
 
 ```sh
 sudo dnf install gcc make pkgconf-pkg-config \
-    SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel stockfish
+    SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel \
+    SDL2_mixer-devel stockfish
 ```
 
 ### Windows (native, MSYS2 / MinGW-w64)
@@ -56,7 +60,8 @@ pacman -S --needed \
     mingw-w64-ucrt-x86_64-SDL2 \
     mingw-w64-ucrt-x86_64-SDL2_ttf \
     mingw-w64-ucrt-x86_64-SDL2_image \
-    mingw-w64-ucrt-x86_64-SDL2_net
+    mingw-w64-ucrt-x86_64-SDL2_net \
+    mingw-w64-ucrt-x86_64-SDL2_mixer
 
 # 2. Build from the repository root
 make CC=gcc              # -> openchess.exe
@@ -77,7 +82,7 @@ Building a console binary (useful for log output): add the SDL2 libraries
 manually instead of letting `pkg-config` add `-mwindows`:
 
 ```sh
-make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net"
+make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer"
 ```
 
 ### Windows via WSL2 (Linux build)
@@ -87,7 +92,8 @@ On Windows 11 with WSLg the Linux build runs unchanged with a GUI:
 ```sh
 sudo apt update
 sudo apt install build-essential pkg-config \
-    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
+    libsdl2-mixer-dev stockfish
 make
 ./openchess
 ```
@@ -137,13 +143,14 @@ scripts/import_assets.sh
 
 - **SDL2_net** —— 启用本地多人模式。缺失时程序仍可构建运行，但菜单中的
   本地多人项会被禁用。
+- **SDL2_mixer** —— 启用走子音效。缺失时程序静默运行，设置中的 Sound 选项无效。
 - **Stockfish** —— 单人模式使用的引擎。缺失时单人模式会提示
   “Stockfish not found”。
 
 ### macOS（Homebrew）
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer stockfish
 ```
 
 ### Debian / Ubuntu
@@ -151,14 +158,16 @@ brew install sdl2 sdl2_ttf sdl2_image sdl2_net stockfish
 ```sh
 sudo apt update
 sudo apt install build-essential pkg-config \
-    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
+    libsdl2-mixer-dev stockfish
 ```
 
 ### Fedora
 
 ```sh
 sudo dnf install gcc make pkgconf-pkg-config \
-    SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel stockfish
+    SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel \
+    SDL2_mixer-devel stockfish
 ```
 
 ### Windows（原生，MSYS2 / MinGW-w64）
@@ -174,7 +183,8 @@ pacman -S --needed \
     mingw-w64-ucrt-x86_64-SDL2 \
     mingw-w64-ucrt-x86_64-SDL2_ttf \
     mingw-w64-ucrt-x86_64-SDL2_image \
-    mingw-w64-ucrt-x86_64-SDL2_net
+    mingw-w64-ucrt-x86_64-SDL2_net \
+    mingw-w64-ucrt-x86_64-SDL2_mixer
 
 # 2. 在仓库根目录构建
 make CC=gcc              # -> openchess.exe
@@ -193,7 +203,7 @@ make CC=gcc              # -> openchess.exe
 如需带控制台输出日志，可手动指定 SDL2 库（避免 `pkg-config` 添加 `-mwindows`）：
 
 ```sh
-make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net"
+make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer"
 ```
 
 ### 通过 WSL2 使用 Windows（Linux 构建）
@@ -203,7 +213,8 @@ make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSD
 ```sh
 sudo apt update
 sudo apt install build-essential pkg-config \
-    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
+    libsdl2-mixer-dev stockfish
 make
 ./openchess
 ```

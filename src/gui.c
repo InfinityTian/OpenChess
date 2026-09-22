@@ -2,6 +2,7 @@
 #include "pgn.h"
 #include "fen.h"
 #include "paths.h"
+#include "audio.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -146,6 +147,18 @@ static void apply_window_size(Gui *g)
     SDL_SetWindowSize(g->win,
                       (int)lroundf(g->win_w * g->zoom),
                       (int)lroundf(g->win_h * g->zoom));
+}
+
+/* VSync is used when max_fps is 0 (uncapped-prevented by the display); an
+ * explicit cap disables it so the frame limiter in main can go higher. */
+void gui_apply_vsync(Gui *g)
+{
+    if (!g || !g->ren) return;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    SDL_RenderSetVSync(g->ren, g->max_fps == 0 ? 1 : 0);
+#else
+    (void)g;
+#endif
 }
 
 /* ---- live analysis evaluation ---- */
@@ -648,6 +661,38 @@ static void enqueue_move_anim(Gui *g, const Board *pre, Move m)
     g->anim_queue[g->anim_count++] = s;
 }
 
+/* Pick and play the sound for a move that was just applied (g->board is the
+ * position after it, `pre` the one before). */
+static void play_move_sound(Gui *g, const Board *pre, Move m)
+{
+    uint32_t fl = MOVE_FLAGS(m);
+    Color mover = pre->side;
+
+    if (g->state == CHECKMATE) {
+        if (g->mode == MODE_ANALYSIS) { audio_play(SND_GAME_END); return; }
+        Color winner = (mover == WHITE) ? BLACK : WHITE;
+        Color hero = (g->mode == MODE_SINGLE) ? g->human_color : g->local_color;
+        audio_play(winner == hero ? SND_GAME_WIN : SND_GAME_LOSE);
+        return;
+    }
+    if (g->state == STALEMATE || g->state == INSUFFICIENT_MATERIAL) {
+        audio_play(SND_GAME_DRAW);
+        return;
+    }
+    if (in_check(&g->board, g->board.side)) { audio_play(SND_CHECK); return; }
+    if (fl & (FLAG_CASTLE_K | FLAG_CASTLE_Q)) { audio_play(SND_CASTLE); return; }
+    if (fl & FLAG_PROMO) { audio_play(SND_PROMOTE); return; }
+    if ((fl & (FLAG_CAPTURE | FLAG_EP)) || pre->board[MOVE_TO(m)] != EMPTY) {
+        audio_play(SND_CAPTURE);
+        return;
+    }
+
+    bool self = true;
+    if (g->mode == MODE_SINGLE)      self = (mover == g->human_color);
+    else if (g->mode == MODE_LOCAL)  self = (mover == g->local_color);
+    audio_play(self ? SND_MOVE_SELF : SND_MOVE_OPPONENT);
+}
+
 static void push_move(Gui *g, Move m)
 {
     if (g->ply >= MAX_PLY) return;
@@ -664,6 +709,7 @@ static void push_move(Gui *g, Move m)
     g->promo_from = g->promo_to = -1;
     san_close_box(g);
     recompute_state(g);
+    play_move_sound(g, &pre, m);
     fen_refresh(g);
     analysis_refresh(g);
 }
@@ -735,6 +781,7 @@ static bool apply_text_san(Gui *g)
         set_msg(g, "Moved %s", g->last_san);
         return true;
     }
+    audio_play(SND_ILLEGAL);
     set_msg(g, "Illegal move: %s", buf);
     return false;
 }
@@ -892,7 +939,9 @@ static void fen_rects(const Gui *g, SDL_Rect *field, SDL_Rect *load, SDL_Rect *c
 /* ------------------------------------------------------------------ */
 
 static void open_appearance(Gui *g, Scene return_to);
-static void open_engine_scene(Gui *g, Scene return_to);
+static void open_settings_scene(Gui *g, Scene return_to);
+static void handle_settings_keydown(Gui *g, const SDL_KeyboardEvent *ke);
+static void handle_settings_mousedown(Gui *g);
 
 #define MENU_COUNT 6
 static const char *MENU_ITEMS[MENU_COUNT] = {
@@ -900,7 +949,7 @@ static const char *MENU_ITEMS[MENU_COUNT] = {
     "Analysis (both sides)",
     "Local Multiplayer",
     "Appearance (boards & pieces)",
-    "Engine (settings)",
+    "Settings",
     "Quit",
 };
 
@@ -1128,6 +1177,7 @@ void gui_load_config(Gui *g, const char *path)
     char vboardsize[16] = "";
     char vthreads[16] = "", vhash[16] = "", vmultipv[16] = "";
     char vtime[16] = "", vdepth[16] = "", varrows[8] = "";
+    char vmaxfps[16] = "", vsound[8] = "";
     while (fgets(line, sizeof line, f)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
@@ -1155,6 +1205,8 @@ void gui_load_config(Gui *g, const char *path)
         else if (strcmp(key, "engine_time") == 0) snprintf(vtime, sizeof vtime, "%s", val);
         else if (strcmp(key, "engine_depth") == 0) snprintf(vdepth, sizeof vdepth, "%s", val);
         else if (strcmp(key, "engine_arrows") == 0) snprintf(varrows, sizeof varrows, "%s", val);
+        else if (strcmp(key, "max_fps") == 0) snprintf(vmaxfps, sizeof vmaxfps, "%s", val);
+        else if (strcmp(key, "sound") == 0) snprintf(vsound, sizeof vsound, "%s", val);
     }
     fclose(f);
 
@@ -1182,6 +1234,8 @@ void gui_load_config(Gui *g, const char *path)
     if (vtime[0])    { int n = atoi(vtime);    if (n >= 0) g->eng_time_ms = n; }
     if (vdepth[0])   { int n = atoi(vdepth);   if (n >= 0) g->eng_depth = n; }
     if (varrows[0])  g->engine_arrows = (atoi(varrows) != 0);
+    if (vmaxfps[0])  { int n = atoi(vmaxfps); if (n >= 0) g->max_fps = n; }
+    if (vsound[0])   g->sound = (atoi(vsound) != 0);
 }
 
 /* Persist the current look to chess.conf (only when it changed). */
@@ -1207,6 +1261,8 @@ void gui_save_config(Gui *g)
     fprintf(f, "engine_time = %d\n", g->eng_time_ms);
     fprintf(f, "engine_depth = %d\n", g->eng_depth);
     fprintf(f, "engine_arrows = %d\n", g->engine_arrows ? 1 : 0);
+    fprintf(f, "sound = %d\n", g->sound ? 1 : 0);
+    fprintf(f, "max_fps = %d\n", g->max_fps);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     fclose(f);
 }
@@ -1264,6 +1320,8 @@ Gui *gui_create(void)
     g->zoom = 1.0f;
     g->pref_zoom = 1.0f;
     g->debug_ui = (getenv("OPENCHESS_DEBUG_UI") != NULL);
+    g->max_fps = 0;             /* 0 = vsync */
+    g->sound = true;
     g->pan_x = g->pan_y = 0.0f;
     g->tf_scale = 1.0f;
     g->tf_ux = g->tf_uy = 1.0f;
@@ -1443,7 +1501,7 @@ static void menu_activate(Gui *g)
             g->scene = SCENE_HOSTJOIN;
             break;
         case 3: open_appearance(g, SCENE_MENU); break;
-        case 4: open_engine_scene(g, SCENE_MENU); break;
+        case 4: open_settings_scene(g, SCENE_MENU); break;
         case 5: g->quit = true; break;
         default:
             snprintf(g->menu_msg, sizeof g->menu_msg,
@@ -1846,7 +1904,7 @@ static void apply_engine(Gui *g, const char *path)
     if (g->mode == MODE_ANALYSIS && g->scene == SCENE_GAME) eval_restart(g);
 }
 
-static void open_engine_scene(Gui *g, Scene return_to)
+static void open_settings_scene(Gui *g, Scene return_to)
 {
     detect_engines(g);
     g->engine_sel = 0;
@@ -1857,7 +1915,9 @@ static void open_engine_scene(Gui *g, Scene return_to)
     snprintf(g->engine_custom, sizeof g->engine_custom, "%s", g->engine_path);
     g->engine_status[0] = 0;
     g->engine_return_scene = return_to;
-    g->scene = SCENE_ENGINE;
+    g->settings_tab = 0;
+    g->settings_row = 0;
+    g->scene = SCENE_SETTINGS;
 }
 
 /* Engine screen: the engine list is on the right, the analysis controls on
@@ -1870,7 +1930,7 @@ static const char *ENG_CTRL_LABELS[ENG_CTRL_COUNT] = {
 static void engine_rects(const Gui *g, SDL_Rect items[ENGINE_MAX],
                          SDL_Rect *custom, SDL_Rect *back)
 {
-    int x = 620, y0 = 150, w = g->win_w - 700, h = 40, gap = 8;
+    int x = 620, y0 = 170, w = g->win_w - 700, h = 40, gap = 8;
     if (w < 200) { x = 80; w = g->win_w - 160; }
     for (int i = 0; i < ENGINE_MAX; i++)
         items[i] = (SDL_Rect){ x, y0 + i * (h + gap), w, h };
@@ -1883,7 +1943,7 @@ static void engine_ctrl_rects(const Gui *g,
                               SDL_Rect plus[ENG_CTRL_COUNT])
 {
     (void)g;
-    int x = 80, y0 = 150, w = 30, h = 30, gap = 8;
+    int x = 80, y0 = 170, w = 30, h = 30, gap = 8;
     for (int i = 0; i < ENG_CTRL_COUNT; i++) {
         int y = y0 + i * (h + gap);
         minus[i] = (SDL_Rect){ x + 224, y, w, h };
@@ -1930,23 +1990,6 @@ static void eng_ctrl_adjust(Gui *g, int i, int dir)
 static void handle_engine_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 {
     SDL_Keycode k = ke->keysym.sym;
-    bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
-
-    if (ctrl && k == SDLK_q) { g->quit = true; return; }
-    if (k == SDLK_ESCAPE) { g->scene = g->engine_return_scene; return; }
-    if (k == SDLK_TAB) {
-        /* Cycle custom path -> each setting row -> custom path. */
-        if (g->engine_custom_focus) {
-            g->engine_custom_focus = false;
-            g->eng_ctrl_focus = 0;
-        } else if (g->eng_ctrl_focus >= 0 && g->eng_ctrl_focus < ENG_CTRL_COUNT - 1) {
-            g->eng_ctrl_focus++;
-        } else {
-            g->eng_ctrl_focus = -1;
-            g->engine_custom_focus = true;
-        }
-        return;
-    }
 
     if (g->engine_custom_focus) {
         if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
@@ -2109,7 +2152,7 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     if (ctrl && k == SDLK_p) { gui_cycle_pieces(g); return; }
     if (ctrl && k == SDLK_m) { gui_cycle_anim(g); return; }
     if (ctrl && k == SDLK_c) { copy_fen_to_clipboard(g); return; }
-    if (ctrl && k == SDLK_e) { open_engine_scene(g, SCENE_GAME); return; }
+    if (ctrl && k == SDLK_e) { open_settings_scene(g, SCENE_GAME); return; }
     if (ctrl && k == SDLK_s) { pgn_open_prompt(g); return; }
     if (ctrl && k == SDLK_f) {
         g->flipped = !g->flipped;
@@ -2495,7 +2538,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_mousedown(g);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_mousedown(g);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_mousedown(g);
-            else if (g->scene == SCENE_ENGINE) handle_engine_mousedown(g);
+            else if (g->scene == SCENE_SETTINGS) handle_settings_mousedown(g);
             else handle_game_mousedown(g);
             return;
         case SDL_MOUSEBUTTONUP:
@@ -2550,13 +2593,13 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_keydown(g, &e->key);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_keydown(g, &e->key);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_keydown(g, &e->key);
-            else if (g->scene == SCENE_ENGINE) handle_engine_keydown(g, &e->key);
+            else if (g->scene == SCENE_SETTINGS) handle_settings_keydown(g, &e->key);
             else handle_game_keydown(g, &e->key);
             return;
         case SDL_TEXTINPUT:
             if (g->scene == SCENE_GAME) handle_game_textinput(g, &e->text);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_textinput(g, &e->text);
-            else if (g->scene == SCENE_ENGINE) handle_engine_textinput(g, &e->text);
+            else if (g->scene == SCENE_SETTINGS) handle_engine_textinput(g, &e->text);
             return;
         default:
             return;
@@ -2827,6 +2870,9 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
         for (int f = 0; f < 8; f++) {
             int sq = r * 8 + f;
             if (sq_hidden_by_anim(g, sq)) continue;
+            /* While dragging, the piece follows the cursor; leave the board
+             * texture visible on its origin square. */
+            if (g->dragging && sq == g->selected) continue;
             Piece p = g->board.board[sq];
             if (p == EMPTY) continue;
             float cx, cy;
@@ -3701,18 +3747,195 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
-static void render_engine(Gui *g, SDL_Renderer *ren)
-{
-    set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+/* ---- Settings panel ------------------------------------------------ */
 
-    render_text_centered(g, g->font_ui, "Engine", g->win_w / 2, 40,
-                         (SDL_Color){ 235, 225, 200, 255 });
+#define SET_TABS 3
+static const char *SET_TAB_LABELS[SET_TABS] = { "Engine", "Gameplay", "Audio & Video" };
+
+static void settings_tab_rect(const Gui *g, int i, SDL_Rect *r)
+{
+    int w = 190, h = 34, gap = 12;
+    int total = SET_TABS * w + (SET_TABS - 1) * gap;
+    int x0 = (g->win_w - total) / 2;
+    *r = (SDL_Rect){ x0 + i * (w + gap), 74, w, h };
+}
+
+/* Gameplay tab rows */
+enum { GP_BOARD = 0, GP_PIECES, GP_ANIM, GP_APPEARANCE, GP_COUNT };
+static const char *GP_LABELS[GP_COUNT] = {
+    "Board", "Pieces", "Animation", "Appearance picker"
+};
+
+/* Audio & Video tab rows */
+enum { AV_SOUND = 0, AV_FPS, AV_COUNT };
+static const char *AV_LABELS[AV_COUNT] = { "Sound", "Max FPS" };
+
+static const int FPS_CHOICES[] = { 0, 60, 120, 144, 240, 320 };
+#define FPS_CHOICE_COUNT ((int)(sizeof FPS_CHOICES / sizeof FPS_CHOICES[0]))
+
+static void settings_row_rect(const Gui *g, int i, SDL_Rect *r)
+{
+    int h = 40, gap = 14;
+    *r = (SDL_Rect){ 120, 180 + i * (h + gap), g->win_w - 240, h };
+}
+
+static void settings_back_rect(const Gui *g, SDL_Rect *r)
+{
+    r->w = 140; r->h = 42; r->x = g->win_w - 160; r->y = g->win_h - 90;
+}
+
+static void settings_gp_value(const Gui *g, int row, char *out, size_t n)
+{
+    switch (row) {
+        case GP_BOARD:  snprintf(out, n, "%s", theme_label(&g->boards, g->board_index)); break;
+        case GP_PIECES: snprintf(out, n, "%s", theme_label(&g->pieces, g->piece_index)); break;
+        case GP_ANIM:   snprintf(out, n, "%s", ANIM_LABELS[g->anim_style]); break;
+        default:        snprintf(out, n, "Open >"); break;
+    }
+}
+
+static void settings_av_value(const Gui *g, int row, char *out, size_t n)
+{
+    if (row == AV_SOUND) {
+        snprintf(out, n, "%s", g->sound ? "On" : "Off");
+    } else if (g->max_fps == 0) {
+        snprintf(out, n, "vsync");
+    } else {
+        snprintf(out, n, "%d", g->max_fps);
+    }
+}
+
+static void settings_row_adjust(Gui *g, int tab, int row, int dir)
+{
+    if (tab == 1) {
+        switch (row) {
+            case GP_BOARD:
+                if (g->boards.count > 0) {
+                    g->board_index = (g->board_index + dir + g->boards.count) % g->boards.count;
+                    load_board_style(g);
+                }
+                break;
+            case GP_PIECES:
+                if (g->pieces.count > 0) {
+                    g->piece_index = (g->piece_index + dir + g->pieces.count) % g->pieces.count;
+                    load_piece_style(g);
+                }
+                break;
+            case GP_ANIM:
+                g->anim_style = (AnimStyle)((g->anim_style + dir + ANIM_STYLE_COUNT) % ANIM_STYLE_COUNT);
+                clear_anims(g);
+                break;
+            default: return;
+        }
+    } else {
+        if (row == AV_SOUND) {
+            g->sound = !g->sound;
+            audio_set_enabled(g->sound);
+            if (g->sound) audio_play(SND_NOTIFY);
+        } else {
+            int idx = 0;
+            for (int i = 0; i < FPS_CHOICE_COUNT; i++)
+                if (FPS_CHOICES[i] == g->max_fps) idx = i;
+            idx = (idx + dir + FPS_CHOICE_COUNT) % FPS_CHOICE_COUNT;
+            g->max_fps = FPS_CHOICES[idx];
+            gui_apply_vsync(g);
+        }
+    }
+    g->config_dirty = true;
+}
+
+static void settings_row_activate(Gui *g, int tab, int row)
+{
+    if (tab == 1 && row == GP_APPEARANCE) open_appearance(g, SCENE_SETTINGS);
+    else settings_row_adjust(g, tab, row, +1);
+}
+
+static void handle_settings_engine_keydown(Gui *g, const SDL_KeyboardEvent *ke)
+{
+    handle_engine_keydown(g, ke);
+}
+
+static void handle_settings_keydown(Gui *g, const SDL_KeyboardEvent *ke)
+{
+    SDL_Keycode k = ke->keysym.sym;
+    bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+
+    if (ctrl && k == SDLK_q) { g->quit = true; return; }
+    if (k == SDLK_ESCAPE) { g->scene = g->engine_return_scene; return; }
+
+    if (k == SDLK_TAB || k == SDLK_1 || k == SDLK_2 || k == SDLK_3) {
+        if (k == SDLK_TAB) g->settings_tab = (g->settings_tab + 1) % SET_TABS;
+        else               g->settings_tab = (k == SDLK_1) ? 0 : (k == SDLK_2) ? 1 : 2;
+        g->settings_row = 0;
+        g->engine_custom_focus = false;
+        g->eng_ctrl_focus = -1;
+        return;
+    }
+
+    if (g->settings_tab == 0) { handle_settings_engine_keydown(g, ke); return; }
+
+    int n = (g->settings_tab == 1) ? GP_COUNT : AV_COUNT;
+    if (k == SDLK_UP)   { if (g->settings_row > 0) g->settings_row--; return; }
+    if (k == SDLK_DOWN) { if (g->settings_row + 1 < n) g->settings_row++; return; }
+    if (k == SDLK_LEFT)  { settings_row_adjust(g, g->settings_tab, g->settings_row, -1); return; }
+    if (k == SDLK_RIGHT) { settings_row_adjust(g, g->settings_tab, g->settings_row, +1); return; }
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER)
+        settings_row_activate(g, g->settings_tab, g->settings_row);
+}
+
+static void handle_settings_mousedown(Gui *g)
+{
+    SDL_Point p = g->mouse;
+
+    for (int i = 0; i < SET_TABS; i++) {
+        SDL_Rect r;
+        settings_tab_rect(g, i, &r);
+        if (pt_in(&r, p.x, p.y)) {
+            g->settings_tab = i;
+            g->settings_row = 0;
+            g->engine_custom_focus = false;
+            g->eng_ctrl_focus = -1;
+            return;
+        }
+    }
+
+    SDL_Rect back;
+    settings_back_rect(g, &back);
+    if (pt_in(&back, p.x, p.y)) { g->scene = g->engine_return_scene; return; }
+
+    if (g->settings_tab == 0) { handle_engine_mousedown(g); return; }
+
+    int n = (g->settings_tab == 1) ? GP_COUNT : AV_COUNT;
+    for (int i = 0; i < n; i++) {
+        SDL_Rect r;
+        settings_row_rect(g, i, &r);
+        SDL_Rect minus = { r.x + r.w - 90, r.y + 5, 30, 30 };
+        SDL_Rect plus  = { r.x + r.w - 50, r.y + 5, 30, 30 };
+        if (pt_in(&minus, p.x, p.y)) { g->settings_row = i; settings_row_adjust(g, g->settings_tab, i, -1); return; }
+        if (pt_in(&plus, p.x, p.y))  { g->settings_row = i; settings_row_adjust(g, g->settings_tab, i, +1); return; }
+        if (pt_in(&r, p.x, p.y))     { g->settings_row = i; settings_row_activate(g, g->settings_tab, i); return; }
+    }
+}
+
+static void render_settings_tabs(Gui *g, SDL_Renderer *ren)
+{
+    for (int i = 0; i < SET_TABS; i++) {
+        SDL_Rect r;
+        settings_tab_rect(g, i, &r);
+        bool on = (i == g->settings_tab);
+        draw_rect(ren, &r, on ? 60 : 34, on ? 80 : 40, on ? 110 : 48, true);
+        if (on) draw_rect(ren, &r, 90, 150, 200, false);
+        render_text_centered(g, g->font_small, SET_TAB_LABELS[i],
+                             r.x + r.w / 2, r.y + 9, (SDL_Color){ 230, 230, 230, 255 });
+    }
+}
+
+static void render_settings_engine(Gui *g, SDL_Renderer *ren)
+{
     char cur[600];
     snprintf(cur, sizeof cur, "Current: %s",
              g->engine_path[0] ? g->engine_path : "(none)");
-    render_text_centered(g, g->font_small, cur, g->win_w / 2, 78,
-                         (SDL_Color){ 150, 180, 200, 255 });
+    render_text(g, g->font_small, cur, 80, 126, (SDL_Color){ 150, 180, 200, 255 });
 
     SDL_Rect items[ENGINE_MAX], custom, back;
     engine_rects(g, items, &custom, &back);
@@ -3727,10 +3950,9 @@ static void render_engine(Gui *g, SDL_Renderer *ren)
     if (g->engine_count == 0)
         render_text_centered(g, g->font_small,
                              "No engines found on PATH - enter a path below",
-                             g->win_w / 2, 170, (SDL_Color){ 200, 150, 140, 255 });
+                             g->win_w / 2, 190, (SDL_Color){ 200, 150, 140, 255 });
 
-    /* Analysis settings (left column). */
-    render_text(g, g->font_small, "Analysis settings", 80, 126,
+    render_text(g, g->font_small, "Analysis settings", 80, 150,
                 (SDL_Color){ 200, 200, 200, 255 });
     SDL_Rect minus[ENG_CTRL_COUNT], plus[ENG_CTRL_COUNT];
     engine_ctrl_rects(g, minus, plus);
@@ -3754,7 +3976,7 @@ static void render_engine(Gui *g, SDL_Renderer *ren)
                              (SDL_Color){ 235, 235, 235, 255 });
     }
 
-    render_text(g, g->font_small, "Custom engine path (Tab to edit, Enter to apply):",
+    render_text(g, g->font_small, "Custom engine path (click to edit, Enter to apply):",
                 custom.x, custom.y - 22, (SDL_Color){ 150, 180, 200, 255 });
     draw_rect(ren, &custom, 30, 30, 32, true);
     draw_rect(ren, &custom,
@@ -3768,13 +3990,59 @@ static void render_engine(Gui *g, SDL_Renderer *ren)
         render_text_centered(g, g->font_small, g->engine_status,
                              g->win_w / 2, custom.y + 46,
                              (SDL_Color){ 150, 210, 170, 255 });
+}
 
+static void render_settings_rows(Gui *g, SDL_Renderer *ren)
+{
+    int n = (g->settings_tab == 1) ? GP_COUNT : AV_COUNT;
+    for (int i = 0; i < n; i++) {
+        SDL_Rect r;
+        settings_row_rect(g, i, &r);
+        bool on = (i == g->settings_row);
+        const char *label = (g->settings_tab == 1) ? GP_LABELS[i] : AV_LABELS[i];
+        draw_rect(ren, &r, on ? 52 : 36, on ? 66 : 42, on ? 86 : 50, true);
+        if (on) draw_rect(ren, &r, 90, 150, 200, false);
+        int ty = r.y + (r.h - text_height(g, g->font_ui)) / 2;
+        render_text(g, g->font_ui, label, r.x + 16, ty,
+                    (SDL_Color){ 225, 230, 235, 255 });
+
+        char val[64];
+        if (g->settings_tab == 1) settings_gp_value(g, i, val, sizeof val);
+        else                      settings_av_value(g, i, val, sizeof val);
+        render_text_centered(g, g->font_ui, val, r.x + r.w - 160, ty,
+                             (SDL_Color){ 200, 215, 225, 255 });
+
+        if (g->settings_tab == 1 && i == GP_APPEARANCE) continue;
+        SDL_Rect minus = { r.x + r.w - 90, r.y + 5, 30, 30 };
+        SDL_Rect plus  = { r.x + r.w - 50, r.y + 5, 30, 30 };
+        draw_rect(ren, &minus, 55, 60, 75, true);
+        render_text_centered(g, g->font_small, "-", minus.x + minus.w / 2, minus.y + 6,
+                             (SDL_Color){ 235, 235, 235, 255 });
+        draw_rect(ren, &plus, 55, 60, 75, true);
+        render_text_centered(g, g->font_small, "+", plus.x + plus.w / 2, plus.y + 6,
+                             (SDL_Color){ 235, 235, 235, 255 });
+    }
+}
+
+static void render_settings(Gui *g, SDL_Renderer *ren)
+{
+    set_render_color(ren, 22, 26, 34);
+    SDL_RenderClear(ren);
+
+    render_text_centered(g, g->font_ui, "Settings", g->win_w / 2, 28,
+                         (SDL_Color){ 235, 225, 200, 255 });
+    render_settings_tabs(g, ren);
+
+    if (g->settings_tab == 0) render_settings_engine(g, ren);
+    else                      render_settings_rows(g, ren);
+
+    SDL_Rect back;
+    settings_back_rect(g, &back);
     render_text_centered_rect(g, ren, &back, "Back");
 
     render_text_centered(g, g->font_small,
-                         "Up/Down select   Enter apply   Tab field/controls   Left/Right adjust   Esc back",
-                         g->win_w / 2, g->win_h - 40,
-                         (SDL_Color){ 110, 120, 130, 255 });
+        "Tab / 1-2-3 switch tab    Up/Down select    Left/Right change    Enter open    Esc back",
+        g->win_w / 2, g->win_h - 40, (SDL_Color){ 110, 120, 130, 255 });
 }
 
 static void render_menu(Gui *g, SDL_Renderer *ren)
@@ -3911,12 +4179,6 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     if (g->dragging && g->selected >= 0) {
         render_piece_box(g, ren, g->board.board[g->selected],
                          (float)g->mouse.x, (float)g->mouse.y, g->sq + 18, 1.0f);
-        SDL_Rect rc;
-        window_sq(g, g->selected, &rc);
-        set_render_color(ren, 0, 0, 0);
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_RenderFillRect(ren, &rc);
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
     }
 
     render_status(g);
@@ -4021,8 +4283,8 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         render_hostjoin(g, ren);
     else if (g->scene == SCENE_APPEARANCE)
         render_appearance(g, ren);
-    else if (g->scene == SCENE_ENGINE)
-        render_engine(g, ren);
+    else if (g->scene == SCENE_SETTINGS)
+        render_settings(g, ren);
     else
         render_game(g, ren, now);
 

@@ -81,11 +81,27 @@ config file.
   resize the window normally. The resulting magnification is saved in
   `chess.conf` as `board_size` (the equivalent square size, 44–150).
 
+### Settings
+
+Open **Settings** from the welcome menu or with **Ctrl+E**. It has three tabs
+(**Tab** or **1 / 2 / 3** to switch, **Esc** to go back):
+
+- **Engine** – pick an engine detected on your `PATH` or type a custom
+  executable path, and set the analysis options (Lines, Threads, Hash, Time,
+  Depth).
+- **Gameplay** – cycle the **Board**, **Pieces** and **Animation** styles, or
+  open the full **Appearance** picker.
+- **Audio & Video** – toggle **Sound** (move/capture/castle/check/promote/game-end
+  sounds) and set **Max FPS** (`vsync`, or `60 / 120 / 144 / 240 / 320`).
+
+Use **Up/Down** to select a row and **Left/Right** (or the `-`/`+` buttons) to
+change it. Everything is saved to `chess.conf` (`sound`, `max_fps`).
+
 ### Engine and evaluation (Analysis)
 
-- Open the **Engine** screen from the welcome menu or with **Ctrl+E** while
+- Open **Settings → Engine** from the welcome menu or with **Ctrl+E** while
   playing. Pick an engine detected on your `PATH`, or type a custom executable
-  path (Tab to edit the field, Enter to apply). The choice is saved as `engine`.
+  path (click the field to edit, Enter to apply). The choice is saved as `engine`.
 - In Analysis the selected engine analyses the current position continuously: a
   vertical **evaluation bar** is drawn to the left of the board and the numeric
   score and search depth appear in the panel. It restarts after every move,
@@ -95,12 +111,11 @@ config file.
   start of the principal variation in SAN).
 - **Engine arrows**: the **Arrows** checkbox next to the slider (on by default)
   draws each line's first move as a green arrow on the board.
-- **Engine controls** (Engine screen): **Lines** (same as the slider),
+- **Engine controls** (Settings → Engine): **Lines** (same as the slider),
   **Threads** (CPU cores), **Hash** (MB), **Time** (ms, `0` = unlimited) and
-  **Depth** (`0` = unlimited). On the Engine screen press **Tab** to move between
-  the custom-path field and the controls, **Left/Right** (or the `-`/`+`
-  buttons) to adjust, **Up/Down** to pick an engine. All are saved to
-  `chess.conf`.
+  **Depth** (`0` = unlimited). Click the `-`/`+` buttons (or use **Left/Right**
+  after focusing a control) to adjust, and **Up/Down** to pick an engine. All are
+  saved to `chess.conf`.
 
 ### Export as PGN
 
@@ -117,7 +132,7 @@ config file.
 | `Enter` | Reveal SAN box / submit typed move |
 | `Esc` | Cancel entry, clear selection, or go back |
 | `Ctrl+B` / `Ctrl+P` / `Ctrl+M` | Cycle board / pieces / animation |
-| `Ctrl+E` | Engine selection |
+| `Ctrl+E` | Settings |
 | `Ctrl+S` | Export game as PGN |
 | `Ctrl+F` | Flip board |
 | `Ctrl+U` | Undo (not in multiplayer) |
@@ -144,6 +159,8 @@ engine_hash = 16     # transposition table MB
 engine_time = 0      # per-move / analysis time limit in ms (0 = unlimited)
 engine_depth = 0     # depth limit (0 = unlimited)
 engine_arrows = 1    # green engine arrow on the board (0/1)
+sound = 1            # play move sounds (0/1)
+max_fps = 0          # 0 = vsync, or 60/120/144/240/320
 ```
 
 Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
@@ -213,19 +230,34 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
   可拖动棋盘右下角手柄，或直接缩放系统窗口。缩放比例以 `board_size`（等效格子大小，
   44–150）保存到 `chess.conf`。
 
+### 设置（Settings）
+
+可从欢迎菜单或游戏中按 **Ctrl+E** 打开 **Settings**。它有三个标签页（**Tab** 或
+**1 / 2 / 3** 切换，**Esc** 返回）：
+
+- **Engine**：选择 `PATH` 中检测到的引擎或自定义可执行文件路径，并设置分析选项
+  （Lines、Threads、Hash、Time、Depth）。
+- **Gameplay**：循环切换**棋盘**、**棋子**、**动画**样式，或打开完整的外观选择器。
+- **Audio & Video**：切换 **Sound**（走子/吃子/王车易位/将军/升变/终局音效）与
+  **Max FPS**（`vsync`，或 `60 / 120 / 144 / 240 / 320`）。
+
+用 **上下键**选择行，**左右键**（或 `-`/`+` 按钮）修改。全部保存到 `chess.conf`
+（`sound`、`max_fps`）。
+
 ### 引擎与评估（分析模式）
 
-- 可从欢迎菜单或游戏中按 **Ctrl+E** 打开 **Engine** 界面。选择在 `PATH` 中检测到
-  的引擎，或输入自定义可执行文件路径（Tab 编辑，Enter 应用）。选择保存为 `engine`。
+- 可从欢迎菜单或游戏中按 **Ctrl+E** 打开 **Settings → Engine**。选择在 `PATH` 中
+  检测到的引擎，或输入自定义可执行文件路径（点击输入框编辑，Enter 应用）。选择
+  保存为 `engine`。
 - 分析模式下所选引擎会持续分析当前局面：棋盘左侧显示垂直**评估条**，面板中显示
   分数与搜索深度。每步走子、悔棋、重开或载入 FEN 后都会重新分析。
 - **引擎箭头**：勾选 “Arrows” 可用绿色箭头在棋盘上标出每条线路的首选着法（默认开）。
 - **引擎多线路**：面板中有一个 **0–5 滑块**。`0` 表示关闭引擎；`1–5` 表示显示的
   MultiPV 线路数量（每条显示分数与主变着法的 SAN 开头）。
-- **引擎控制**（Engine 界面）：**Lines**（同上）、**Threads**（CPU 核心）、
-  **Hash**（MB）、**Time**（毫秒，`0` 为不限）、**Depth**（`0` 为不限）。
-  在 Engine 界面按 **Tab** 在自定义路径与各控制项间切换，**左右键**（或 `-`/`+`
-  按钮）调整，**上下键**选择引擎。所有设置都会保存到 `chess.conf`。
+- **引擎控制**（Settings → Engine）：**Lines**（同上）、**Threads**（CPU 核心）、
+  **Hash**（MB）、**Time**（毫秒，`0` 为不限）、**Depth**（`0` 为不限）。点击
+  `-`/`+` 按钮（或聚焦控制项后用**左右键**）调整，**上下键**选择引擎。所有设置都会
+  保存到 `chess.conf`。
 
 ### 导出 PGN
 
@@ -242,7 +274,7 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 | `Enter` | 显示 SAN 输入框 / 提交着法 |
 | `Esc` | 取消输入、清除选择或返回 |
 | `Ctrl+B` / `Ctrl+P` / `Ctrl+M` | 循环切换棋盘 / 棋子 / 动画 |
-| `Ctrl+E` | 引擎选择 |
+| `Ctrl+E` | 设置 |
 | `Ctrl+S` | 导出对局为 PGN |
 | `Ctrl+F` | 翻转棋盘 |
 | `Ctrl+U` | 悔棋（多人模式不可用） |
@@ -269,6 +301,8 @@ engine_hash = 16     # 置换表 MB
 engine_time = 0      # 每步/分析时限（毫秒，0 = 不限）
 engine_depth = 0     # 深度限制（0 = 不限）
 engine_arrows = 1    # 棋盘绿色引擎箭头（0/1）
+sound = 1            # 走子音效（0/1）
+max_fps = 0          # 0 = vsync，或 60/120/144/240/320
 ```
 
 可用环境变量覆盖：`OPENCHESS_ASSETS`、`OPENCHESS_CONFIG`。

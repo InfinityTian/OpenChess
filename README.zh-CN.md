@@ -36,6 +36,7 @@
 - C11 编译器（`cc`/`clang`/`gcc`）、`make` 与 `pkg-config`。
 - **SDL2**、**SDL2_ttf**、**SDL2_image**。
 - **SDL2_net** —— 可选，仅本地多人模式需要。
+- **SDL2_mixer** —— 可选，仅走子音效需要。
 - **Stockfish** —— 可选，仅单人模式需要。
 
 各平台安装命令见 [`docs/BUILD.md`](docs/BUILD.md)。

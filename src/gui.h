@@ -56,7 +56,7 @@ typedef enum {
     SCENE_SINGLE_SETUP,   /* choose side + difficulty */
     SCENE_HOSTJOIN,       /* local multiplayer host/join */
     SCENE_APPEARANCE,     /* board/piece/animation picker */
-    SCENE_ENGINE,         /* engine selection */
+    SCENE_SETTINGS,       /* settings: engine + gameplay + audio/video */
     SCENE_GAME,
 } Scene;
 
@@ -144,6 +144,8 @@ typedef struct {
     char   engine_custom[512];
     char   engine_status[128];
     Scene  engine_return_scene;
+    int    settings_tab;        /* 0 = Engine, 1 = Gameplay, 2 = Audio/Video */
+    int    settings_row;        /* focused row within the gameplay/AV tabs */
 
     /* local multiplayer */
     Net   *net;
@@ -194,7 +196,9 @@ typedef struct {
     SDL_Window   *win;
     SDL_Renderer *ren;
     float         ui_scale;     /* device pixels per logical point (>= 1.0) */
-    bool          debug_ui;     /* OPENCHESS_DEBUG_UI: on-screen input overlay */
+    bool   debug_ui;     /* OPENCHESS_DEBUG_UI: on-screen input overlay */
+    int    max_fps;      /* 0 = vsync; else frame cap (60..320) */
+    bool   sound;        /* play move sounds */
 
     /* Base layout (see DEFAULT macros). Rendering happens on this fixed canvas;
      * `zoom` magnifies the whole UI to fit the window. */
@@ -271,6 +275,7 @@ void gui_anim_advance(Gui *g, Uint32 now);
 void gui_cycle_board(Gui *g);
 void gui_cycle_pieces(Gui *g);
 void gui_cycle_anim(Gui *g);
+void gui_apply_vsync(Gui *g);
 bool gui_quit(Gui *g);
 
 #endif
