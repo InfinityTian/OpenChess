@@ -382,18 +382,39 @@ static bool pt_in(const SDL_Rect *r, int x, int y)
     return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h;
 }
 
-/* Record a raw window event position and map it into base coordinates. */
-static void set_mouse(Gui *g, int x, int y)
+/* Record a window position and map it into base coordinates. */
+static void set_mouse(Gui *g, int ex, int ey)
 {
-    g->mouse_win.x = x;
-    g->mouse_win.y = y;
+    g->mouse_evt.x = ex;
+    g->mouse_evt.y = ey;
 
     if (!g->ren || !g->win) {
         float z = g->zoom > 0.0f ? g->zoom : 1.0f;
-        g->mouse.x = (int)lroundf((float)x / z);
-        g->mouse.y = (int)lroundf((float)y / z);
+        g->mouse_win.x = ex;
+        g->mouse_win.y = ey;
+        g->mouse.x = (int)lroundf((float)ex / z);
+        g->mouse.y = (int)lroundf((float)ey / z);
         return;
     }
+
+    /* SDL's window-relative event coordinates can be stale after a macOS
+     * zoom/move (its cached window origin is not updated), which offsets the
+     * cursor. global_cursor - window_position gives the true content-relative
+     * position (they are queried live), so use that. Hidden windows
+     * (tests/headless) keep the event coordinates. */
+    int x = ex, y = ey;
+    if (!(SDL_GetWindowFlags(g->win) & SDL_WINDOW_HIDDEN)) {
+        int gx = 0, gy = 0, wx = 0, wy = 0;
+        SDL_GetGlobalMouseState(&gx, &gy);
+        SDL_GetWindowPosition(g->win, &wx, &wy);
+        g->mouse_global.x = gx;
+        g->mouse_global.y = gy;
+        g->win_pos.x = wx;
+        g->win_pos.y = wy;
+        if (gx || gy) { x = gx - wx; y = gy - wy; }
+    }
+    g->mouse_win.x = x;
+    g->mouse_win.y = y;
 
     /* Re-install the intended transform first (SDL resets the viewport on
      * window resize), then invert exactly those stored values:
@@ -1149,7 +1170,10 @@ void gui_load_config(Gui *g, const char *path)
 
     if (vboardsize[0]) {
         int sz = atoi(vboardsize);
-        if (sz > 0) g->zoom = clamp_zoom((float)sz / (float)SQ_SIZE);
+        if (sz > 0) {
+            g->pref_zoom = clamp_zoom((float)sz / (float)SQ_SIZE);
+            g->zoom = g->pref_zoom;
+        }
     }
 
     if (vthreads[0]) { int n = atoi(vthreads); if (n > 0) g->eng_threads = n; }
@@ -1176,7 +1200,7 @@ void gui_save_config(Gui *g)
     if (g->pieces.items && g->piece_index >= 0 && g->piece_index < g->pieces.count)
         fprintf(f, "pieces = %s\n", g->pieces.items[g->piece_index].key);
     fprintf(f, "animation = %s\n", ANIM_KEYS[g->anim_style]);
-    fprintf(f, "board_size = %d\n", (int)lroundf(SQ_SIZE * g->zoom));
+    fprintf(f, "board_size = %d\n", (int)lroundf(SQ_SIZE * g->pref_zoom));
     fprintf(f, "engine_multipv = %d\n", g->eng_multipv);
     fprintf(f, "engine_threads = %d\n", g->eng_threads);
     fprintf(f, "engine_hash = %d\n", g->eng_hash);
@@ -1238,6 +1262,8 @@ Gui *gui_create(void)
     if (!g) return NULL;
     g->ui_scale = 1.0f;
     g->zoom = 1.0f;
+    g->pref_zoom = 1.0f;
+    g->debug_ui = (getenv("OPENCHESS_DEBUG_UI") != NULL);
     g->pan_x = g->pan_y = 0.0f;
     g->tf_scale = 1.0f;
     g->tf_ux = g->tf_uy = 1.0f;
@@ -2306,6 +2332,7 @@ static void handle_game_mouseup(Gui *g)
         apply_window_size(g);            /* refit the window to the new zoom */
         apply_render_scale(g);
         g->board_driven_resize = false;  /* don't swallow the next OS resize */
+        g->pref_zoom = g->zoom;          /* remember the user's chosen size */
         g->config_dirty = true;          /* board_size persisted on exit */
         return;
     }
@@ -2398,11 +2425,12 @@ static void debug_ui_log(Gui *g, int ex, int ey)
     SDL_GetRendererOutputSize(g->ren, &ow, &oh);
     SDL_GetWindowSize(g->win, &ww, &wh);
     fprintf(stderr,
-            "[ui] event=(%d,%d) base=(%d,%d) sdl_scale=(%.3f,%.3f) "
-            "sdl_vp=(%d,%d,%d,%d) output=(%d,%d) window=(%d,%d) "
+            "[ui] evt=(%d,%d) win=(%d,%d) base=(%d,%d) global=(%d,%d) winpos=(%d,%d) "
+            "sdl_scale=(%.3f,%.3f) sdl_vp=(%d,%d,%d,%d) output=(%d,%d) window=(%d,%d) "
             "tf=(%.3f vp %.3f,%.3f u %.3f,%.3f) zoom=%.3f ui=%.3f\n",
-            ex, ey, g->mouse.x, g->mouse.y, sx, sy,
-            vp.x, vp.y, vp.w, vp.h, ow, oh, ww, wh,
+            ex, ey, g->mouse_win.x, g->mouse_win.y, g->mouse.x, g->mouse.y,
+            g->mouse_global.x, g->mouse_global.y, g->win_pos.x, g->win_pos.y,
+            sx, sy, vp.x, vp.y, vp.w, vp.h, ow, oh, ww, wh,
             g->tf_scale, g->tf_vpx, g->tf_vpy, g->tf_ux, g->tf_uy,
             g->zoom, g->ui_scale);
 }
@@ -3908,6 +3936,74 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     render_pgn_prompt(g, ren);
 }
 
+/* Diagnostic overlay (OPENCHESS_DEBUG_UI=1): shows where the app maps the
+ * cursor vs. where SDL's own forward conversion says that base point lands.
+ * Cyan = app mapping (set_mouse), yellow = SDL_RenderLogicalToWindow. */
+static void draw_debug_overlay(Gui *g, SDL_Renderer *ren)
+{
+    if (!g->debug_ui || !g->ren) return;
+
+    float cx = (float)g->mouse.x, cy = (float)g->mouse.y;
+    float yx = cx, yy = cy;
+    int sdlwx = g->mouse_win.x, sdly = g->mouse_win.y;
+    float s  = g->tf_scale > 0.0f ? g->tf_scale : 1.0f;
+    float ux = g->tf_ux > 0.0f ? g->tf_ux : 1.0f;
+    float uy = g->tf_uy > 0.0f ? g->tf_uy : 1.0f;
+
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    SDL_RenderLogicalToWindow(g->ren, cx, cy, &sdlwx, &sdly);
+    yx = (float)sdlwx * ux / s - g->tf_vpx;
+    yy = (float)sdly * uy / s - g->tf_vpy;
+#endif
+    /* magenta = raw event coords mapped (what input would use without the fix) */
+    float exb = (float)g->mouse_evt.x * ux / s - g->tf_vpx;
+    float eyb = (float)g->mouse_evt.y * uy / s - g->tf_vpy;
+
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+    /* square the cursor maps to (app) */
+    int sq = sq_from_pos(g, g->mouse.x, g->mouse.y);
+    if (sq >= 0) {
+        SDL_Rect rc;
+        window_sq(g, sq, &rc);
+        set_render_color(ren, 80, 230, 240);
+        SDL_RenderDrawRect(ren, &rc);
+    }
+
+    /* crosshairs */
+    set_render_color(ren, 80, 230, 240);   /* cyan = app inverse */
+    SDL_RenderDrawLine(ren, (int)cx - 9, (int)cy, (int)cx + 9, (int)cy);
+    SDL_RenderDrawLine(ren, (int)cx, (int)cy - 9, (int)cx, (int)cy + 9);
+
+    set_render_color(ren, 250, 220, 60);   /* yellow = SDL forward */
+    SDL_RenderDrawLine(ren, (int)yx - 12, (int)yy, (int)yx + 12, (int)yy);
+    SDL_RenderDrawLine(ren, (int)yx, (int)yy - 12, (int)yx, (int)yy + 12);
+
+    set_render_color(ren, 240, 80, 220);   /* magenta = raw event mapped */
+    SDL_RenderDrawLine(ren, (int)exb - 15, (int)eyb, (int)exb + 15, (int)eyb);
+    SDL_RenderDrawLine(ren, (int)exb, (int)eyb - 15, (int)exb, (int)eyb + 15);
+
+    /* readout */
+    char buf[320];
+    snprintf(buf, sizeof buf,
+             "evt=(%d,%d) -> win=(%d,%d) base=(%d,%d)  global=(%d,%d) winpos=(%d,%d)\n"
+             "sdl_fwd=(%d,%d) scale=%.3f vp=%.1f,%.1f u=%.2f,%.2f zoom=%.3f ui=%.3f pan=%.1f,%.1f\n"
+             "cyan=app  yellow=SDL  magenta=raw-event",
+             g->mouse_evt.x, g->mouse_evt.y, g->mouse_win.x, g->mouse_win.y,
+             g->mouse.x, g->mouse.y, g->mouse_global.x, g->mouse_global.y,
+             g->win_pos.x, g->win_pos.y,
+             sdlwx, sdly, g->tf_scale, g->tf_vpx, g->tf_vpy,
+             g->tf_ux, g->tf_uy, g->zoom, g->ui_scale, g->pan_x, g->pan_y);
+
+    SDL_Rect bg = { g->board_x, g->board_y, 600, 76 };
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 200);
+    SDL_RenderFillRect(ren, &bg);
+    render_text(g, g->font_small, buf, g->board_x + 6, g->board_y + 4,
+                (SDL_Color){ 255, 255, 255, 255 });
+
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+}
+
 void gui_render(Gui *g, SDL_Renderer *ren)
 {
     Uint32 now = SDL_GetTicks();
@@ -3930,5 +4026,6 @@ void gui_render(Gui *g, SDL_Renderer *ren)
     else
         render_game(g, ren, now);
 
+    draw_debug_overlay(g, ren);
     SDL_RenderPresent(ren);
 }

@@ -194,6 +194,7 @@ typedef struct {
     SDL_Window   *win;
     SDL_Renderer *ren;
     float         ui_scale;     /* device pixels per logical point (>= 1.0) */
+    bool          debug_ui;     /* OPENCHESS_DEBUG_UI: on-screen input overlay */
 
     /* Base layout (see DEFAULT macros). Rendering happens on this fixed canvas;
      * `zoom` magnifies the whole UI to fit the window. */
@@ -204,6 +205,7 @@ typedef struct {
     int    win_w;
     int    win_h;
     float  zoom;        /* whole-UI magnification (1.0 = base size) */
+    float  pref_zoom;   /* user's preferred zoom (persisted; not OS-fit zoom) */
     float  pan_x, pan_y;/* temporary base-unit offset while grip-dragging */
 
     /* The exact transform installed by apply_render_scale. Input inverts these
@@ -221,7 +223,10 @@ typedef struct {
     int    resize_start_by;
     bool   board_driven_resize; /* next window-resize event came from us */
 
-    SDL_Point mouse_win;        /* raw event coordinates (window points) */
+    SDL_Point mouse_win;        /* window coordinates used for mapping */
+    SDL_Point mouse_evt;        /* raw SDL event coordinates (may be stale) */
+    SDL_Point mouse_global;     /* global cursor position */
+    SDL_Point win_pos;          /* SDL_GetWindowPosition at the last event */
 
     /* runtime theme lists + current selection */
     ThemeList boards;
