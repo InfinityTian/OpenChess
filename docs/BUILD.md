@@ -42,13 +42,57 @@ sudo dnf install gcc make pkgconf-pkg-config \
     SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel stockfish
 ```
 
-### Windows (MSYS2 / MinGW)
+### Windows (native, MSYS2 / MinGW-w64)
+
+OpenChess has a native Windows backend (engine process handling and file
+locations), so no POSIX compatibility layer is required at runtime.
 
 ```sh
-pacman -S mingw-w64-x86_64-gcc make pkgconf \
-    mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_ttf \
-    mingw-w64-x86_64-SDL2_image mingw-w64-x86_64-SDL2_net
+# 1. Install MSYS2 from https://www.msys2.org and open the "MSYS2 UCRT64" shell.
+pacman -Syu
+pacman -S --needed \
+    mingw-w64-ucrt-x86_64-gcc \
+    mingw-w64-ucrt-x86_64-pkgconf \
+    mingw-w64-ucrt-x86_64-SDL2 \
+    mingw-w64-ucrt-x86_64-SDL2_ttf \
+    mingw-w64-ucrt-x86_64-SDL2_image \
+    mingw-w64-ucrt-x86_64-SDL2_net
+
+# 2. Build from the repository root
+make CC=gcc              # -> openchess.exe
 ```
+
+Run `openchess.exe` from the repository root (so that `assets/` is found), or
+copy the executable next to the `assets/` folder. The window/taskbar icon is
+loaded from `assets/openchess.png`.
+
+**Engine.** Download the Windows build of Stockfish from
+<https://stockfishchess.org/download/> and either place `stockfish.exe` on your
+`PATH`, or set `engine = C:\path\to\stockfish.exe` in the config file.
+
+**Settings.** `%APPDATA%\openchess\chess.conf`; exported PGNs go to
+`%APPDATA%\openchess\games`.
+
+Building a console binary (useful for log output): add the SDL2 libraries
+manually instead of letting `pkg-config` add `-mwindows`:
+
+```sh
+make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net"
+```
+
+### Windows via WSL2 (Linux build)
+
+On Windows 11 with WSLg the Linux build runs unchanged with a GUI:
+
+```sh
+sudo apt update
+sudo apt install build-essential pkg-config \
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+make
+./openchess
+```
+
+Keep the checkout in the Linux home directory (accessing `/mnt/c/...` is slow).
 
 ### Build
 
@@ -117,13 +161,54 @@ sudo dnf install gcc make pkgconf-pkg-config \
     SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel stockfish
 ```
 
-### Windows（MSYS2 / MinGW）
+### Windows（原生，MSYS2 / MinGW-w64）
+
+OpenChess 现已内置 Windows 后端（引擎进程与文件路径），无需 POSIX 兼容层即可运行。
 
 ```sh
-pacman -S mingw-w64-x86_64-gcc make pkgconf \
-    mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_ttf \
-    mingw-w64-x86_64-SDL2_image mingw-w64-x86_64-SDL2_net
+# 1. 从 https://www.msys2.org 安装 MSYS2，并打开 “MSYS2 UCRT64” 终端。
+pacman -Syu
+pacman -S --needed \
+    mingw-w64-ucrt-x86_64-gcc \
+    mingw-w64-ucrt-x86_64-pkgconf \
+    mingw-w64-ucrt-x86_64-SDL2 \
+    mingw-w64-ucrt-x86_64-SDL2_ttf \
+    mingw-w64-ucrt-x86_64-SDL2_image \
+    mingw-w64-ucrt-x86_64-SDL2_net
+
+# 2. 在仓库根目录构建
+make CC=gcc              # -> openchess.exe
 ```
+
+请在仓库根目录运行 `openchess.exe`（以便找到 `assets/`），或将可执行文件与
+`assets/` 放在同一目录。窗口/任务栏图标来自 `assets/openchess.png`。
+
+**引擎**：从 <https://stockfishchess.org/download/> 下载 Windows 版 Stockfish，
+将 `stockfish.exe` 放入 `PATH`，或在配置文件中设置
+`engine = C:\path\to\stockfish.exe`。
+
+**设置**：`%APPDATA%\openchess\chess.conf`；导出的 PGN 位于
+`%APPDATA%\openchess\games`。
+
+如需带控制台输出日志，可手动指定 SDL2 库（避免 `pkg-config` 添加 `-mwindows`）：
+
+```sh
+make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net"
+```
+
+### 通过 WSL2 使用 Windows（Linux 构建）
+
+在启用 WSLg 的 Windows 11 上，Linux 构建可直接带界面运行：
+
+```sh
+sudo apt update
+sudo apt install build-essential pkg-config \
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+make
+./openchess
+```
+
+建议将仓库放在 Linux 家目录（访问 `/mnt/c/...` 较慢）。
 
 ### 构建
 

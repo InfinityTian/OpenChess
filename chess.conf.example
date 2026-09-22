@@ -16,3 +16,10 @@ board_size = 88
 # Stockfish engine binary for singleplayer. Optional; when omitted a
 # `stockfish` binary is looked up in the usual locations and on PATH.
 # engine = /opt/homebrew/bin/stockfish
+
+# Analysis engine settings.
+engine_multipv = 1   # number of engine lines to show (0 = engine off, max 5)
+engine_threads = 1   # CPU cores
+engine_hash = 16     # transposition table size in MB
+engine_time = 0      # time limit in ms (0 = unlimited)
+engine_depth = 0     # depth limit (0 = unlimited)

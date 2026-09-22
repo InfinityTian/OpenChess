@@ -4,6 +4,51 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-09-22
+
+### Added
+- **Engine lines (MultiPV).** The analysis panel has a **0–5 slider**: `0` closes
+  the engine, `1–5` shows that many engine lines, each with its score and the
+  start of the principal variation in SAN.
+- **Engine controls.** The Engine screen exposes *Lines*, *Threads* (CPU cores),
+  *Hash*, *Time* and *Depth* (0 = unlimited), all persisted to `chess.conf`.
+- **Board annotations.** Right-click toggles a circle, right-drag draws an arrow;
+  hold **Ctrl** (green) or **Alt** (blue) to change the colour.
+- **Native Windows support** (MSYS2 / MinGW-w64): process spawning, file paths and
+  the build system now handle Windows; WSL2 instructions are included too.
+- **Window/taskbar icon** taken from `assets/openchess.png`, matching the app and
+  DMG artwork.
+
+### Fixed
+- **Board-resize grip drift.** Dragging the corner grip now zooms *and pans* in
+  place (the window refits on release), so the grabbed point stays exactly under
+  the cursor instead of drifting proportionally with the distance from the top.
+
+### Changed
+- Window title is now **OpenChess** (was `Chess`).
+- `make` prefers `cc` and falls back to `gcc`; Windows builds emit `.exe`.
+
+## [1.1.5] - 2026-09-22
+
+### Fixed
+- **Board-resize grip now tracks the cursor.** Dragging the bottom-right grip to
+  magnify uses the grabbed point as a per-axis anchor (`board_x + 8·sq` /
+  `board_y + 8·sq`) instead of `max(dx, dy) / (8·SQ_SIZE)`, so the handle no
+  longer drifts away from the pointer (and zoom-out picks the correct axis).
+
+### Added
+- **App icon.** `packaging/OpenChess.png` is converted to `AppIcon.icns` and
+  installed into the bundle (`CFBundleIconFile`), and reused as the DMG volume
+  icon.
+- **Drag-to-install DMG.** `make dmg` now stages an `Applications` shortcut and
+  an arrow background, positions the icons with Finder, and builds an HFS+
+  compressed image.
+
+### Changed
+- `make dmg` strips the quarantine attribute from the built `.app`/`.dmg` and
+  prints the `sudo xattr -r -d com.apple.quarantine …` instructions for the
+  receiving Mac (the app is unsigned/not notarized).
+
 ## [1.1.4] - 2026-09-21
 
 ### Fixed
@@ -92,6 +137,8 @@ All notable changes to OpenChess. The format follows
 - Bilingual (English / 简体中文) documentation.
 - `install.sh` / `uninstall.sh` and macOS `.app`/`.dmg` packaging.
 
+[1.2.0]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.2.0
+[1.1.5]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.5
 [1.1.4]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.4
 [1.1.3]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.3
 [1.1.2]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.2

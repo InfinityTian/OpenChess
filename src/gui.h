@@ -27,6 +27,12 @@
 
 #define ANIM_QUEUE_MAX 16
 
+/* Right-mouse board annotations: highlighted squares and arrows. */
+#define MAX_ANN 32
+
+typedef struct { int sq;         Uint8 r, g, b; } AnnCircle;
+typedef struct { int from, to;   Uint8 r, g, b; } AnnArrow;
+
 typedef struct {
     char   text[64];
     int    len;
@@ -118,6 +124,17 @@ typedef struct {
     bool   eval_has_mate;
     bool   eval_valid;
 
+    /* engine analysis settings (persisted) */
+    int    eng_multipv;     /* 0 = engine off, 1..AI_MAX_LINES */
+    int    eng_threads;     /* CPU cores */
+    int    eng_hash;        /* transposition table MB */
+    int    eng_time_ms;     /* 0 = unlimited */
+    int    eng_depth;       /* 0 = unlimited */
+    bool   eng_slider_drag;
+    int    eng_ctrl_focus;  /* Engine screen: -1 none, 0..3 control row */
+    AiLine eng_lines[AI_MAX_LINES];
+    int    eng_line_count;
+
     /* engine picker */
     char   engine_candidates[16][512];
     int    engine_count;
@@ -164,6 +181,15 @@ typedef struct {
     bool   dragging;
     SDL_Point mouse;
 
+    /* board annotations (right mouse) */
+    AnnCircle ann_circles[MAX_ANN];
+    int       ann_circle_count;
+    AnnArrow  ann_arrows[MAX_ANN];
+    int       ann_arrow_count;
+    bool      ann_dragging;
+    int       ann_from;         /* -1 when idle */
+    int       ann_to;
+
     SDL_Window   *win;
     SDL_Renderer *ren;
     float         ui_scale;     /* device pixels per logical point (>= 1.0) */
@@ -177,12 +203,15 @@ typedef struct {
     int    win_w;
     int    win_h;
     float  zoom;        /* whole-UI magnification (1.0 = base size) */
+    float  pan_x, pan_y;/* temporary base-unit offset while grip-dragging */
 
     /* board-corner drag state */
     bool   resizing_board;
     float  resize_start_zoom;
     int    resize_start_mx;     /* raw window x/y at drag start */
     int    resize_start_my;
+    int    resize_start_bx;     /* base coords grabbed on the grip */
+    int    resize_start_by;
     bool   board_driven_resize; /* next window-resize event came from us */
 
     SDL_Point mouse_win;        /* raw event coordinates (window points) */

@@ -53,11 +53,45 @@ make dmg      # -> dist/OpenChess.app and dist/OpenChess.dmg
 - `dist/OpenChess.dmg` is a compressed image you can share. Open it and drag
   `OpenChess.app` into `/Applications`.
 
-The app is **not code-signed**, so on first launch macOS Gatekeeper may block
-it. To allow it: right-click the app and choose **Open**, or run
+The app is **not code-signed or notarized**. macOS adds a quarantine flag when
+the `.dmg` is downloaded, so on first launch Gatekeeper may block it. To allow
+it, either right-click the app and choose **Open**, or clear the flag before
+opening the image:
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/OpenChess.app
+sudo xattr -r -d com.apple.quarantine /path/to/OpenChess.dmg
+```
+
+If you already dragged `OpenChess.app` into `/Applications`, clear the copy
+instead:
+
+```sh
+sudo xattr -r -d com.apple.quarantine /Applications/OpenChess.app
+```
+
+### Windows
+
+**Native (MSYS2 / MinGW-w64).** Install the MSYS2 UCRT64 toolchain and SDL2
+packages, then build from the repository root:
+
+```sh
+make CC=gcc        # -> openchess.exe
+```
+
+Run `openchess.exe` from the repository root (so `assets/` is found) or copy it
+next to the `assets/` folder. Get the Windows build of Stockfish from
+<https://stockfishchess.org/download/> and put `stockfish.exe` on `PATH`, or set
+`engine =` in `%APPDATA%\openchess\chess.conf`. The full `pacman` command is in
+[`BUILD.md`](BUILD.md).
+
+**WSL2 (Windows 11 + WSLg).** Use the Linux build; the window appears through
+WSLg:
+
+```sh
+sudo apt install build-essential pkg-config \
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+make
+./openchess
 ```
 
 ### Where files live
@@ -132,11 +166,40 @@ make dmg      # 生成 dist/OpenChess.app 与 dist/OpenChess.dmg
 - `dist/OpenChess.dmg` 为压缩映像，打开后将 `OpenChess.app` 拖入
   `/Applications` 即可。
 
-应用**未做代码签名**，首次启动时 Gatekeeper 可能拦截。允许方式：右键点击应用选择
-**打开**，或执行
+应用**未做代码签名，也未公证**。下载 `.dmg` 时 macOS 会添加隔离属性，首次启动可能被
+Gatekeeper 拦截。允许方式：右键点击应用选择 **打开**，或在打开映像前先清除隔离属性：
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/OpenChess.app
+sudo xattr -r -d com.apple.quarantine /path/to/OpenChess.dmg
+```
+
+若已将 `OpenChess.app` 拖入 `/Applications`，则改为清除该副本：
+
+```sh
+sudo xattr -r -d com.apple.quarantine /Applications/OpenChess.app
+```
+
+### Windows
+
+**原生（MSYS2 / MinGW-w64）**：安装 MSYS2 UCRT64 工具链与 SDL2 包，然后在仓库根目录构建：
+
+```sh
+make CC=gcc        # -> openchess.exe
+```
+
+请在仓库根目录运行 `openchess.exe`（以便找到 `assets/`），或将其与 `assets/`
+放在同一目录。从 <https://stockfishchess.org/download/> 下载 Windows 版
+Stockfish，将 `stockfish.exe` 放入 `PATH`，或在
+`%APPDATA%\openchess\chess.conf` 中设置 `engine =`。完整 `pacman` 命令见
+[`BUILD.md`](BUILD.md)。
+
+**WSL2（Windows 11 + WSLg）**：直接使用 Linux 构建，窗口通过 WSLg 显示：
+
+```sh
+sudo apt install build-essential pkg-config \
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+make
+./openchess
 ```
 
 ### 文件位置

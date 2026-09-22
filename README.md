@@ -28,9 +28,14 @@ FEN import/export, board flipping, move animations, and SAN text entry.
   Singleplayer and by live Analysis.
 - **Live evaluation bar** – in Analysis a Stockfish evaluation bar sits beside
   the board with score/depth readout.
+- **Engine lines and controls** – a 0–5 MultiPV slider shows several engine
+  lines (score + variation) in the panel; Threads, Hash, time and depth limits
+  are configurable on the Engine screen.
+- **Board annotations** – right-click for a circle, right-drag for an arrow,
+  with Ctrl/Alt colour variants.
 - **Resizable / magnifiable UI** – resize the window or drag the grip in the
   board's bottom-right corner; the board, pieces, panel and menus all scale
-  together.
+  together, keeping the grip under the cursor.
 - **Export as PGN** – press `Ctrl+S` (or the **PGN** button) to save the game
   with headers and result.
 - **FEN** – load a position from a FEN string and copy the current position.

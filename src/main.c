@@ -10,8 +10,7 @@
 #define OPENCHESS_VERSION "dev"
 #endif
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--version") == 0) {
         printf("OpenChess %s\n", OPENCHESS_VERSION);
         return 0;
@@ -38,10 +37,9 @@ int main(int argc, char **argv)
     if (!net_init())
         fprintf(stderr, "net: local multiplayer unavailable\n");
 
-    SDL_Window *win = SDL_CreateWindow("Chess",
-                                       SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                       WIN_W, WIN_H,
-                                       SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
+    SDL_Window *win = SDL_CreateWindow(
+        "OpenChess", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIN_W, WIN_H,
+        SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         TTF_Quit();
@@ -49,8 +47,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    SDL_Renderer *ren = SDL_CreateRenderer(win, -1,
-                                           SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    /* Window/taskbar icon: the same artwork as the .app and .dmg. */
+    {
+        char icon_path[1100];
+        snprintf(icon_path, sizeof icon_path, "%s/openchess.png", path_assets());
+        SDL_Surface *icon = IMG_Load(icon_path);
+        if (icon) {
+            SDL_SetWindowIcon(win, icon);
+            SDL_FreeSurface(icon);
+        }
+    }
+
+    SDL_Renderer *ren = SDL_CreateRenderer(
+        win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!ren) {
         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
         SDL_DestroyWindow(win);

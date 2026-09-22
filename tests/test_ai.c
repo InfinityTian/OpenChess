@@ -110,6 +110,31 @@ static void test_eval(AiEngine *ai)
     printf("engine reports checkmate (mate=%d)  ok\n", mate);
 }
 
+static void test_multipv(AiEngine *ai)
+{
+    Board b;
+    board_reset(&b);
+    ai_set_multipv(ai, 3);
+    ai_go_infinite(ai, &b);
+
+    AiLine lines[AI_MAX_LINES];
+    int n = 0;
+    bool got = false;
+    for (int i = 0; i < 500 && !got; i++) {
+        char uci[8];
+        ai_poll_bestmove(ai, uci);
+        n = ai_get_lines(ai, lines, AI_MAX_LINES);
+        if (n >= 2 && lines[0].pv[0] && lines[1].pv[0]) got = true;
+        nap(10);
+    }
+    ai_stop_search(ai);
+    CHECK(got);
+    CHECK(n >= 2);
+    CHECK(lines[0].multipv == 1);
+    CHECK(lines[1].multipv == 2);
+    printf("engine multipv lines = %d (depth %d)  ok\n", n, lines[0].depth);
+}
+
 int main(void)
 {
     test_uci_to_move();
@@ -129,6 +154,7 @@ int main(void)
     CHECK(ai_alive(ai));
     test_engine(ai);
     test_eval(ai);
+    test_multipv(ai);
     ai_stop(ai);
 
     if (failures == 0) {

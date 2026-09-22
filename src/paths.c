@@ -14,6 +14,12 @@
 #include <mach-o/dyld.h>
 #endif
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <direct.h>
+#define mkdir(p, m) _mkdir(p)
+#endif
+
 #define PATHS_MAX 1024
 
 static char s_exe_dir[PATHS_MAX];
@@ -42,7 +48,10 @@ const char *path_exe_dir(void)
     char buf[PATHS_MAX];
     buf[0] = '\0';
 
-#if defined(__APPLE__)
+#if defined(_WIN32)
+    DWORD n = GetModuleFileNameA(NULL, buf, (DWORD)sizeof buf);
+    if (n == 0 || n >= sizeof buf) buf[0] = '\0';
+#elif defined(__APPLE__)
     uint32_t size = (uint32_t)sizeof buf;
     if (_NSGetExecutablePath(buf, &size) != 0) buf[0] = '\0';
 #elif defined(__linux__)
@@ -52,11 +61,19 @@ const char *path_exe_dir(void)
 
     if (!buf[0]) { snprintf(s_exe_dir, sizeof s_exe_dir, "."); return s_exe_dir; }
 
+#if defined(_WIN32)
+    snprintf(s_exe_dir, sizeof s_exe_dir, "%s", buf);
+#else
     char real[PATHS_MAX];
     const char *use = realpath(buf, real) ? (const char *)real : buf;
     snprintf(s_exe_dir, sizeof s_exe_dir, "%s", use);
+#endif
 
     char *slash = strrchr(s_exe_dir, '/');
+#if defined(_WIN32)
+    char *bslash = strrchr(s_exe_dir, '\\');
+    if (!slash || (bslash && bslash > slash)) slash = bslash;
+#endif
     if (slash) *slash = '\0';
     else snprintf(s_exe_dir, sizeof s_exe_dir, ".");
     return s_exe_dir;
@@ -101,6 +118,14 @@ const char *path_config(void)
         return s_config;
     }
 
+#if defined(_WIN32)
+    const char *appdata = getenv("APPDATA");
+    if (appdata && *appdata) {
+        snprintf(s_config, sizeof s_config, "%s\\openchess\\chess.conf", appdata);
+        return s_config;
+    }
+#endif
+
     const char *xdg = getenv("XDG_CONFIG_HOME");
     const char *home = getenv("HOME");
     if (xdg && *xdg)
@@ -116,6 +141,14 @@ const char *path_games_dir(void)
 {
     static char dir[PATHS_MAX];
     if (dir[0]) return dir;
+
+#if defined(_WIN32)
+    const char *appdata = getenv("APPDATA");
+    if (appdata && *appdata) {
+        snprintf(dir, sizeof dir, "%s\\openchess\\games", appdata);
+        return dir;
+    }
+#endif
 
     const char *xdg = getenv("XDG_DATA_HOME");
     const char *home = getenv("HOME");
@@ -164,15 +197,20 @@ void path_make_parent(const char *file)
     snprintf(tmp, sizeof tmp, "%s", file);
 
     char *slash = strrchr(tmp, '/');
+#if defined(_WIN32)
+    char *bslash = strrchr(tmp, '\\');
+    if (!slash || (bslash && bslash > slash)) slash = bslash;
+#endif
     if (!slash) return;          /* no directory component */
     *slash = '\0';
     if (!tmp[0]) return;
 
     for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
+        if (*p == '/' || *p == '\\') {
+            char sep = *p;
             *p = '\0';
             mkdir(tmp, 0755);
-            *p = '/';
+            *p = sep;
         }
     }
     mkdir(tmp, 0755);

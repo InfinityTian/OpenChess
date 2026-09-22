@@ -31,6 +31,15 @@ SDL2_net).
   - Analysis allows both sides; Singleplayer and Local Multiplayer only accept
     moves for your own side on your turn.
 
+### Board annotations
+
+- **Right-click** a square to toggle a circle on it.
+- **Right-drag** from one square to another to draw an arrow.
+- Hold **Ctrl** (green) or **Alt** (blue) while right-clicking/dragging to
+  change the colour; the default is amber.
+- Annotations are cleared when you make a move, press **Esc**, or left-click the
+  board.
+
 ### Analysis mode
 
 - Control White and Black with full legality; use it to try lines or set up
@@ -81,6 +90,15 @@ config file.
   vertical **evaluation bar** is drawn to the left of the board and the numeric
   score and search depth appear in the panel. It restarts after every move,
   undo, restart or FEN load.
+- **Engine lines**: the panel has a **0–5 slider**. `0` closes the engine; `1–5`
+  selects how many MultiPV lines are shown (each line lists the score and the
+  start of the principal variation in SAN).
+- **Engine controls** (Engine screen): **Lines** (same as the slider),
+  **Threads** (CPU cores), **Hash** (MB), **Time** (ms, `0` = unlimited) and
+  **Depth** (`0` = unlimited). On the Engine screen press **Tab** to move between
+  the custom-path field and the controls, **Left/Right** (or the `-`/`+`
+  buttons) to adjust, **Up/Down** to pick an engine. All are saved to
+  `chess.conf`.
 
 ### Export as PGN
 
@@ -118,6 +136,11 @@ pieces = cases       # any key from assets/themes.txt
 animation = arcade   # arcade | slide | fade | none
 board_size = 88      # square size in points (44-150)
 engine = /opt/homebrew/bin/stockfish   # optional
+engine_multipv = 1   # engine lines 0-5 (0 = engine off)
+engine_threads = 1   # CPU cores
+engine_hash = 16     # transposition table MB
+engine_time = 0      # per-move / analysis time limit in ms (0 = unlimited)
+engine_depth = 0     # depth limit (0 = unlimited)
 ```
 
 Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
@@ -146,6 +169,13 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
   输入代数记谱，再按 **Enter** 落子，**Esc** 取消。示例：`e4`、`Nf3`、
   `exd5`、`O-O`、`O-O-O`、`e8=Q+`。
   - 分析模式双方均可输入；单人/本地多人仅在你回合、输入己方着法时有效。
+
+### 棋盘标注
+
+- **右键**点击格子可切换圆圈标记。
+- **右键拖动**可从一格到另一格画箭头。
+- 按住 **Ctrl**（绿色）或 **Alt**（蓝色）再右键/拖动可改变颜色，默认为琥珀色。
+- 走子、按 **Esc** 或左键点击棋盘会清除标注。
 
 ### 分析模式
 
@@ -186,6 +216,12 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
   的引擎，或输入自定义可执行文件路径（Tab 编辑，Enter 应用）。选择保存为 `engine`。
 - 分析模式下所选引擎会持续分析当前局面：棋盘左侧显示垂直**评估条**，面板中显示
   分数与搜索深度。每步走子、悔棋、重开或载入 FEN 后都会重新分析。
+- **引擎多线路**：面板中有一个 **0–5 滑块**。`0` 表示关闭引擎；`1–5` 表示显示的
+  MultiPV 线路数量（每条显示分数与主变着法的 SAN 开头）。
+- **引擎控制**（Engine 界面）：**Lines**（同上）、**Threads**（CPU 核心）、
+  **Hash**（MB）、**Time**（毫秒，`0` 为不限）、**Depth**（`0` 为不限）。
+  在 Engine 界面按 **Tab** 在自定义路径与各控制项间切换，**左右键**（或 `-`/`+`
+  按钮）调整，**上下键**选择引擎。所有设置都会保存到 `chess.conf`。
 
 ### 导出 PGN
 
@@ -223,6 +259,11 @@ pieces = cases       # assets/themes.txt 中的任意键
 animation = arcade   # arcade | slide | fade | none
 board_size = 88      # 格子大小（44-150）
 engine = /opt/homebrew/bin/stockfish   # 可选
+engine_multipv = 1   # 引擎线路 0-5（0 = 关闭引擎）
+engine_threads = 1   # CPU 核心数
+engine_hash = 16     # 置换表 MB
+engine_time = 0      # 每步/分析时限（毫秒，0 = 不限）
+engine_depth = 0     # 深度限制（0 = 不限）
 ```
 
 可用环境变量覆盖：`OPENCHESS_ASSETS`、`OPENCHESS_CONFIG`。

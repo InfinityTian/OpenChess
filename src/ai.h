@@ -34,6 +34,24 @@ void ai_new_game(AiEngine *ai);
 void ai_set_skill(AiEngine *ai, int level);   /* 0..20 */
 void ai_set_movetime(AiEngine *ai, int ms);   /* per-move think time */
 void ai_set_depth(AiEngine *ai, int depth);   /* >0 overrides movetime */
+void ai_set_threads(AiEngine *ai, int n);     /* CPU cores (1..) */
+void ai_set_hash(AiEngine *ai, int mb);       /* transposition table MB */
+void ai_set_multipv(AiEngine *ai, int n);     /* 1..AI_MAX_LINES */
+
+/* Multi-PV analysis lines (populated from "info ... multipv K ... pv ..."). */
+#define AI_MAX_LINES 5
+
+typedef struct {
+    int  cp;            /* centipawn score, side-to-move perspective */
+    int  mate;          /* mate distance when has_mate */
+    int  depth;
+    int  multipv;       /* 1-based line number */
+    bool has_mate;
+    char pv[192];       /* space-separated UCI moves */
+} AiLine;
+
+/* Copy the up-to-`max` current lines and return how many were written. */
+int ai_get_lines(const AiEngine *ai, AiLine *out, int max);
 
 /* Begin searching the position `b`. */
 void ai_go(AiEngine *ai, const Board *b);

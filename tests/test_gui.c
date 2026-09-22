@@ -3,6 +3,7 @@
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL_ttf.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,46 @@ static void do_restart_test(Gui *g)
     g->state = NO_GAME_OVER;
 }
 
+/* Engine settings must survive a save/load round-trip. */
+static int test_engine_config(void)
+{
+    Gui *a = gui_create();
+    if (!a) return 1;
+    a->eng_multipv = 3;
+    a->eng_threads = 4;
+    a->eng_hash = 128;
+    a->eng_time_ms = 500;
+    a->eng_depth = 12;
+    a->config_dirty = true;
+    snprintf(a->config_path, sizeof a->config_path, "/tmp/oc_engine_test.conf");
+    gui_save_config(a);
+    gui_destroy(a);
+
+    Gui *b = gui_create();
+    if (!b) return 1;
+    gui_load_config(b, "/tmp/oc_engine_test.conf");
+    int ok = b->eng_multipv == 3 && b->eng_threads == 4 && b->eng_hash == 128 &&
+             b->eng_time_ms == 500 && b->eng_depth == 12;
+    gui_destroy(b);
+    remove("/tmp/oc_engine_test.conf");
+    if (!ok) {
+        fprintf(stderr, "engine config round-trip failed\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* Window coordinate of a board square's centre, via the renderer transform. */
+static void sq_window(Gui *g, SDL_Renderer *ren, int sq, int *wx, int *wy)
+{
+    int file = sq % 8, rank = sq / 8;
+    int col = g->flipped ? 7 - file : file;
+    int row = g->flipped ? rank : 7 - rank;
+    float bx = g->board_x + col * g->sq + g->sq / 2.0f;
+    float by = g->board_y + row * g->sq + g->sq / 2.0f;
+    SDL_RenderLogicalToWindow(ren, bx, by, wx, wy);
+}
+
 int main(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -81,6 +122,8 @@ int main(void)
                 g->boards.count, g->pieces.count);
         return 1;
     }
+
+    if (test_engine_config() != 0) return 1;
 
     /* ---- welcome menu renders (title + mode list) ---- */
     g->scene = SCENE_MENU;
@@ -502,6 +545,67 @@ int main(void)
     }
     g->config_dirty = false;    /* don't write a config during tests */
 
+    /* ---- right-mouse annotations ---- */
+    g->scene = SCENE_GAME;
+    g->mode = MODE_ANALYSIS;
+    {
+        gui_render(g, ren);
+        int e2 = algebraic_to_sq("e2");
+        int e4 = algebraic_to_sq("e4");
+        int wx, wy, wx2, wy2;
+        sq_window(g, ren, e2, &wx, &wy);
+        sq_window(g, ren, e4, &wx2, &wy2);
+
+        /* right-click toggles a circle */
+        SDL_Event cd = {0};
+        cd.type = SDL_MOUSEBUTTONDOWN;
+        cd.button.button = SDL_BUTTON_RIGHT;
+        cd.button.x = wx; cd.button.y = wy;
+        gui_handle_event(g, &cd);
+        SDL_Event cu = cd;
+        cu.type = SDL_MOUSEBUTTONUP;
+        gui_handle_event(g, &cu);
+        if (g->ann_circle_count != 1 || g->ann_circles[0].sq != e2) {
+            fprintf(stderr, "right-click did not add a circle\n");
+            return 1;
+        }
+
+        /* right-drag draws an arrow */
+        gui_handle_event(g, &cd);
+        SDL_Event cm = {0};
+        cm.type = SDL_MOUSEMOTION;
+        cm.motion.x = wx2; cm.motion.y = wy2;
+        cm.motion.state = SDL_BUTTON_RMASK;
+        gui_handle_event(g, &cm);
+        SDL_Event cu2 = {0};
+        cu2.type = SDL_MOUSEBUTTONUP;
+        cu2.button.button = SDL_BUTTON_RIGHT;
+        cu2.button.x = wx2; cu2.button.y = wy2;
+        gui_handle_event(g, &cu2);
+        if (g->ann_arrow_count != 1 || g->ann_arrows[0].from != e2 ||
+            g->ann_arrows[0].to != e4) {
+            fprintf(stderr, "right-drag did not add an arrow\n");
+            return 1;
+        }
+
+        /* a left click on the board clears them */
+        SDL_Event ld = {0};
+        ld.type = SDL_MOUSEBUTTONDOWN;
+        ld.button.button = SDL_BUTTON_LEFT;
+        ld.button.x = wx2; ld.button.y = wy2;
+        gui_handle_event(g, &ld);
+        if (g->ann_circle_count != 0 || g->ann_arrow_count != 0) {
+            fprintf(stderr, "left click did not clear annotations\n");
+            return 1;
+        }
+        gui_render(g, ren);
+    }
+
+    /* ---- engine screen renders with the settings controls ---- */
+    g->scene = SCENE_ENGINE;
+    gui_render(g, ren);
+    g->scene = SCENE_GAME;
+
     /* ---- drag the board corner to resize it ---- */
     g->scene = SCENE_GAME;
     g->mode = MODE_ANALYSIS;
@@ -518,6 +622,7 @@ int main(void)
         fprintf(stderr, "board grip did not start a resize\n");
         return 1;
     }
+    int anchor_x = g->resize_start_bx;
     SDL_Event rm = {0};
     rm.type = SDL_MOUSEMOTION;
     rm.motion.x = gx + 56; rm.motion.y = gy + 56;
@@ -527,6 +632,25 @@ int main(void)
         fprintf(stderr, "UI did not magnify (zoom %.2f->%.2f)\n",
                 zoom_before, g->zoom);
         return 1;
+    }
+    /* The grabbed grip point must track the cursor: diagonal drag picks the
+     * x axis, so zoom advances by dx / (grabbed base x). */
+    float want = zoom_before + 56.0f / (float)anchor_x;
+    if (fabsf(g->zoom - want) > 0.002f) {
+        fprintf(stderr, "grip drift: zoom %.4f want %.4f (anchor %d)\n",
+                g->zoom, want, anchor_x);
+        return 1;
+    }
+    /* The grabbed point must stay exactly under the cursor while dragging. */
+    {
+        int pw, ph;
+        SDL_RenderLogicalToWindow(ren, (float)g->resize_start_bx,
+                                  (float)g->resize_start_by, &pw, &ph);
+        if (abs(pw - (gx + 56)) > 2 || abs(ph - (gy + 56)) > 2) {
+            fprintf(stderr, "grip tracking off: grip=(%d,%d) cursor=(%d,%d)\n",
+                    pw, ph, gx + 56, gy + 56);
+            return 1;
+        }
     }
     SDL_Event ru = {0};
     ru.type = SDL_MOUSEBUTTONUP;
@@ -538,6 +662,43 @@ int main(void)
         return 1;
     }
     gui_render(g, ren);          /* resized layout renders */
+
+    /* ---- vertical-only drag uses the y anchor ---- */
+    {
+        int gx2, gy2, wx2, wy2;
+        gx2 = g->board_x + 8 * g->sq - 9;
+        gy2 = g->board_y + 8 * g->sq - 9;
+        SDL_RenderLogicalToWindow(ren, (float)gx2, (float)gy2, &wx2, &wy2);
+
+        SDL_Event vd = {0};
+        vd.type = SDL_MOUSEBUTTONDOWN;
+        vd.button.button = SDL_BUTTON_LEFT;
+        vd.button.x = wx2; vd.button.y = wy2;
+        gui_handle_event(g, &vd);
+        if (!g->resizing_board) {
+            fprintf(stderr, "grip did not start a vertical resize\n");
+            return 1;
+        }
+        float z0 = g->zoom;
+        int ay = g->resize_start_by;
+        SDL_Event vm = {0};
+        vm.type = SDL_MOUSEMOTION;
+        vm.motion.x = wx2; vm.motion.y = wy2 + 60;
+        vm.motion.state = SDL_BUTTON_LMASK;
+        gui_handle_event(g, &vm);
+        float want2 = z0 + 60.0f / (float)ay;
+        if (fabsf(g->zoom - want2) > 0.002f) {
+            fprintf(stderr, "grip vertical drift: zoom %.4f want %.4f (anchor %d)\n",
+                    g->zoom, want2, ay);
+            return 1;
+        }
+        SDL_Event vu = {0};
+        vu.type = SDL_MOUSEBUTTONUP;
+        vu.button.button = SDL_BUTTON_LEFT;
+        vu.button.x = wx2; vu.button.y = wy2 + 60;
+        gui_handle_event(g, &vu);
+        gui_render(g, ren);
+    }
     g->config_dirty = false;
 
     /* ---- clicking a square while magnified still selects that square ---- */

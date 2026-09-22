@@ -13,6 +13,11 @@
 
 #define GUI_PI 3.14159265358979323846f
 
+static void ann_color_for(Uint8 *r, Uint8 *g, Uint8 *b);
+static void engine_slider_rect(const Gui *g, SDL_Rect *track);
+static int  eng_slider_from_x(const Gui *g, int mx);
+static int  clampi(int v, int lo, int hi);
+
 /* ------------------------------------------------------------------ */
 /* style registries                                                    */
 /* ------------------------------------------------------------------ */
@@ -115,8 +120,8 @@ static void apply_render_scale(Gui *g)
     int vx = (ow - cw) / 2;
     int vy = (oh - ch) / 2;
 
-    SDL_Rect vp = { (int)lroundf((float)vx / eff),
-                    (int)lroundf((float)vy / eff),
+    SDL_Rect vp = { (int)lroundf((float)vx / eff + g->pan_x),
+                    (int)lroundf((float)vy / eff + g->pan_y),
                     g->win_w, g->win_h };
     SDL_RenderSetViewport(g->ren, &vp);
 
@@ -142,16 +147,43 @@ static void eval_stop(Gui *g)
     g->eval_valid = false;
 }
 
-/* (Re)start the analysis engine on the current position. */
+/* (Re)start the analysis engine on the current position, honouring the
+ * MultiPV/threads/hash/time/depth settings. MultiPV 0 closes the engine. */
 static void eval_restart(Gui *g)
 {
-    if (!g->engine_path[0]) return;
-    if (!g->eval_ai) g->eval_ai = ai_start(g->engine_path);
+    if (g->eng_multipv <= 0) {
+        if (g->eval_ai) { ai_stop(g->eval_ai); g->eval_ai = NULL; }
+        g->eval_valid = false;
+        g->eng_line_count = 0;
+        return;
+    }
+    if (!g->engine_path[0]) { g->eval_valid = false; return; }
+    if (!g->eval_ai) {
+        g->eval_ai = ai_start(g->engine_path);
+        if (g->eval_ai) {
+            ai_set_threads(g->eval_ai, g->eng_threads);
+            ai_set_hash(g->eval_ai, g->eng_hash);
+        }
+    }
     if (!g->eval_ai) { g->eval_valid = false; return; }
+
     ai_stop_search(g->eval_ai);
+    ai_set_multipv(g->eval_ai, g->eng_multipv);
     g->eval_side = g->board.side;
-    ai_go_infinite(g->eval_ai, &g->board);
+    g->eng_line_count = 0;
     g->eval_valid = false;
+
+    if (g->eng_depth > 0) {
+        ai_set_depth(g->eval_ai, g->eng_depth);
+        ai_go(g->eval_ai, &g->board);
+    } else if (g->eng_time_ms > 0) {
+        ai_set_depth(g->eval_ai, 0);
+        ai_set_movetime(g->eval_ai, g->eng_time_ms);
+        ai_go(g->eval_ai, &g->board);
+    } else {
+        ai_set_depth(g->eval_ai, 0);
+        ai_go_infinite(g->eval_ai, &g->board);
+    }
 }
 
 /* Re-analyse after the position changed (analysis mode only). */
@@ -487,6 +519,14 @@ static void clear_selection(Gui *g)
     g->targets.count = 0;
 }
 
+static void ann_clear(Gui *g)
+{
+    g->ann_circle_count = 0;
+    g->ann_arrow_count = 0;
+    g->ann_dragging = false;
+    g->ann_from = g->ann_to = -1;
+}
+
 static Move *target_move(Gui *g, int to)
 {
     for (int i = 0; i < g->targets.count; i++) {
@@ -526,6 +566,7 @@ static void san_close_box(Gui *g)
 static void reset_board_state(Gui *g)
 {
     clear_selection(g);
+    ann_clear(g);
     g->promo_from = g->promo_to = -1;
     clear_anims(g);
     san_close_box(g);
@@ -599,6 +640,7 @@ static void push_move(Gui *g, Move m)
     g->history[g->ply] = m;
     g->ply++;
     clear_selection(g);
+    ann_clear(g);
     g->promo_from = g->promo_to = -1;
     san_close_box(g);
     recompute_state(g);
@@ -762,6 +804,30 @@ static void btn_rects(const Gui *g, SDL_Rect *undo, SDL_Rect *restart)
 {
     undo->x = g->panel_x;          undo->y = g->win_h - 120; undo->w = 80; undo->h = 40;
     restart->x = g->panel_x + 88;  restart->y = g->win_h - 120; restart->w = 80; restart->h = 40;
+}
+
+static int clampi(int v, int lo, int hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+/* MultiPV slider in the analysis panel (0 = engine off .. AI_MAX_LINES). */
+static void engine_slider_rect(const Gui *g, SDL_Rect *track)
+{
+    track->x = g->panel_x + 96;
+    track->y = g->board_y + 56;
+    track->w = 220;
+    track->h = 14;
+}
+
+static int eng_slider_from_x(const Gui *g, int mx)
+{
+    SDL_Rect t;
+    engine_slider_rect(g, &t);
+    int v = (int)lroundf((float)(mx - t.x) / (float)t.w * (float)AI_MAX_LINES);
+    return clampi(v, 0, AI_MAX_LINES);
 }
 
 static void styles_btn_rect(const Gui *g, SDL_Rect *out)
@@ -1031,6 +1097,8 @@ void gui_load_config(Gui *g, const char *path)
     char line[256];
     char vboard[64] = "", vpieces[64] = "", vanim[64] = "", vengine[512] = "";
     char vboardsize[16] = "";
+    char vthreads[16] = "", vhash[16] = "", vmultipv[16] = "";
+    char vtime[16] = "", vdepth[16] = "";
     while (fgets(line, sizeof line, f)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
@@ -1052,6 +1120,11 @@ void gui_load_config(Gui *g, const char *path)
         else if (strcmp(key, "animation") == 0) snprintf(vanim, sizeof vanim, "%s", val);
         else if (strcmp(key, "engine") == 0) snprintf(vengine, sizeof vengine, "%s", rawval);
         else if (strcmp(key, "board_size") == 0) snprintf(vboardsize, sizeof vboardsize, "%s", val);
+        else if (strcmp(key, "engine_threads") == 0) snprintf(vthreads, sizeof vthreads, "%s", val);
+        else if (strcmp(key, "engine_hash") == 0) snprintf(vhash, sizeof vhash, "%s", val);
+        else if (strcmp(key, "engine_multipv") == 0) snprintf(vmultipv, sizeof vmultipv, "%s", val);
+        else if (strcmp(key, "engine_time") == 0) snprintf(vtime, sizeof vtime, "%s", val);
+        else if (strcmp(key, "engine_depth") == 0) snprintf(vdepth, sizeof vdepth, "%s", val);
     }
     fclose(f);
 
@@ -1069,6 +1142,12 @@ void gui_load_config(Gui *g, const char *path)
         int sz = atoi(vboardsize);
         if (sz > 0) g->zoom = clamp_zoom((float)sz / (float)SQ_SIZE);
     }
+
+    if (vthreads[0]) { int n = atoi(vthreads); if (n > 0) g->eng_threads = n; }
+    if (vhash[0])    { int n = atoi(vhash);    if (n > 0) g->eng_hash = n; }
+    if (vmultipv[0]) { int n = atoi(vmultipv); if (n >= 0 && n <= AI_MAX_LINES) g->eng_multipv = n; }
+    if (vtime[0])    { int n = atoi(vtime);    if (n >= 0) g->eng_time_ms = n; }
+    if (vdepth[0])   { int n = atoi(vdepth);   if (n >= 0) g->eng_depth = n; }
 }
 
 /* Persist the current look to chess.conf (only when it changed). */
@@ -1088,6 +1167,11 @@ void gui_save_config(Gui *g)
         fprintf(f, "pieces = %s\n", g->pieces.items[g->piece_index].key);
     fprintf(f, "animation = %s\n", ANIM_KEYS[g->anim_style]);
     fprintf(f, "board_size = %d\n", (int)lroundf(SQ_SIZE * g->zoom));
+    fprintf(f, "engine_multipv = %d\n", g->eng_multipv);
+    fprintf(f, "engine_threads = %d\n", g->eng_threads);
+    fprintf(f, "engine_hash = %d\n", g->eng_hash);
+    fprintf(f, "engine_time = %d\n", g->eng_time_ms);
+    fprintf(f, "engine_depth = %d\n", g->eng_depth);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     fclose(f);
 }
@@ -1143,6 +1227,7 @@ Gui *gui_create(void)
     if (!g) return NULL;
     g->ui_scale = 1.0f;
     g->zoom = 1.0f;
+    g->pan_x = g->pan_y = 0.0f;
     layout_base(g);
     g->scene = SCENE_MENU;
     g->mode = MODE_ANALYSIS;
@@ -1151,6 +1236,13 @@ Gui *gui_create(void)
     g->promo_from = g->promo_to = -1;
     g->input.active = false;
     g->san_open = false;
+    g->ann_from = g->ann_to = -1;
+    g->eng_multipv = 1;
+    g->eng_threads = 1;
+    g->eng_hash = 16;
+    g->eng_time_ms = 0;
+    g->eng_depth = 0;
+    g->eng_ctrl_focus = -1;
     themes_load(&g->boards, &g->pieces, path_assets());
     g->board_index = themes_index_of(&g->boards, "icy_sea");
     if (g->board_index < 0) g->board_index = 0;
@@ -1721,20 +1813,78 @@ static void open_engine_scene(Gui *g, Scene return_to)
     for (int i = 0; i < g->engine_count; i++)
         if (strcmp(g->engine_candidates[i], g->engine_path) == 0) g->engine_sel = i;
     g->engine_custom_focus = (g->engine_count == 0);
+    g->eng_ctrl_focus = -1;
     snprintf(g->engine_custom, sizeof g->engine_custom, "%s", g->engine_path);
     g->engine_status[0] = 0;
     g->engine_return_scene = return_to;
     g->scene = SCENE_ENGINE;
 }
 
+/* Engine screen: the engine list is on the right, the analysis controls on
+ * the left. Row order matches ENG_CTRL_LABELS. */
+#define ENG_CTRL_COUNT 5
+static const char *ENG_CTRL_LABELS[ENG_CTRL_COUNT] = {
+    "Lines", "Threads", "Hash (MB)", "Time (ms)", "Depth"
+};
+
 static void engine_rects(const Gui *g, SDL_Rect items[ENGINE_MAX],
                          SDL_Rect *custom, SDL_Rect *back)
 {
-    int x = 80, y0 = 150, w = g->win_w - 160, h = 40, gap = 8;
+    int x = 620, y0 = 150, w = g->win_w - 700, h = 40, gap = 8;
+    if (w < 200) { x = 80; w = g->win_w - 160; }
     for (int i = 0; i < ENGINE_MAX; i++)
         items[i] = (SDL_Rect){ x, y0 + i * (h + gap), w, h };
     custom->x = 80; custom->y = g->win_h - 150; custom->w = g->win_w - 260; custom->h = 40;
     back->w = 140; back->h = 42; back->x = g->win_w - 160; back->y = g->win_h - 90;
+}
+
+static void engine_ctrl_rects(const Gui *g,
+                              SDL_Rect minus[ENG_CTRL_COUNT],
+                              SDL_Rect plus[ENG_CTRL_COUNT])
+{
+    (void)g;
+    int x = 80, y0 = 150, w = 30, h = 30, gap = 8;
+    for (int i = 0; i < ENG_CTRL_COUNT; i++) {
+        int y = y0 + i * (h + gap);
+        minus[i] = (SDL_Rect){ x + 224, y, w, h };
+        plus[i]  = (SDL_Rect){ x + 260, y, w, h };
+    }
+}
+
+static int eng_ctrl_value(const Gui *g, int i)
+{
+    switch (i) {
+        case 0: return g->eng_multipv;
+        case 1: return g->eng_threads;
+        case 2: return g->eng_hash;
+        case 3: return g->eng_time_ms;
+        default: return g->eng_depth;
+    }
+}
+
+static void eng_ctrl_adjust(Gui *g, int i, int dir)
+{
+    switch (i) {
+        case 0: g->eng_multipv = clampi(g->eng_multipv + dir, 0, AI_MAX_LINES); break;
+        case 1: g->eng_threads = clampi(g->eng_threads + dir, 1, 256); break;
+        case 2: g->eng_hash    = clampi(g->eng_hash + dir * 16, 16, 4096); break;
+        case 3: g->eng_time_ms = clampi(g->eng_time_ms + dir * 100, 0, 60000); break;
+        default:g->eng_depth   = clampi(g->eng_depth + dir, 0, 60); break;
+    }
+    g->config_dirty = true;
+
+    if (g->eval_ai) {
+        if (i == 1) ai_set_threads(g->eval_ai, g->eng_threads);
+        else if (i == 2) ai_set_hash(g->eval_ai, g->eng_hash);
+    }
+    if (g->ai) {
+        if (i == 3) ai_set_movetime(g->ai, g->eng_time_ms > 0 ? g->eng_time_ms : 1);
+        else if (i == 4) ai_set_depth(g->ai, g->eng_depth);
+        else if (i == 1) ai_set_threads(g->ai, g->eng_threads);
+        else if (i == 2) ai_set_hash(g->ai, g->eng_hash);
+    }
+    if (i == 0 || i == 3 || i == 4)
+        if (g->mode == MODE_ANALYSIS && g->scene == SCENE_GAME) eval_restart(g);
 }
 
 static void handle_engine_keydown(Gui *g, const SDL_KeyboardEvent *ke)
@@ -1744,7 +1894,19 @@ static void handle_engine_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
     if (ctrl && k == SDLK_q) { g->quit = true; return; }
     if (k == SDLK_ESCAPE) { g->scene = g->engine_return_scene; return; }
-    if (k == SDLK_TAB) { g->engine_custom_focus = !g->engine_custom_focus; return; }
+    if (k == SDLK_TAB) {
+        /* Cycle custom path -> each setting row -> custom path. */
+        if (g->engine_custom_focus) {
+            g->engine_custom_focus = false;
+            g->eng_ctrl_focus = 0;
+        } else if (g->eng_ctrl_focus >= 0 && g->eng_ctrl_focus < ENG_CTRL_COUNT - 1) {
+            g->eng_ctrl_focus++;
+        } else {
+            g->eng_ctrl_focus = -1;
+            g->engine_custom_focus = true;
+        }
+        return;
+    }
 
     if (g->engine_custom_focus) {
         if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
@@ -1754,6 +1916,16 @@ static void handle_engine_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         }
         if (k == SDLK_RETURN || k == SDLK_KP_ENTER) apply_engine(g, g->engine_custom);
         return;
+    }
+
+    if (g->eng_ctrl_focus >= 0) {
+        if (k == SDLK_LEFT)  { eng_ctrl_adjust(g, g->eng_ctrl_focus, -1); return; }
+        if (k == SDLK_RIGHT) { eng_ctrl_adjust(g, g->eng_ctrl_focus, +1); return; }
+        if (k == SDLK_UP)   { if (g->eng_ctrl_focus > 0) g->eng_ctrl_focus--; return; }
+        if (k == SDLK_DOWN) {
+            if (g->eng_ctrl_focus < ENG_CTRL_COUNT - 1) g->eng_ctrl_focus++;
+            return;
+        }
     }
 
     if (k == SDLK_UP) { if (g->engine_sel > 0) g->engine_sel--; return; }
@@ -1779,17 +1951,33 @@ static void handle_engine_textinput(Gui *g, const SDL_TextInputEvent *te)
 static void handle_engine_mousedown(Gui *g)
 {
     SDL_Rect items[ENGINE_MAX], custom, back;
+    SDL_Rect minus[ENG_CTRL_COUNT], plus[ENG_CTRL_COUNT];
     engine_rects(g, items, &custom, &back);
+    engine_ctrl_rects(g, minus, plus);
     SDL_Point p = g->mouse;
+
+    for (int i = 0; i < ENG_CTRL_COUNT; i++) {
+        if (pt_in(&minus[i], p.x, p.y) || pt_in(&plus[i], p.x, p.y)) {
+            g->eng_ctrl_focus = i;
+            g->engine_custom_focus = false;
+            eng_ctrl_adjust(g, i, pt_in(&minus[i], p.x, p.y) ? -1 : +1);
+            return;
+        }
+    }
 
     for (int i = 0; i < g->engine_count; i++)
         if (pt_in(&items[i], p.x, p.y)) {
             g->engine_sel = i;
             g->engine_custom_focus = false;
+            g->eng_ctrl_focus = -1;
             apply_engine(g, g->engine_candidates[i]);
             return;
         }
-    if (pt_in(&custom, p.x, p.y)) { g->engine_custom_focus = true; return; }
+    if (pt_in(&custom, p.x, p.y)) {
+        g->engine_custom_focus = true;
+        g->eng_ctrl_focus = -1;
+        return;
+    }
     if (pt_in(&back, p.x, p.y)) { g->scene = g->engine_return_scene; return; }
 }
 
@@ -1862,6 +2050,7 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         if (g->fen_active) { g->fen_active = false; fen_refresh(g); return; }
         if (g->san_open) { san_close_box(g); return; }
         clear_selection(g);
+        ann_clear(g);
         g->promo_from = g->promo_to = -1;
         return;
     }
@@ -1961,6 +2150,23 @@ static void handle_game_mousedown(Gui *g)
 
     if (g->pgn_prompt) return;   /* modal: keyboard only */
 
+    /* MultiPV slider (analysis). */
+    if (g->mode == MODE_ANALYSIS) {
+        SDL_Rect t;
+        engine_slider_rect(g, &t);
+        SDL_Rect hit = { t.x - 6, t.y - 8, t.w + 12, t.h + 16 };
+        if (pt_in(&hit, p.x, p.y)) {
+            g->eng_slider_drag = true;
+            int v = eng_slider_from_x(g, p.x);
+            if (v != g->eng_multipv) {
+                g->eng_multipv = v;
+                g->config_dirty = true;
+                eval_restart(g);
+            }
+            return;
+        }
+    }
+
     SDL_Rect undo, restart, styles, pgn, menu;
     btn_rects(g, &undo, &restart);
     styles_btn_rect(g, &styles);
@@ -1985,9 +2191,12 @@ static void handle_game_mousedown(Gui *g)
     board_grip_rect(g, &grip);
     if (pt_in(&grip, p.x, p.y)) {
         g->resizing_board = true;
+        g->pan_x = g->pan_y = 0.0f;
         g->resize_start_zoom = g->zoom;
         g->resize_start_mx = g->mouse_win.x;
         g->resize_start_my = g->mouse_win.y;
+        g->resize_start_bx = g->mouse.x;
+        g->resize_start_by = g->mouse.y;
         return;
     }
 
@@ -2036,6 +2245,7 @@ static void handle_game_mousedown(Gui *g)
 
     int sq = sq_from_pos(g, p.x, p.y);
     if (sq < 0) return;
+    ann_clear(g);   /* a left click on the board clears annotations */
 
     if (g->selected >= 0) {
         Move *m = target_move(g, sq);
@@ -2069,6 +2279,9 @@ static void handle_game_mouseup(Gui *g)
 
     if (g->resizing_board) {
         g->resizing_board = false;
+        g->pan_x = g->pan_y = 0.0f;      /* drop the temporary pan */
+        apply_window_size(g);            /* refit the window to the new zoom */
+        apply_render_scale(g);
         g->board_driven_resize = false;  /* don't swallow the next OS resize */
         g->config_dirty = true;          /* board_size persisted on exit */
         return;
@@ -2081,21 +2294,52 @@ static void handle_game_mouseup(Gui *g)
     if (g->selected >= 0) try_move_to(g, sq);
 }
 
-/* Board-corner drag magnifies the whole UI and resizes the window to fit. */
+/*
+ * Board-corner drag magnifies the whole UI. The window stays put during the
+ * drag: the grabbed grip point is scaled about and panned so it stays exactly
+ * under the cursor (window is refit on mouse-up). This removes the drift that a
+ * single-axis zoom caused on the other axis.
+ */
 static void handle_board_resize(Gui *g)
 {
     int dx = g->mouse_win.x - g->resize_start_mx;
     int dy = g->mouse_win.y - g->resize_start_my;
-    int delta = dx > dy ? dx : dy;
 
-    float z = g->resize_start_zoom + (float)delta / (float)(8 * SQ_SIZE);
-    z = clamp_zoom(z);
+    int ax = g->resize_start_bx > 0 ? g->resize_start_bx : 8 * SQ_SIZE;
+    int ay = g->resize_start_by > 0 ? g->resize_start_by : 8 * SQ_SIZE;
+    float dz = (abs(dx) >= abs(dy)) ? (float)dx / (float)ax
+                                    : (float)dy / (float)ay;
+
+    float z = clamp_zoom(g->resize_start_zoom + dz);
     if (z == g->zoom) return;
 
     g->zoom = z;
+
+    /* Recompute the transform at the new zoom with no pan, then offset it so
+     * the grabbed base point maps exactly to the cursor (set_mouse inverts the
+     * same viewport, so input and drawing stay in lock-step). */
+    g->pan_x = g->pan_y = 0.0f;
+    apply_render_scale(g);
+
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(g->ren, &sx, &sy);
+    SDL_Rect vp;
+    SDL_RenderGetViewport(g->ren, &vp);
+    int ow = 0, oh = 0, ww = 0, wh = 0;
+    SDL_GetRendererOutputSize(g->ren, &ow, &oh);
+    SDL_GetWindowSize(g->win, &ww, &wh);
+    float ux = (ww > 0) ? (float)ow / (float)ww : 1.0f;
+    float uy = (wh > 0) ? (float)oh / (float)wh : 1.0f;
+    if (sx <= 0.0f) sx = 1.0f;
+    if (sy <= 0.0f) sy = 1.0f;
+
+    g->pan_x = (float)g->mouse_win.x * ux / sx
+               - (float)g->resize_start_bx - (float)vp.x;
+    g->pan_y = (float)g->mouse_win.y * uy / sy
+               - (float)g->resize_start_by - (float)vp.y;
+
     apply_render_scale(g);
     rebuild_fonts(g);
-    apply_window_size(g);
 }
 
 /* OS window resize: refit the base canvas (uniform magnification). */
@@ -2106,6 +2350,8 @@ static void handle_window_resize(Gui *g, int w, int h)
         return;
     }
     if (w <= 0 || h <= 0) return;
+
+    g->pan_x = g->pan_y = 0.0f;   /* an OS resize cancels any drag pan */
 
     /* Display density may differ from gui_init_assets if the window moved. */
     int ow = w, oh = h;
@@ -2159,8 +2405,22 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
         case SDL_MOUSEMOTION:
             set_mouse(g, e->motion.x, e->motion.y);
             if (g->scene == SCENE_MENU) { handle_menu_mousemotion(g); return; }
+            if (g->eng_slider_drag && (e->motion.state & SDL_BUTTON_LMASK)) {
+                int v = eng_slider_from_x(g, g->mouse.x);
+                if (v != g->eng_multipv) {
+                    g->eng_multipv = v;
+                    g->config_dirty = true;
+                    eval_restart(g);
+                }
+                return;
+            }
             if (g->resizing_board && (e->motion.state & SDL_BUTTON_LMASK)) {
                 handle_board_resize(g);
+                return;
+            }
+            if (g->scene == SCENE_GAME && g->ann_dragging &&
+                (e->motion.state & SDL_BUTTON_RMASK)) {
+                g->ann_to = sq_from_pos(g, g->mouse.x, g->mouse.y);
                 return;
             }
             if (e->motion.state & SDL_BUTTON_LMASK) {
@@ -2168,6 +2428,18 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             }
             return;
         case SDL_MOUSEBUTTONDOWN:
+            if (e->button.button == SDL_BUTTON_RIGHT) {
+                set_mouse(g, e->button.x, e->button.y);
+                if (g->scene == SCENE_GAME) {
+                    int sq = sq_from_pos(g, g->mouse.x, g->mouse.y);
+                    if (sq >= 0) {
+                        g->ann_dragging = true;
+                        g->ann_from = sq;
+                        g->ann_to = sq;
+                    }
+                }
+                return;
+            }
             if (e->button.button != SDL_BUTTON_LEFT) return;
             set_mouse(g, e->button.x, e->button.y);
             debug_ui_log(g, e->button.x, e->button.y);
@@ -2179,8 +2451,50 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             else handle_game_mousedown(g);
             return;
         case SDL_MOUSEBUTTONUP:
+            if (e->button.button == SDL_BUTTON_RIGHT) {
+                set_mouse(g, e->button.x, e->button.y);
+                if (g->scene == SCENE_GAME && g->ann_dragging) {
+                    int sq = sq_from_pos(g, g->mouse.x, g->mouse.y);
+                    if (sq < 0) sq = g->ann_from;
+                    Uint8 r, gg, b;
+                    ann_color_for(&r, &gg, &b);
+                    if (sq == g->ann_from) {
+                        int found = -1;
+                        for (int i = 0; i < g->ann_circle_count; i++)
+                            if (g->ann_circles[i].sq == sq) { found = i; break; }
+                        if (found >= 0) {
+                            g->ann_circles[found] =
+                                g->ann_circles[--g->ann_circle_count];
+                        } else if (g->ann_circle_count < MAX_ANN) {
+                            AnnCircle *c = &g->ann_circles[g->ann_circle_count++];
+                            c->sq = sq; c->r = r; c->g = gg; c->b = b;
+                        }
+                    } else {
+                        int found = -1;
+                        for (int i = 0; i < g->ann_arrow_count; i++)
+                            if (g->ann_arrows[i].from == g->ann_from &&
+                                g->ann_arrows[i].to == sq) { found = i; break; }
+                        if (found >= 0) {
+                            g->ann_arrows[found].r = r;
+                            g->ann_arrows[found].g = gg;
+                            g->ann_arrows[found].b = b;
+                        } else if (g->ann_arrow_count < MAX_ANN) {
+                            AnnArrow *a = &g->ann_arrows[g->ann_arrow_count++];
+                            a->from = g->ann_from; a->to = sq;
+                            a->r = r; a->g = gg; a->b = b;
+                        }
+                    }
+                    g->ann_dragging = false;
+                    g->ann_from = g->ann_to = -1;
+                }
+                return;
+            }
             if (e->button.button != SDL_BUTTON_LEFT) return;
             set_mouse(g, e->button.x, e->button.y);
+            if (g->scene == SCENE_GAME && g->eng_slider_drag) {
+                g->eng_slider_drag = false;
+                return;
+            }
             if (g->scene == SCENE_GAME) handle_game_mouseup(g);
             return;
         case SDL_KEYDOWN:
@@ -2304,7 +2618,7 @@ void gui_tick(Gui *g, Uint32 now)
     } else if (g->eval_ai) {
         /* live analysis: drain info lines and refresh the evaluation */
         char uci[8];
-        ai_poll_bestmove(g->eval_ai, uci);
+        bool done = ai_poll_bestmove(g->eval_ai, uci);
         int cp, mate, depth;
         if (ai_get_eval(g->eval_ai, &cp, &mate, &depth)) {
             if (g->eval_side == BLACK) { cp = -cp; mate = -mate; }
@@ -2314,6 +2628,10 @@ void gui_tick(Gui *g, Uint32 now)
             g->eval_has_mate = ai_eval_has_mate(g->eval_ai);
             g->eval_valid = true;
         }
+        g->eng_line_count = ai_get_lines(g->eval_ai, g->eng_lines, AI_MAX_LINES);
+        /* A capped search ends on bestmove; keep the analysis cycling. */
+        if (done && (g->eng_depth > 0 || g->eng_time_ms > 0))
+            eval_restart(g);
     }
 }
 
@@ -2537,6 +2855,119 @@ static void draw_target_dot(Gui *g, SDL_Renderer *ren, int sq, bool capture)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+/* ---- right-mouse annotations ---- */
+
+/* Default amber; Ctrl = green, Alt = blue. */
+static void ann_color_for(Uint8 *r, Uint8 *g, Uint8 *b)
+{
+    SDL_Keymod m = SDL_GetModState();
+    if (m & KMOD_CTRL)     { *r = 70;  *g = 200; *b = 90;  }
+    else if (m & KMOD_ALT) { *r = 70;  *g = 150; *b = 245; }
+    else                   { *r = 235; *g = 150; *b = 40;  }
+}
+
+static void draw_circle_outline(SDL_Renderer *ren, int cx, int cy, int radius)
+{
+    const int seg = 40;
+    for (int i = 0; i < seg; i++) {
+        float a0 = (float)i / seg * 2.0f * GUI_PI;
+        float a1 = (float)(i + 1) / seg * 2.0f * GUI_PI;
+        SDL_RenderDrawLine(ren,
+                           (int)(cx + cosf(a0) * radius), (int)(cy + sinf(a0) * radius),
+                           (int)(cx + cosf(a1) * radius), (int)(cy + sinf(a1) * radius));
+    }
+}
+
+static void draw_thick_line(SDL_Renderer *ren, float x0, float y0,
+                            float x1, float y1, float w)
+{
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 0.001f) return;
+    float px = -dy / len * w, py = dx / len * w;
+    int n = (int)w + 1;
+    for (int i = -n; i <= n; i++) {
+        float t = (float)i / (float)n;
+        SDL_RenderDrawLine(ren,
+                           (int)(x0 + px * t), (int)(y0 + py * t),
+                           (int)(x1 + px * t), (int)(y1 + py * t));
+    }
+}
+
+/* tip = arrow point, (bx,by) = centre of the head's base,
+ * (px,py) = half-width vector along the base. */
+static void draw_arrow_head(SDL_Renderer *ren, float tipx, float tipy,
+                            float bx, float by, float px, float py)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    SDL_Vertex v[3];
+    v[0].position = (SDL_FPoint){ tipx, tipy };
+    v[1].position = (SDL_FPoint){ bx + px, by + py };
+    v[2].position = (SDL_FPoint){ bx - px, by - py };
+    SDL_Color c;
+    SDL_GetRenderDrawColor(ren, &c.r, &c.g, &c.b, &c.a);
+    for (int i = 0; i < 3; i++) { v[i].color = c; v[i].tex_coord = (SDL_FPoint){ 0, 0 }; }
+    SDL_RenderGeometry(ren, NULL, v, 3, NULL, 0);
+#else
+    draw_thick_line(ren, tipx, tipy, bx + px, by + py, 2.0f);
+    draw_thick_line(ren, tipx, tipy, bx - px, by - py, 2.0f);
+    draw_thick_line(ren, bx + px, by + py, bx - px, by - py, 2.0f);
+#endif
+}
+
+static void draw_one_arrow(Gui *g, SDL_Renderer *ren, int from, int to,
+                           Uint8 r, Uint8 gg, Uint8 b)
+{
+    if (from < 0 || to < 0 || from == to) return;
+    float fx, fy, tx, ty;
+    piece_center(g, from, &fx, &fy);
+    piece_center(g, to, &tx, &ty);
+    float dx = tx - fx, dy = ty - fy;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f) return;
+    float ux = dx / len, uy = dy / len;
+    float r0 = g->sq * 0.18f, head = g->sq * 0.34f;
+    float hw = g->sq * 0.16f, shaft = g->sq * 0.05f;
+    float sx = fx + ux * r0, sy = fy + uy * r0;
+    float bx = tx - ux * head, by = ty - uy * head;
+
+    set_render_color(ren, r, gg, b);
+    draw_thick_line(ren, sx, sy, bx, by, shaft);
+    draw_arrow_head(ren, tx, ty, bx, by, -uy * hw, ux * hw);
+}
+
+static void draw_annotations(Gui *g, SDL_Renderer *ren)
+{
+    if (g->ann_circle_count == 0 && g->ann_arrow_count == 0 && !g->ann_dragging)
+        return;
+
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+
+    for (int i = 0; i < g->ann_circle_count; i++) {
+        AnnCircle *c = &g->ann_circles[i];
+        float cx, cy;
+        piece_center(g, c->sq, &cx, &cy);
+        int rad = (int)(g->sq * 0.44f);
+        set_render_color(ren, c->r, c->g, c->b);
+        draw_circle_outline(ren, (int)cx, (int)cy, rad);
+        draw_circle_outline(ren, (int)cx, (int)cy, rad - 1);
+    }
+
+    for (int i = 0; i < g->ann_arrow_count; i++) {
+        AnnArrow *a = &g->ann_arrows[i];
+        draw_one_arrow(g, ren, a->from, a->to, a->r, a->g, a->b);
+    }
+
+    if (g->ann_dragging && g->ann_from >= 0 && g->ann_to >= 0 &&
+        g->ann_to != g->ann_from) {
+        Uint8 r, gg, b;
+        ann_color_for(&r, &gg, &b);
+        draw_one_arrow(g, ren, g->ann_from, g->ann_to, r, gg, b);
+    }
+
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+}
+
 static void draw_promo_chooser(Gui *g, SDL_Renderer *ren)
 {
     SDL_Rect pr[4];
@@ -2641,12 +3072,92 @@ static void draw_eval_bar(Gui *g, SDL_Renderer *ren)
     SDL_RenderDrawRect(ren, &border);
 }
 
+/* Convert a UCI principal variation into a short SAN sequence. */
+static void pv_to_san(const Gui *g, const char *pv, char *out, size_t n)
+{
+    Board b = g->board;
+    out[0] = '\0';
+    size_t used = 0;
+    int move_no = g->ply / 2 + 1;
+    bool white = (g->board.side == WHITE);
+    int count = 0;
+
+    const char *p = pv;
+    while (*p && count < 8) {
+        while (*p == ' ') p++;
+        char tok[8];
+        int i = 0;
+        while (*p && *p != ' ' && i < 7) tok[i++] = *p++;
+        tok[i] = '\0';
+        if (i < 4) break;
+
+        Move m;
+        if (!ai_uci_to_move(&b, tok, &m)) break;
+        char san[16], piece[40];
+        move_to_san(&b, m, san, sizeof san);
+        if (white) snprintf(piece, sizeof piece, "%d.%s ", move_no, san);
+        else       snprintf(piece, sizeof piece, "%s ", san);
+        if (used + strlen(piece) + 1 >= n) break;
+        strcat(out, piece);
+        used += strlen(piece);
+
+        make_move_plumb(&b, m);
+        white = !white;
+        if (white) move_no++;
+        count++;
+    }
+}
+
+static void render_engine_panel(Gui *g, SDL_Renderer *ren)
+{
+    if (g->mode != MODE_ANALYSIS) return;
+
+    render_text(g, g->font_small, "Engine lines", g->panel_x, g->board_y + 52,
+                (SDL_Color){ 200, 200, 200, 255 });
+
+    SDL_Rect t;
+    engine_slider_rect(g, &t);
+    draw_rect(ren, &t, 45, 45, 50, true);
+    int fillw = t.w * g->eng_multipv / AI_MAX_LINES;
+    SDL_Rect fill = { t.x, t.y, fillw, t.h };
+    set_render_color(ren, 90, 150, 200);
+    SDL_RenderFillRect(ren, &fill);
+    set_render_color(ren, 220, 220, 220);
+    SDL_Rect knob = { t.x + fillw - 4, t.y - 3, 8, t.h + 6 };
+    SDL_RenderFillRect(ren, &knob);
+    draw_rect(ren, &t, 120, 120, 130, false);
+
+    char val[16];
+    if (g->eng_multipv == 0) snprintf(val, sizeof val, "off");
+    else snprintf(val, sizeof val, "%d", g->eng_multipv);
+    render_text(g, g->font_small, val, t.x + t.w + 10, t.y - 2,
+                (SDL_Color){ 210, 210, 210, 255 });
+
+    int y = t.y + 26;
+    for (int i = 0; i < g->eng_line_count && i < AI_MAX_LINES; i++) {
+        AiLine *L = &g->eng_lines[i];
+        char sc[24], pvs[160], line[220];
+        if (L->has_mate)
+            snprintf(sc, sizeof sc, "%sM%d", L->mate >= 0 ? "+" : "-",
+                     L->mate >= 0 ? L->mate : -L->mate);
+        else
+            snprintf(sc, sizeof sc, "%+.2f", L->cp / 100.0);
+        pv_to_san(g, L->pv, pvs, sizeof pvs);
+        snprintf(line, sizeof line, "%d. %s  %s", i + 1, sc, pvs);
+        render_text(g, g->font_small, line, g->panel_x, y,
+                    (SDL_Color){ 205, 215, 225, 255 });
+        y += 18;
+    }
+}
+
 static void render_move_list(Gui *g)
 {
     SDL_Color c = { 230, 225, 215, 255 };
-    int y = g->board_y + 78;
+    bool analysis = (g->mode == MODE_ANALYSIS);
+    int max_rows = analysis ? 9 : 16;
+    int y = analysis ? g->board_y + 218 : g->board_y + 78;
     render_text(g, g->font_small, "Moves:", g->panel_x, y - 22, c);
-    int start = g->ply > 16 ? g->ply - 16 : 0;
+    int start = g->ply > max_rows ? g->ply - max_rows : 0;
     for (int i = start; i < g->ply; i++) {
         int num = i / 2 + 1;
         if (i % 2 == 0) {
@@ -3119,6 +3630,31 @@ static void render_engine(Gui *g, SDL_Renderer *ren)
                              "No engines found on PATH - enter a path below",
                              g->win_w / 2, 170, (SDL_Color){ 200, 150, 140, 255 });
 
+    /* Analysis settings (left column). */
+    render_text(g, g->font_small, "Analysis settings", 80, 126,
+                (SDL_Color){ 200, 200, 200, 255 });
+    SDL_Rect minus[ENG_CTRL_COUNT], plus[ENG_CTRL_COUNT];
+    engine_ctrl_rects(g, minus, plus);
+    for (int i = 0; i < ENG_CTRL_COUNT; i++) {
+        int y = minus[i].y;
+        bool on = (i == g->eng_ctrl_focus);
+        render_text(g, g->font_small, ENG_CTRL_LABELS[i], 80, y + 6,
+                    on ? (SDL_Color){ 235, 235, 235, 255 }
+                       : (SDL_Color){ 175, 185, 195, 255 });
+        char val[32];
+        int v = eng_ctrl_value(g, i);
+        if ((i == 3 || i == 4) && v == 0) snprintf(val, sizeof val, "unlimited");
+        else if (i == 0 && v == 0)        snprintf(val, sizeof val, "off");
+        else                              snprintf(val, sizeof val, "%d", v);
+        render_text(g, g->font_small, val, 158, y + 6, (SDL_Color){ 220, 225, 235, 255 });
+        draw_rect(ren, &minus[i], on ? 90 : 55, on ? 150 : 60, on ? 200 : 75, true);
+        render_text_centered(g, g->font_small, "-", minus[i].x + minus[i].w / 2, y + 6,
+                             (SDL_Color){ 235, 235, 235, 255 });
+        draw_rect(ren, &plus[i], on ? 90 : 55, on ? 150 : 60, on ? 200 : 75, true);
+        render_text_centered(g, g->font_small, "+", plus[i].x + plus[i].w / 2, y + 6,
+                             (SDL_Color){ 235, 235, 235, 255 });
+    }
+
     render_text(g, g->font_small, "Custom engine path (Tab to edit, Enter to apply):",
                 custom.x, custom.y - 22, (SDL_Color){ 150, 180, 200, 255 });
     draw_rect(ren, &custom, 30, 30, 32, true);
@@ -3137,7 +3673,7 @@ static void render_engine(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &back, "Back");
 
     render_text_centered(g, g->font_small,
-                         "Up/Down select    Enter apply    Tab edit path    Esc back",
+                         "Up/Down select   Enter apply   Tab field/controls   Left/Right adjust   Esc back",
                          g->win_w / 2, g->win_h - 40,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
@@ -3254,6 +3790,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
         }
 
     draw_piece_layer(g, ren, now);
+    draw_annotations(g, ren);
 
     /* Board resize grip (three diagonal ticks in the bottom-right corner). */
     {
@@ -3283,6 +3820,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     }
 
     render_status(g);
+    render_engine_panel(g, ren);
     render_move_list(g);
     if (g->mode == MODE_ANALYSIS) render_fen_box(g, ren);
     render_hud(g);
