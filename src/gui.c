@@ -87,6 +87,18 @@ static void board_grip_rect(const Gui *g, SDL_Rect *r)
 static void apply_render_scale(Gui *g)
 {
     if (!g->ren) return;
+
+    /* Keep the display density live so drawing and input use the same numbers
+     * (e.g. after a scaled-resolution / display change). */
+    if (g->win) {
+        int ow = g->win_w, oh = g->win_h, ww = g->win_w, wh = g->win_h;
+        SDL_GetWindowSize(g->win, &ww, &wh);
+        SDL_GetRendererOutputSize(g->ren, &ow, &oh);
+        float density = (ww > 0) ? (float)ow / (float)ww : 1.0f;
+        if (density < 1.0f) density = 1.0f;
+        g->ui_scale = density;
+    }
+
     float eff = eff_scale(g);
 
     /* Set the scale first: SDL_RenderSetViewport interprets its rect in
@@ -335,18 +347,33 @@ static void set_mouse(Gui *g, int x, int y)
     g->mouse_win.x = x;
     g->mouse_win.y = y;
 
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-    /* Use SDL's own window->logical conversion: it accounts for the renderer's
-     * actual scale, DPI scale and viewport, so input always matches what is
-     * drawn (avoiding a bias as the UI is magnified). */
-    if (g->ren) {
-        float lx = 0.0f, ly = 0.0f;
-        SDL_RenderWindowToLogical(g->ren, x, y, &lx, &ly);
-        g->mouse.x = (int)lroundf(lx);
-        g->mouse.y = (int)lroundf(ly);
+    /* Invert exactly the transform used for drawing:
+     *   physical = viewport + base * scale
+     *   physical = event * (output / window)
+     * We deliberately avoid SDL's dpi_scale here, which can be stale under
+     * scaled display modes (e.g. macOS "More Space") and caused a proportional
+     * click offset. */
+    if (g->ren && g->win) {
+        float sx = 1.0f, sy = 1.0f;
+        SDL_RenderGetScale(g->ren, &sx, &sy);
+        SDL_Rect vp;
+        SDL_RenderGetViewport(g->ren, &vp);
+
+        int ow = g->win_w, oh = g->win_h, ww = g->win_w, wh = g->win_h;
+        SDL_GetRendererOutputSize(g->ren, &ow, &oh);
+        SDL_GetWindowSize(g->win, &ww, &wh);
+
+        float ux = (ww > 0) ? (float)ow / (float)ww : 1.0f;
+        float uy = (wh > 0) ? (float)oh / (float)wh : 1.0f;
+        if (sx <= 0.0f) sx = 1.0f;
+        if (sy <= 0.0f) sy = 1.0f;
+
+        /* SDL_RenderGetViewport returns logical units, so subtract after
+         * dividing the physical position by the render scale. */
+        g->mouse.x = (int)lroundf((float)x * ux / sx - (float)vp.x);
+        g->mouse.y = (int)lroundf((float)y * uy / sy - (float)vp.y);
         return;
     }
-#endif
 
     float z = g->zoom > 0.0f ? g->zoom : 1.0f;
     g->mouse.x = (int)lroundf((float)x / z);
@@ -2096,6 +2123,24 @@ static void handle_window_resize(Gui *g, int w, int h)
     if (zoom_changed || density_changed) rebuild_fonts(g);
 }
 
+static void debug_ui_log(Gui *g, int ex, int ey)
+{
+    if (!getenv("OPENCHESS_DEBUG_UI") || !g->ren || !g->win) return;
+    float sx = 1.0f, sy = 1.0f;
+    SDL_RenderGetScale(g->ren, &sx, &sy);
+    SDL_Rect vp;
+    SDL_RenderGetViewport(g->ren, &vp);
+    int ow = 0, oh = 0, ww = 0, wh = 0;
+    SDL_GetRendererOutputSize(g->ren, &ow, &oh);
+    SDL_GetWindowSize(g->win, &ww, &wh);
+    fprintf(stderr,
+            "[ui] event=(%d,%d) base=(%d,%d) scale=(%.3f,%.3f) "
+            "viewport=(%d,%d,%d,%d) output=(%d,%d) window=(%d,%d) "
+            "zoom=%.3f ui=%.3f\n",
+            ex, ey, g->mouse.x, g->mouse.y, sx, sy,
+            vp.x, vp.y, vp.w, vp.h, ow, oh, ww, wh, g->zoom, g->ui_scale);
+}
+
 void gui_handle_event(Gui *g, const SDL_Event *e)
 {
     switch (e->type) {
@@ -2125,6 +2170,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
         case SDL_MOUSEBUTTONDOWN:
             if (e->button.button != SDL_BUTTON_LEFT) return;
             set_mouse(g, e->button.x, e->button.y);
+            debug_ui_log(g, e->button.x, e->button.y);
             if (g->scene == SCENE_MENU) handle_menu_mousedown(g);
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_mousedown(g);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_mousedown(g);

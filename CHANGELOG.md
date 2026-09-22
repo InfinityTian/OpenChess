@@ -4,6 +4,19 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.1.4] - 2026-09-21
+
+### Fixed
+- **Proportional click offset on scaled displays** (e.g. macOS "More Space"):
+  input is now converted with an explicit inverse of the render transform
+  (`viewport + base*scale`, with `output/window` as the event unit factor)
+  instead of `SDL_RenderWindowToLogical`, which depends on SDL's `dpi_scale`
+  and could be stale. The display density is also refreshed every frame.
+
+### Added
+- `OPENCHESS_DEBUG_UI=1` prints the mouse mapping (event, base, scale,
+  viewport, output, window, zoom, ui_scale) on each click for troubleshooting.
+
 ## [1.1.3] - 2026-09-21
 
 ### Fixed
@@ -79,6 +92,7 @@ All notable changes to OpenChess. The format follows
 - Bilingual (English / 简体中文) documentation.
 - `install.sh` / `uninstall.sh` and macOS `.app`/`.dmg` packaging.
 
+[1.1.4]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.4
 [1.1.3]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.3
 [1.1.2]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.2
 [1.1.1]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.1
