@@ -20,6 +20,23 @@ static void play(Board *b, const char *san)
     }
 }
 
+/* The generated SAN for a legal move must match the input notation. */
+static void check_san(const Board *b, const char *san)
+{
+    Move m;
+    if (!san_find(b, san, &m)) {
+        printf("FAIL  san_find '%s'\n", san);
+        failures++;
+        return;
+    }
+    char out[16];
+    move_to_san(b, m, out, sizeof out);
+    if (strcmp(out, san) != 0) {
+        printf("FAIL  move_to_san '%s' -> '%s'\n", san, out);
+        failures++;
+    }
+}
+
 static void test_scholar()
 {
     Board b;
@@ -79,6 +96,7 @@ static void test_castling()
     play(&b, "Nc6");
     play(&b, "Bc4");
     play(&b, "Bc5");
+    check_san(&b, "O-O");            /* SAN generation must not be empty */
     play(&b, "O-O");
     CHECK(board_get(&b, 6) == WK);
     CHECK(board_get(&b, 5) == WR);
@@ -95,6 +113,7 @@ static void test_castling()
     play(&b2, "Bf5");
     play(&b2, "Qd2");
     play(&b2, "Qd7");
+    check_san(&b2, "O-O-O");
     play(&b2, "O-O-O");
     CHECK(board_get(&b2, 2) == WK);
     CHECK(board_get(&b2, 3) == WR);

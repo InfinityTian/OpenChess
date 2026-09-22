@@ -15,6 +15,7 @@
 
 static void ann_color_for(Uint8 *r, Uint8 *g, Uint8 *b);
 static void engine_slider_rect(const Gui *g, SDL_Rect *track);
+static void engine_arrows_rect(const Gui *g, SDL_Rect *box);
 static int  eng_slider_from_x(const Gui *g, int mx);
 static int  clampi(int v, int lo, int hi);
 
@@ -127,6 +128,14 @@ static void apply_render_scale(Gui *g)
 
     /* Some SDL versions reset the scale in SetViewport: re-apply it. */
     SDL_RenderSetScale(g->ren, eff, eff);
+
+    /* Record exactly what was installed; set_mouse inverts these values so that
+     * input can never diverge from drawing (e.g. after SDL resets the viewport
+     * on a window resize). */
+    g->tf_scale = eff;
+    g->tf_vpx = (float)vp.x;
+    g->tf_vpy = (float)vp.y;
+    g->tf_ux = g->tf_uy = (g->ui_scale > 0.0f ? g->ui_scale : 1.0f);
 }
 
 /* Resize the OS window so the magnified canvas fits exactly. */
@@ -379,37 +388,27 @@ static void set_mouse(Gui *g, int x, int y)
     g->mouse_win.x = x;
     g->mouse_win.y = y;
 
-    /* Invert exactly the transform used for drawing:
-     *   physical = viewport + base * scale
-     *   physical = event * (output / window)
-     * We deliberately avoid SDL's dpi_scale here, which can be stale under
-     * scaled display modes (e.g. macOS "More Space") and caused a proportional
-     * click offset. */
-    if (g->ren && g->win) {
-        float sx = 1.0f, sy = 1.0f;
-        SDL_RenderGetScale(g->ren, &sx, &sy);
-        SDL_Rect vp;
-        SDL_RenderGetViewport(g->ren, &vp);
-
-        int ow = g->win_w, oh = g->win_h, ww = g->win_w, wh = g->win_h;
-        SDL_GetRendererOutputSize(g->ren, &ow, &oh);
-        SDL_GetWindowSize(g->win, &ww, &wh);
-
-        float ux = (ww > 0) ? (float)ow / (float)ww : 1.0f;
-        float uy = (wh > 0) ? (float)oh / (float)wh : 1.0f;
-        if (sx <= 0.0f) sx = 1.0f;
-        if (sy <= 0.0f) sy = 1.0f;
-
-        /* SDL_RenderGetViewport returns logical units, so subtract after
-         * dividing the physical position by the render scale. */
-        g->mouse.x = (int)lroundf((float)x * ux / sx - (float)vp.x);
-        g->mouse.y = (int)lroundf((float)y * uy / sy - (float)vp.y);
+    if (!g->ren || !g->win) {
+        float z = g->zoom > 0.0f ? g->zoom : 1.0f;
+        g->mouse.x = (int)lroundf((float)x / z);
+        g->mouse.y = (int)lroundf((float)y / z);
         return;
     }
 
-    float z = g->zoom > 0.0f ? g->zoom : 1.0f;
-    g->mouse.x = (int)lroundf((float)x / z);
-    g->mouse.y = (int)lroundf((float)y / z);
+    /* Re-install the intended transform first (SDL resets the viewport on
+     * window resize), then invert exactly those stored values:
+     *   physical_device = viewport + base * scale
+     *   physical_device = window_point * (device / point)
+     * Because these are the same numbers apply_render_scale just used, input
+     * can never drift from what is drawn. */
+    apply_render_scale(g);
+
+    float s  = g->tf_scale > 0.0f ? g->tf_scale : 1.0f;
+    float ux = g->tf_ux > 0.0f ? g->tf_ux : 1.0f;
+    float uy = g->tf_uy > 0.0f ? g->tf_uy : 1.0f;
+
+    g->mouse.x = (int)lroundf((float)x * ux / s - g->tf_vpx);
+    g->mouse.y = (int)lroundf((float)y * uy / s - g->tf_vpy);
 }
 
 /* ------------------------------------------------------------------ */
@@ -521,7 +520,7 @@ static void clear_selection(Gui *g)
 
 static void ann_clear(Gui *g)
 {
-    g->ann_circle_count = 0;
+    g->ann_square_count = 0;
     g->ann_arrow_count = 0;
     g->ann_dragging = false;
     g->ann_from = g->ann_to = -1;
@@ -830,6 +829,15 @@ static int eng_slider_from_x(const Gui *g, int mx)
     return clampi(v, 0, AI_MAX_LINES);
 }
 
+/* "Arrows" checkbox on the Engine-lines label row. */
+static void engine_arrows_rect(const Gui *g, SDL_Rect *box)
+{
+    box->x = g->panel_x + 78;
+    box->y = g->board_y + 52;
+    box->w = 16;
+    box->h = 16;
+}
+
 static void styles_btn_rect(const Gui *g, SDL_Rect *out)
 {
     out->x = g->panel_x + 176; out->y = g->win_h - 120; out->w = 80; out->h = 40;
@@ -1098,7 +1106,7 @@ void gui_load_config(Gui *g, const char *path)
     char vboard[64] = "", vpieces[64] = "", vanim[64] = "", vengine[512] = "";
     char vboardsize[16] = "";
     char vthreads[16] = "", vhash[16] = "", vmultipv[16] = "";
-    char vtime[16] = "", vdepth[16] = "";
+    char vtime[16] = "", vdepth[16] = "", varrows[8] = "";
     while (fgets(line, sizeof line, f)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
@@ -1125,6 +1133,7 @@ void gui_load_config(Gui *g, const char *path)
         else if (strcmp(key, "engine_multipv") == 0) snprintf(vmultipv, sizeof vmultipv, "%s", val);
         else if (strcmp(key, "engine_time") == 0) snprintf(vtime, sizeof vtime, "%s", val);
         else if (strcmp(key, "engine_depth") == 0) snprintf(vdepth, sizeof vdepth, "%s", val);
+        else if (strcmp(key, "engine_arrows") == 0) snprintf(varrows, sizeof varrows, "%s", val);
     }
     fclose(f);
 
@@ -1148,6 +1157,7 @@ void gui_load_config(Gui *g, const char *path)
     if (vmultipv[0]) { int n = atoi(vmultipv); if (n >= 0 && n <= AI_MAX_LINES) g->eng_multipv = n; }
     if (vtime[0])    { int n = atoi(vtime);    if (n >= 0) g->eng_time_ms = n; }
     if (vdepth[0])   { int n = atoi(vdepth);   if (n >= 0) g->eng_depth = n; }
+    if (varrows[0])  g->engine_arrows = (atoi(varrows) != 0);
 }
 
 /* Persist the current look to chess.conf (only when it changed). */
@@ -1172,6 +1182,7 @@ void gui_save_config(Gui *g)
     fprintf(f, "engine_hash = %d\n", g->eng_hash);
     fprintf(f, "engine_time = %d\n", g->eng_time_ms);
     fprintf(f, "engine_depth = %d\n", g->eng_depth);
+    fprintf(f, "engine_arrows = %d\n", g->engine_arrows ? 1 : 0);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     fclose(f);
 }
@@ -1228,6 +1239,8 @@ Gui *gui_create(void)
     g->ui_scale = 1.0f;
     g->zoom = 1.0f;
     g->pan_x = g->pan_y = 0.0f;
+    g->tf_scale = 1.0f;
+    g->tf_ux = g->tf_uy = 1.0f;
     layout_base(g);
     g->scene = SCENE_MENU;
     g->mode = MODE_ANALYSIS;
@@ -1242,6 +1255,7 @@ Gui *gui_create(void)
     g->eng_hash = 16;
     g->eng_time_ms = 0;
     g->eng_depth = 0;
+    g->engine_arrows = true;
     g->eng_ctrl_focus = -1;
     themes_load(&g->boards, &g->pieces, path_assets());
     g->board_index = themes_index_of(&g->boards, "icy_sea");
@@ -2150,8 +2164,17 @@ static void handle_game_mousedown(Gui *g)
 
     if (g->pgn_prompt) return;   /* modal: keyboard only */
 
-    /* MultiPV slider (analysis). */
+    /* MultiPV slider + engine-arrow toggle (analysis). */
     if (g->mode == MODE_ANALYSIS) {
+        SDL_Rect box;
+        engine_arrows_rect(g, &box);
+        SDL_Rect ahit = { box.x - 4, box.y - 4, box.w + 60, box.h + 8 };
+        if (pt_in(&ahit, p.x, p.y)) {
+            g->engine_arrows = !g->engine_arrows;
+            g->config_dirty = true;
+            return;
+        }
+
         SDL_Rect t;
         engine_slider_rect(g, &t);
         SDL_Rect hit = { t.x - 6, t.y - 8, t.w + 12, t.h + 16 };
@@ -2316,27 +2339,19 @@ static void handle_board_resize(Gui *g)
     g->zoom = z;
 
     /* Recompute the transform at the new zoom with no pan, then offset it so
-     * the grabbed base point maps exactly to the cursor (set_mouse inverts the
-     * same viewport, so input and drawing stay in lock-step). */
+     * the grabbed base point maps exactly to the cursor (using the stored
+     * transform values, so input and drawing stay in lock-step). */
     g->pan_x = g->pan_y = 0.0f;
     apply_render_scale(g);
 
-    float sx = 1.0f, sy = 1.0f;
-    SDL_RenderGetScale(g->ren, &sx, &sy);
-    SDL_Rect vp;
-    SDL_RenderGetViewport(g->ren, &vp);
-    int ow = 0, oh = 0, ww = 0, wh = 0;
-    SDL_GetRendererOutputSize(g->ren, &ow, &oh);
-    SDL_GetWindowSize(g->win, &ww, &wh);
-    float ux = (ww > 0) ? (float)ow / (float)ww : 1.0f;
-    float uy = (wh > 0) ? (float)oh / (float)wh : 1.0f;
-    if (sx <= 0.0f) sx = 1.0f;
-    if (sy <= 0.0f) sy = 1.0f;
+    float s  = g->tf_scale > 0.0f ? g->tf_scale : 1.0f;
+    float ux = g->tf_ux > 0.0f ? g->tf_ux : 1.0f;
+    float uy = g->tf_uy > 0.0f ? g->tf_uy : 1.0f;
 
-    g->pan_x = (float)g->mouse_win.x * ux / sx
-               - (float)g->resize_start_bx - (float)vp.x;
-    g->pan_y = (float)g->mouse_win.y * uy / sy
-               - (float)g->resize_start_by - (float)vp.y;
+    g->pan_x = (float)g->mouse_win.x * ux / s
+               - (float)g->resize_start_bx - g->tf_vpx;
+    g->pan_y = (float)g->mouse_win.y * uy / s
+               - (float)g->resize_start_by - g->tf_vpy;
 
     apply_render_scale(g);
     rebuild_fonts(g);
@@ -2347,6 +2362,9 @@ static void handle_window_resize(Gui *g, int w, int h)
 {
     if (g->board_driven_resize) {
         g->board_driven_resize = false;
+        /* SDL resets the viewport on resize; re-install ours immediately so a
+         * click arriving before the next frame still maps correctly. */
+        apply_render_scale(g);
         return;
     }
     if (w <= 0 || h <= 0) return;
@@ -2380,11 +2398,13 @@ static void debug_ui_log(Gui *g, int ex, int ey)
     SDL_GetRendererOutputSize(g->ren, &ow, &oh);
     SDL_GetWindowSize(g->win, &ww, &wh);
     fprintf(stderr,
-            "[ui] event=(%d,%d) base=(%d,%d) scale=(%.3f,%.3f) "
-            "viewport=(%d,%d,%d,%d) output=(%d,%d) window=(%d,%d) "
-            "zoom=%.3f ui=%.3f\n",
+            "[ui] event=(%d,%d) base=(%d,%d) sdl_scale=(%.3f,%.3f) "
+            "sdl_vp=(%d,%d,%d,%d) output=(%d,%d) window=(%d,%d) "
+            "tf=(%.3f vp %.3f,%.3f u %.3f,%.3f) zoom=%.3f ui=%.3f\n",
             ex, ey, g->mouse.x, g->mouse.y, sx, sy,
-            vp.x, vp.y, vp.w, vp.h, ow, oh, ww, wh, g->zoom, g->ui_scale);
+            vp.x, vp.y, vp.w, vp.h, ow, oh, ww, wh,
+            g->tf_scale, g->tf_vpx, g->tf_vpy, g->tf_ux, g->tf_uy,
+            g->zoom, g->ui_scale);
 }
 
 void gui_handle_event(Gui *g, const SDL_Event *e)
@@ -2460,13 +2480,13 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                     ann_color_for(&r, &gg, &b);
                     if (sq == g->ann_from) {
                         int found = -1;
-                        for (int i = 0; i < g->ann_circle_count; i++)
-                            if (g->ann_circles[i].sq == sq) { found = i; break; }
+                        for (int i = 0; i < g->ann_square_count; i++)
+                            if (g->ann_squares[i].sq == sq) { found = i; break; }
                         if (found >= 0) {
-                            g->ann_circles[found] =
-                                g->ann_circles[--g->ann_circle_count];
-                        } else if (g->ann_circle_count < MAX_ANN) {
-                            AnnCircle *c = &g->ann_circles[g->ann_circle_count++];
+                            g->ann_squares[found] =
+                                g->ann_squares[--g->ann_square_count];
+                        } else if (g->ann_square_count < MAX_ANN) {
+                            AnnSquare *c = &g->ann_squares[g->ann_square_count++];
                             c->sq = sq; c->r = r; c->g = gg; c->b = b;
                         }
                     } else {
@@ -2866,18 +2886,8 @@ static void ann_color_for(Uint8 *r, Uint8 *g, Uint8 *b)
     else                   { *r = 235; *g = 150; *b = 40;  }
 }
 
-static void draw_circle_outline(SDL_Renderer *ren, int cx, int cy, int radius)
-{
-    const int seg = 40;
-    for (int i = 0; i < seg; i++) {
-        float a0 = (float)i / seg * 2.0f * GUI_PI;
-        float a1 = (float)(i + 1) / seg * 2.0f * GUI_PI;
-        SDL_RenderDrawLine(ren,
-                           (int)(cx + cosf(a0) * radius), (int)(cy + sinf(a0) * radius),
-                           (int)(cx + cosf(a1) * radius), (int)(cy + sinf(a1) * radius));
-    }
-}
-
+#if !SDL_VERSION_ATLEAST(2, 0, 18)
+/* Fallback for SDL < 2.0.18: parallel 1px lines. */
 static void draw_thick_line(SDL_Renderer *ren, float x0, float y0,
                             float x1, float y1, float w)
 {
@@ -2893,25 +2903,48 @@ static void draw_thick_line(SDL_Renderer *ren, float x0, float y0,
                            (int)(x1 + px * t), (int)(y1 + py * t));
     }
 }
+#endif
 
-/* tip = arrow point, (bx,by) = centre of the head's base,
- * (px,py) = half-width vector along the base. */
-static void draw_arrow_head(SDL_Renderer *ren, float tipx, float tipy,
-                            float bx, float by, float px, float py)
+/* A solid arrow drawn as one filled polygon (shaft quad + head triangle) so it
+ * scales with the UI without the gaps that unstyled thin lines produce. */
+static void draw_arrow_solid(SDL_Renderer *ren, float fx, float fy,
+                             float tx, float ty, float sq)
 {
+    if (sq <= 1.0f) return;
+    float dx = tx - fx, dy = ty - fy;
+    float len = sqrtf(dx * dx + dy * dy);
+    if (len < 1.0f) return;
+    float ux = dx / len, uy = dy / len;
+    float ax = fx + ux * sq * 0.16f, ay = fy + uy * sq * 0.16f;  /* shaft start */
+    float bx = tx - ux * sq * 0.34f, by = ty - uy * sq * 0.34f;  /* head base */
+    float px = -uy, py = ux;                                     /* perpendicular */
+    float sw = sq * 0.085f;   /* shaft half-width */
+    float hw = sq * 0.30f;    /* head half-width */
+    float ov = sq * 0.05f;    /* overlap into the head to avoid a seam */
+
 #if SDL_VERSION_ATLEAST(2, 0, 18)
-    SDL_Vertex v[3];
-    v[0].position = (SDL_FPoint){ tipx, tipy };
-    v[1].position = (SDL_FPoint){ bx + px, by + py };
-    v[2].position = (SDL_FPoint){ bx - px, by - py };
+    SDL_Vertex v[7];
+    v[0].position = (SDL_FPoint){ ax + px * sw, ay + py * sw };
+    v[1].position = (SDL_FPoint){ bx + ux * ov + px * sw, by + uy * ov + py * sw };
+    v[2].position = (SDL_FPoint){ bx + ux * ov - px * sw, by + uy * ov - py * sw };
+    v[3].position = (SDL_FPoint){ ax - px * sw, ay - py * sw };
+    v[4].position = (SDL_FPoint){ tx, ty };
+    v[5].position = (SDL_FPoint){ bx + px * hw, by + py * hw };
+    v[6].position = (SDL_FPoint){ bx - px * hw, by - py * hw };
+
     SDL_Color c;
     SDL_GetRenderDrawColor(ren, &c.r, &c.g, &c.b, &c.a);
-    for (int i = 0; i < 3; i++) { v[i].color = c; v[i].tex_coord = (SDL_FPoint){ 0, 0 }; }
-    SDL_RenderGeometry(ren, NULL, v, 3, NULL, 0);
+    for (int i = 0; i < 7; i++) {
+        v[i].color = c;
+        v[i].tex_coord = (SDL_FPoint){ 0, 0 };
+    }
+    const int idx[9] = { 0, 1, 2, 0, 2, 3, 4, 5, 6 };
+    SDL_RenderGeometry(ren, NULL, v, 7, idx, 9);
 #else
-    draw_thick_line(ren, tipx, tipy, bx + px, by + py, 2.0f);
-    draw_thick_line(ren, tipx, tipy, bx - px, by - py, 2.0f);
-    draw_thick_line(ren, bx + px, by + py, bx - px, by - py, 2.0f);
+    draw_thick_line(ren, ax, ay, bx, by, sw);
+    draw_thick_line(ren, tx, ty, bx + px * hw, by + py * hw, sw);
+    draw_thick_line(ren, tx, ty, bx - px * hw, by - py * hw, sw);
+    draw_thick_line(ren, bx + px * hw, by + py * hw, bx - px * hw, by - py * hw, sw);
 #endif
 }
 
@@ -2922,35 +2955,63 @@ static void draw_one_arrow(Gui *g, SDL_Renderer *ren, int from, int to,
     float fx, fy, tx, ty;
     piece_center(g, from, &fx, &fy);
     piece_center(g, to, &tx, &ty);
-    float dx = tx - fx, dy = ty - fy;
-    float len = sqrtf(dx * dx + dy * dy);
-    if (len < 1.0f) return;
-    float ux = dx / len, uy = dy / len;
-    float r0 = g->sq * 0.18f, head = g->sq * 0.34f;
-    float hw = g->sq * 0.16f, shaft = g->sq * 0.05f;
-    float sx = fx + ux * r0, sy = fy + uy * r0;
-    float bx = tx - ux * head, by = ty - uy * head;
-
     set_render_color(ren, r, gg, b);
-    draw_thick_line(ren, sx, sy, bx, by, shaft);
-    draw_arrow_head(ren, tx, ty, bx, by, -uy * hw, ux * hw);
+    draw_arrow_solid(ren, fx, fy, tx, ty, (float)g->sq);
+}
+
+/* Translucent square with a stronger border, used for right-click marks. */
+static void draw_annotation_square(Gui *g, SDL_Renderer *ren,
+                                   int sq, Uint8 r, Uint8 gg, Uint8 b)
+{
+    SDL_Rect rc;
+    window_sq(g, sq, &rc);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, r, gg, b, 70);
+    SDL_RenderFillRect(ren, &rc);
+
+    int t = (int)(g->sq * 0.10f);
+    if (t < 2) t = 2;
+    SDL_SetRenderDrawColor(ren, r, gg, b, 205);
+    SDL_Rect top   = { rc.x, rc.y, rc.w, t };
+    SDL_Rect bot   = { rc.x, rc.y + rc.h - t, rc.w, t };
+    SDL_Rect left  = { rc.x, rc.y, t, rc.h };
+    SDL_Rect right = { rc.x + rc.w - t, rc.y, t, rc.h };
+    SDL_RenderFillRect(ren, &top);
+    SDL_RenderFillRect(ren, &bot);
+    SDL_RenderFillRect(ren, &left);
+    SDL_RenderFillRect(ren, &right);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+}
+
+/* Green arrow for the first move of each engine line (analysis). */
+static void draw_engine_arrows(Gui *g, SDL_Renderer *ren)
+{
+    if (g->mode != MODE_ANALYSIS || !g->engine_arrows) return;
+    if (g->eng_multipv <= 0 || g->eng_line_count <= 0) return;
+
+    for (int i = 0; i < g->eng_line_count && i < AI_MAX_LINES; i++) {
+        const char *pv = g->eng_lines[i].pv;
+        while (*pv == ' ') pv++;
+        if (!*pv) continue;
+        char tok[8];
+        int n = 0;
+        while (pv[n] && pv[n] != ' ' && n < 7) { tok[n] = pv[n]; n++; }
+        tok[n] = '\0';
+
+        Move m;
+        if (ai_uci_to_move(&g->board, tok, &m))
+            draw_one_arrow(g, ren, MOVE_FROM(m), MOVE_TO(m), 70, 200, 90);
+    }
 }
 
 static void draw_annotations(Gui *g, SDL_Renderer *ren)
 {
-    if (g->ann_circle_count == 0 && g->ann_arrow_count == 0 && !g->ann_dragging)
+    if (g->ann_square_count == 0 && g->ann_arrow_count == 0 && !g->ann_dragging)
         return;
 
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-
-    for (int i = 0; i < g->ann_circle_count; i++) {
-        AnnCircle *c = &g->ann_circles[i];
-        float cx, cy;
-        piece_center(g, c->sq, &cx, &cy);
-        int rad = (int)(g->sq * 0.44f);
-        set_render_color(ren, c->r, c->g, c->b);
-        draw_circle_outline(ren, (int)cx, (int)cy, rad);
-        draw_circle_outline(ren, (int)cx, (int)cy, rad - 1);
+    for (int i = 0; i < g->ann_square_count; i++) {
+        AnnSquare *c = &g->ann_squares[i];
+        draw_annotation_square(g, ren, c->sq, c->r, c->g, c->b);
     }
 
     for (int i = 0; i < g->ann_arrow_count; i++) {
@@ -2964,8 +3025,6 @@ static void draw_annotations(Gui *g, SDL_Renderer *ren)
         ann_color_for(&r, &gg, &b);
         draw_one_arrow(g, ren, g->ann_from, g->ann_to, r, gg, b);
     }
-
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
 static void draw_promo_chooser(Gui *g, SDL_Renderer *ren)
@@ -3113,6 +3172,18 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
     if (g->mode != MODE_ANALYSIS) return;
 
     render_text(g, g->font_small, "Engine lines", g->panel_x, g->board_y + 52,
+                (SDL_Color){ 200, 200, 200, 255 });
+
+    SDL_Rect ab;
+    engine_arrows_rect(g, &ab);
+    draw_rect(ren, &ab, 40, 40, 46, true);
+    draw_rect(ren, &ab, 120, 120, 130, false);
+    if (g->engine_arrows) {
+        set_render_color(ren, 80, 200, 100);
+        SDL_Rect f = { ab.x + 3, ab.y + 3, ab.w - 6, ab.h - 6 };
+        SDL_RenderFillRect(ren, &f);
+    }
+    render_text(g, g->font_small, "Arrows", ab.x + ab.w + 6, ab.y,
                 (SDL_Color){ 200, 200, 200, 255 });
 
     SDL_Rect t;
@@ -3790,6 +3861,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
         }
 
     draw_piece_layer(g, ren, now);
+    draw_engine_arrows(g, ren);
     draw_annotations(g, ren);
 
     /* Board resize grip (three diagonal ticks in the bottom-right corner). */

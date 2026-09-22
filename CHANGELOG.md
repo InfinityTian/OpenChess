@@ -4,6 +4,31 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-09-22
+
+### Fixed
+- **Castling notation.** SAN generation wrote `O-O`/`O-O-O` without advancing the
+  write cursor, so a normal castle produced an *empty* move-list entry (and a
+  checking castle just `+`/`#`). Castling now displays correctly in the move
+  list, PGN export and engine lines.
+- **Cursor drift after window zoom/maximize/resize.** Input now inverts the exact
+  render transform the app installed (stored by `apply_render_scale`) instead of
+  re-querying SDL mid-event, and that transform is re-applied on every resize —
+  so clicking a square always matches what is drawn (previously clicks landed a
+  square or more away after maximizing).
+
+### Changed
+- **Solid arrows.** Board arrows (user and engine) are drawn as one filled
+  polygon; the shaft used to be parallel 1‑px lines that don't scale, which looked
+  hollow/striped at non‑1× zoom and had a thin head.
+- **Square highlights.** Right-click marks are now a translucent highlighted
+  square with a border instead of a thin circle.
+
+### Added
+- **Engine arrows + toggle.** Each engine line's first move is drawn as a green
+  arrow; an **Arrows** checkbox beside the Lines slider toggles it (persisted as
+  `engine_arrows`, default on).
+
 ## [1.2.0] - 2026-09-22
 
 ### Added
@@ -137,6 +162,7 @@ All notable changes to OpenChess. The format follows
 - Bilingual (English / 简体中文) documentation.
 - `install.sh` / `uninstall.sh` and macOS `.app`/`.dmg` packaging.
 
+[1.2.1]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.2.1
 [1.2.0]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.2.0
 [1.1.5]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.5
 [1.1.4]: https://github.com/InfinityTian/OpenChess/releases/tag/v1.1.4

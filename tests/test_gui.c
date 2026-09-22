@@ -85,6 +85,16 @@ static void sq_window(Gui *g, SDL_Renderer *ren, int sq, int *wx, int *wy)
     SDL_RenderLogicalToWindow(ren, bx, by, wx, wy);
 }
 
+/* Inverse of set_mouse using the transform the app installed. */
+static void tf_window(const Gui *g, float bx, float by, int *wx, int *wy)
+{
+    float s  = g->tf_scale > 0.0f ? g->tf_scale : 1.0f;
+    float ux = g->tf_ux > 0.0f ? g->tf_ux : 1.0f;
+    float uy = g->tf_uy > 0.0f ? g->tf_uy : 1.0f;
+    *wx = (int)lroundf((g->tf_vpx + bx) * s / ux);
+    *wy = (int)lroundf((g->tf_vpy + by) * s / uy);
+}
+
 int main(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -556,7 +566,7 @@ int main(void)
         sq_window(g, ren, e2, &wx, &wy);
         sq_window(g, ren, e4, &wx2, &wy2);
 
-        /* right-click toggles a circle */
+        /* right-click toggles a square highlight */
         SDL_Event cd = {0};
         cd.type = SDL_MOUSEBUTTONDOWN;
         cd.button.button = SDL_BUTTON_RIGHT;
@@ -565,8 +575,8 @@ int main(void)
         SDL_Event cu = cd;
         cu.type = SDL_MOUSEBUTTONUP;
         gui_handle_event(g, &cu);
-        if (g->ann_circle_count != 1 || g->ann_circles[0].sq != e2) {
-            fprintf(stderr, "right-click did not add a circle\n");
+        if (g->ann_square_count != 1 || g->ann_squares[0].sq != e2) {
+            fprintf(stderr, "right-click did not add a square\n");
             return 1;
         }
 
@@ -594,10 +604,61 @@ int main(void)
         ld.button.button = SDL_BUTTON_LEFT;
         ld.button.x = wx2; ld.button.y = wy2;
         gui_handle_event(g, &ld);
-        if (g->ann_circle_count != 0 || g->ann_arrow_count != 0) {
+        if (g->ann_square_count != 0 || g->ann_arrow_count != 0) {
             fprintf(stderr, "left click did not clear annotations\n");
             return 1;
         }
+        gui_render(g, ren);
+    }
+
+    /* ---- engine-arrow toggle (analysis panel checkbox) ---- */
+    {
+        bool before = g->engine_arrows;
+        int ax = g->panel_x + 78 + 8;
+        int ay = g->board_y + 52 + 8;
+        int wx, wy;
+        gui_render(g, ren);
+        SDL_RenderLogicalToWindow(ren, (float)ax, (float)ay, &wx, &wy);
+        SDL_Event td = {0};
+        td.type = SDL_MOUSEBUTTONDOWN;
+        td.button.button = SDL_BUTTON_LEFT;
+        td.button.x = wx; td.button.y = wy;
+        gui_handle_event(g, &td);
+        if (g->engine_arrows == before) {
+            fprintf(stderr, "engine arrows toggle did not flip\n");
+            return 1;
+        }
+        g->engine_arrows = before;
+        g->config_dirty = false;
+    }
+
+    /* ---- input must invert the installed transform exactly ---- */
+    {
+        gui_render(g, ren);              /* install the transform */
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        board_reset(&g->board);
+        g->state = game_state(&g->board);
+        g->flipped = false;
+        g->selected = -1;
+        int e2 = algebraic_to_sq("e2");
+        float bx = g->board_x + 4 * g->sq + g->sq / 2.0f;
+        float by = g->board_y + 6 * g->sq + g->sq / 2.0f;
+        int wx, wy;
+        tf_window(g, bx, by, &wx, &wy);
+        SDL_Event md = {0};
+        md.type = SDL_MOUSEBUTTONDOWN;
+        md.button.button = SDL_BUTTON_LEFT;
+        md.button.x = wx; md.button.y = wy;
+        gui_handle_event(g, &md);
+        if (g->selected != e2) {
+            fprintf(stderr, "transform click wrong (sel=%d want=%d vp=%.0f,%.0f "
+                    "win=(%d,%d) base=(%d,%d)\n",
+                    g->selected, e2, g->tf_vpx, g->tf_vpy, wx, wy,
+                    g->mouse.x, g->mouse.y);
+            return 1;
+        }
+        g->selected = -1;
         gui_render(g, ren);
     }
 

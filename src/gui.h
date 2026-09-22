@@ -30,7 +30,7 @@
 /* Right-mouse board annotations: highlighted squares and arrows. */
 #define MAX_ANN 32
 
-typedef struct { int sq;         Uint8 r, g, b; } AnnCircle;
+typedef struct { int sq;         Uint8 r, g, b; } AnnSquare;
 typedef struct { int from, to;   Uint8 r, g, b; } AnnArrow;
 
 typedef struct {
@@ -130,6 +130,7 @@ typedef struct {
     int    eng_hash;        /* transposition table MB */
     int    eng_time_ms;     /* 0 = unlimited */
     int    eng_depth;       /* 0 = unlimited */
+    bool   engine_arrows;   /* draw the engine's best move as a green arrow */
     bool   eng_slider_drag;
     int    eng_ctrl_focus;  /* Engine screen: -1 none, 0..3 control row */
     AiLine eng_lines[AI_MAX_LINES];
@@ -182,8 +183,8 @@ typedef struct {
     SDL_Point mouse;
 
     /* board annotations (right mouse) */
-    AnnCircle ann_circles[MAX_ANN];
-    int       ann_circle_count;
+    AnnSquare ann_squares[MAX_ANN];
+    int       ann_square_count;
     AnnArrow  ann_arrows[MAX_ANN];
     int       ann_arrow_count;
     bool      ann_dragging;
@@ -204,6 +205,12 @@ typedef struct {
     int    win_h;
     float  zoom;        /* whole-UI magnification (1.0 = base size) */
     float  pan_x, pan_y;/* temporary base-unit offset while grip-dragging */
+
+    /* The exact transform installed by apply_render_scale. Input inverts these
+     * values (not a live SDL query) so hit-testing always matches drawing. */
+    float  tf_scale;    /* device pixels per base unit (density * zoom) */
+    float  tf_vpx, tf_vpy;  /* viewport origin in base units */
+    float  tf_ux, tf_uy;    /* window points -> device pixels */
 
     /* board-corner drag state */
     bool   resizing_board;

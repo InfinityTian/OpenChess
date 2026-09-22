@@ -33,8 +33,8 @@ SDL2_net).
 
 ### Board annotations
 
-- **Right-click** a square to toggle a circle on it.
-- **Right-drag** from one square to another to draw an arrow.
+- **Right-click** a square to toggle a coloured highlight on it.
+- **Right-drag** from one square to another to draw a solid arrow.
 - Hold **Ctrl** (green) or **Alt** (blue) while right-clicking/dragging to
   change the colour; the default is amber.
 - Annotations are cleared when you make a move, press **Esc**, or left-click the
@@ -93,6 +93,8 @@ config file.
 - **Engine lines**: the panel has a **0–5 slider**. `0` closes the engine; `1–5`
   selects how many MultiPV lines are shown (each line lists the score and the
   start of the principal variation in SAN).
+- **Engine arrows**: the **Arrows** checkbox next to the slider (on by default)
+  draws each line's first move as a green arrow on the board.
 - **Engine controls** (Engine screen): **Lines** (same as the slider),
   **Threads** (CPU cores), **Hash** (MB), **Time** (ms, `0` = unlimited) and
   **Depth** (`0` = unlimited). On the Engine screen press **Tab** to move between
@@ -141,6 +143,7 @@ engine_threads = 1   # CPU cores
 engine_hash = 16     # transposition table MB
 engine_time = 0      # per-move / analysis time limit in ms (0 = unlimited)
 engine_depth = 0     # depth limit (0 = unlimited)
+engine_arrows = 1    # green engine arrow on the board (0/1)
 ```
 
 Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
@@ -216,6 +219,7 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
   的引擎，或输入自定义可执行文件路径（Tab 编辑，Enter 应用）。选择保存为 `engine`。
 - 分析模式下所选引擎会持续分析当前局面：棋盘左侧显示垂直**评估条**，面板中显示
   分数与搜索深度。每步走子、悔棋、重开或载入 FEN 后都会重新分析。
+- **引擎箭头**：勾选 “Arrows” 可用绿色箭头在棋盘上标出每条线路的首选着法（默认开）。
 - **引擎多线路**：面板中有一个 **0–5 滑块**。`0` 表示关闭引擎；`1–5` 表示显示的
   MultiPV 线路数量（每条显示分数与主变着法的 SAN 开头）。
 - **引擎控制**（Engine 界面）：**Lines**（同上）、**Threads**（CPU 核心）、
@@ -264,6 +268,7 @@ engine_threads = 1   # CPU 核心数
 engine_hash = 16     # 置换表 MB
 engine_time = 0      # 每步/分析时限（毫秒，0 = 不限）
 engine_depth = 0     # 深度限制（0 = 不限）
+engine_arrows = 1    # 棋盘绿色引擎箭头（0/1）
 ```
 
 可用环境变量覆盖：`OPENCHESS_ASSETS`、`OPENCHESS_CONFIG`。

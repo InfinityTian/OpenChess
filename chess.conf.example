@@ -23,3 +23,4 @@ engine_threads = 1   # CPU cores
 engine_hash = 16     # transposition table size in MB
 engine_time = 0      # time limit in ms (0 = unlimited)
 engine_depth = 0     # depth limit (0 = unlimited)
+engine_arrows = 1    # draw the engine's best move as a green arrow (0/1)

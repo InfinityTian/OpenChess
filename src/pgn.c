@@ -177,8 +177,10 @@ void move_to_san(const Board *before, Move m, char *out, size_t n)
 
     if (fl & FLAG_CASTLE_K) {
         snprintf(buf, sizeof buf, "O-O");
+        k = strlen(buf);
     } else if (fl & FLAG_CASTLE_Q) {
         snprintf(buf, sizeof buf, "O-O-O");
+        k = strlen(buf);
     } else {
         bool is_pawn = (p == WP || p == BP);
         bool is_capture = (fl & FLAG_CAPTURE) || (fl & FLAG_EP) || (before->board[to] != EMPTY);
