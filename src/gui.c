@@ -4,8 +4,10 @@
 #include "paths.h"
 #include "audio.h"
 #include <ctype.h>
+#include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <stdio.h>
 #include <math.h>
 #include <time.h>
@@ -19,6 +21,16 @@ static void engine_slider_rect(const Gui *g, SDL_Rect *track);
 static void engine_arrows_rect(const Gui *g, SDL_Rect *box);
 static int  eng_slider_from_x(const Gui *g, int mx);
 static int  clampi(int v, int lo, int hi);
+static void fen_refresh(Gui *g);
+static bool puzzle_human_move(Gui *g, Move m);
+static void puzzle_mistake(Gui *g);
+static void review_start(Gui *g);
+static void review_step(Gui *g);
+static void open_account(Gui *g);
+static void account_submit(Gui *g);
+static void account_rects(const Gui *g, SDL_Rect *box, SDL_Rect *user,
+                          SDL_Rect *pass, SDL_Rect btn[3]);
+static void render_account(Gui *g, SDL_Renderer *ren);
 
 /* ------------------------------------------------------------------ */
 /* style registries                                                    */
@@ -575,6 +587,43 @@ static Move *target_move(Gui *g, int to)
 static void recompute_state(Gui *g)
 {
     g->state = game_state(&g->board);
+    if (g->state != NO_GAME_OVER) return;
+    if (g->board.halfmove_clock >= 100) { g->state = FIFTY_MOVE_RULE; return; }
+    if (g->ply > 0 &&
+        board_repetitions(&g->board, g->before, g->ply) + 1 >= 3)
+        g->state = THREEFOLD_REPETITION;
+}
+
+/* True when the board still matches the current tree node (so tree ops apply). */
+static bool tree_synced(const Gui *g)
+{
+    return g->pgntree && g->tree_cur &&
+           board_rep_equal(&g->board, &g->tree_cur->board);
+}
+
+/* Make the linear arrays track the tree path root..tree_cur. */
+static void sync_from_tree(Gui *g)
+{
+    MoveNode *chain[MAX_PLY];
+    int d = 0;
+    for (MoveNode *n = g->tree_cur; n && n->parent && d < MAX_PLY; n = n->parent)
+        chain[d++] = n;
+
+    for (int i = 0; i < d; i++) {
+        MoveNode *n = chain[d - 1 - i];
+        g->before[i] = n->parent->board;
+        g->history[i] = n->move;
+        snprintf(g->move_san[i], 8, "%s", n->san);
+        g->path_nodes[i] = n;
+    }
+    g->path_len = d;
+    g->ply = d;
+    if (g->tree_cur) g->board = g->tree_cur->board;
+    clear_selection(g);
+    ann_clear(g);
+    g->promo_from = g->promo_to = -1;
+    recompute_state(g);
+    fen_refresh(g);
 }
 
 static void clear_anims(Gui *g)
@@ -617,6 +666,12 @@ static bool load_fen(Gui *g, const char *fen)
     g->board = b;
     g->ply = 0;
     reset_board_state(g);
+    if (g->mode == MODE_ANALYSIS) {
+        if (g->pgntree) mt_free(g->pgntree);
+        g->pgntree = mt_new_root(&g->board);
+        g->tree_cur = g->pgntree;
+        g->path_len = 0;
+    }
     fen_refresh(g);
     analysis_refresh(g);
     return true;
@@ -678,7 +733,8 @@ static void play_move_sound(Gui *g, const Board *pre, Move m)
         audio_play(winner == hero ? SND_GAME_WIN : SND_GAME_LOSE);
         return;
     }
-    if (g->state == STALEMATE || g->state == INSUFFICIENT_MATERIAL) {
+    if (g->state == STALEMATE || g->state == INSUFFICIENT_MATERIAL ||
+        g->state == THREEFOLD_REPETITION || g->state == FIFTY_MOVE_RULE) {
         audio_play(SND_GAME_DRAW);
         return;
     }
@@ -714,6 +770,11 @@ static void push_move(Gui *g, Move m)
     recompute_state(g);
     play_move_sound(g, &pre, m);
     fen_refresh(g);
+    if (g->mode == MODE_ANALYSIS && g->pgntree && g->tree_cur &&
+        board_rep_equal(&pre, &g->tree_cur->board)) {
+        g->tree_cur = mt_add_child(g->tree_cur, m, g->last_san);
+        sync_from_tree(g);
+    }
     analysis_refresh(g);
 }
 
@@ -728,6 +789,16 @@ static void set_msg(Gui *g, const char *fmt, const char *arg)
 
 static void do_undo(Gui *g)
 {
+    /* Analysis navigates the move tree (keeps variations). */
+    if (g->mode == MODE_ANALYSIS && g->pgntree && tree_synced(g)) {
+        if (g->tree_cur->parent) {
+            g->tree_cur = g->tree_cur->parent;
+            sync_from_tree(g);
+            analysis_refresh(g);
+        }
+        return;
+    }
+
     /* Singleplayer rewinds to the human's previous turn. */
     if (g->mode == MODE_SINGLE) {
         if (g->ai_thinking) { ai_stop_search(g->ai); g->ai_thinking = false; }
@@ -761,6 +832,12 @@ static void do_restart(Gui *g)
     reset_board_state(g);
     fen_refresh(g);
     if (g->mode == MODE_SINGLE && g->ai) ai_new_game(g->ai);
+    if (g->mode == MODE_ANALYSIS) {
+        if (g->pgntree) mt_free(g->pgntree);
+        g->pgntree = mt_new_root(&g->board);
+        g->tree_cur = g->pgntree;
+        g->path_len = 0;
+    }
     analysis_refresh(g);
 }
 
@@ -778,7 +855,16 @@ static bool apply_text_san(Gui *g)
 
     Move m;
     if (san_find(&g->board, buf, &m)) {
-        push_move(g, m);
+        if (g->mode == MODE_PUZZLE) {
+            if (!puzzle_human_move(g, m)) {
+                puzzle_mistake(g);
+                audio_play(SND_ILLEGAL);
+                set_msg(g, "Incorrect - try again", NULL);
+                return false;
+            }
+        } else {
+            push_move(g, m);
+        }
         g->input.len = 0;
         g->input.text[0] = 0;
         set_msg(g, "Moved %s", g->last_san);
@@ -845,6 +931,15 @@ static void try_move_to(Gui *g, int to)
     if (g->selected < 0) return;
     Move *m = target_move(g, to);
     if (!m) return;
+    if (g->mode == MODE_PUZZLE) {
+        Move attempt = *m;
+        if (puzzle_human_move(g, attempt)) { clear_selection(g); return; }
+        puzzle_mistake(g);
+        set_msg(g, "Incorrect - try again", NULL);
+        audio_play(SND_ILLEGAL);
+        clear_selection(g);
+        return;
+    }
     if (MOVE_FLAGS(*m) & FLAG_PROMO) {
         g->promo_from = MOVE_FROM(*m);
         g->promo_to = MOVE_TO(*m);
@@ -950,26 +1045,37 @@ static void open_settings_scene(Gui *g, Scene return_to);
 static void handle_settings_keydown(Gui *g, const SDL_KeyboardEvent *ke);
 static void handle_settings_mousedown(Gui *g);
 static void open_online(Gui *g, int matchmaking);
+static void open_openings(Gui *g);
+static void handle_openings_keydown(Gui *g, const SDL_KeyboardEvent *ke);
+static void handle_openings_mousedown(Gui *g);
+static void handle_openings_textinput(Gui *g, const SDL_TextInputEvent *te);
+static void render_openings(Gui *g, SDL_Renderer *ren);
 
 /* Menu entry indices (the runtime list may prepend "Continue"). */
 #define MENU_SINGLE     0
-#define MENU_ANALYSIS   1
-#define MENU_LOCAL      2
-#define MENU_ONLINE     3
-#define MENU_MATCH      4
-#define MENU_APPEARANCE 5
-#define MENU_SETTINGS   6
-#define MENU_QUIT       7
-#define MENU_COUNT      8
+#define MENU_PUZZLE     1
+#define MENU_ANALYSIS   2
+#define MENU_LOCAL      3
+#define MENU_ONLINE     4
+#define MENU_MATCH      5
+#define MENU_APPEARANCE 6
+#define MENU_SETTINGS   7
+#define MENU_OPENINGS   8
+#define MENU_ACCOUNT    9
+#define MENU_QUIT       10
+#define MENU_COUNT      11
 
 static const char *MENU_ITEMS[MENU_COUNT] = {
     "Singleplayer (vs AI)",
+    "Puzzles",
     "Analysis (both sides)",
     "Local Multiplayer",
     "Online Multiplayer",
     "Online Matchmaking",
     "Appearance (boards & pieces)",
     "Settings",
+    "Openings",
+    "Account",
     "Quit",
 };
 
@@ -1014,27 +1120,42 @@ static const AiLevel AI_LEVELS[3] = {
 };
 #define AI_LEVEL_COUNT 3
 
-#define MENU_TOP    200     /* below the title/subtitle */
-#define MENU_BOTTOM 110     /* reserved above the window bottom */
-#define MENU_ITEM_H 46
-#define MENU_GAP    12
+#define MENU_TOP          170   /* below the title/subtitle */
+#define MENU_AREA_BOTTOM  130   /* reserve for the message line + footer */
+#define MENU_ITEM_H       46    /* preferred (max) item height */
+#define MENU_GAP          8
 
-/* Responsive menu entries: fixed-size buttons centred vertically in the area
- * between the subtitle and the footer, never overlapping either. */
+/* Adaptive layout: shrink item height/gap so any number of entries fits the
+ * area between the subtitle and the footer without overlap. */
+static void menu_metrics(const Gui *g, int *ih, int *igap, int *istart)
+{
+    int n = menu_count(g);
+    if (n < 1) n = 1;
+    int gap = MENU_GAP;
+    int area = (g->win_h - MENU_AREA_BOTTOM) - MENU_TOP;
+    if (area < 1) area = 1;
+
+    int h = (area - (n - 1) * gap) / n;
+    if (h > MENU_ITEM_H) h = MENU_ITEM_H;
+    if (h < 26) { h = 26; gap = 4; }
+
+    int total = n * h + (n - 1) * gap;
+    int start = MENU_TOP + (area - total) / 2;
+    if (start < MENU_TOP) start = MENU_TOP;
+    *ih = h; *igap = gap; *istart = start;
+}
+
 static void menu_item_rect(const Gui *g, int i, SDL_Rect *r)
 {
+    int h, gap, start;
+    menu_metrics(g, &h, &gap, &start);
+
     r->w = 440;
     if (r->w > g->win_w - 160) r->w = g->win_w - 160;
     if (r->w < 240) r->w = 240;
-    r->h = MENU_ITEM_H;
+    r->h = h;
     r->x = (g->win_w - r->w) / 2;
-
-    int n = menu_count(g);
-    int total = n * r->h + (n - 1) * MENU_GAP;
-    int area  = (g->win_h - MENU_BOTTOM) - MENU_TOP;
-    int start = MENU_TOP + (area - total) / 2;
-    if (start < MENU_TOP) start = MENU_TOP;
-    r->y = start + i * (r->h + MENU_GAP);
+    r->y = start + i * (h + gap);
 }
 
 static void start_analysis(Gui *g)
@@ -1054,10 +1175,17 @@ static void start_analysis(Gui *g)
     g->fen_active = false;
     board_reset(&g->board);
     g->ply = 0;
+    g->review_on = false;
+    for (int i = 0; i < MAX_PLY; i++) g->review_cls[i] = RC_NONE;
+    if (g->pgntree) mt_free(g->pgntree);
     reset_board_state(g);
+    g->pgntree = mt_new_root(&g->board);
+    g->tree_cur = g->pgntree;
+    g->path_len = 0;
     fen_refresh(g);
     eval_restart(g);
     g->saved.valid = false;
+    g->override_result[0] = 0;
 }
 
 /* Snapshot the current game so the menu can offer to resume it. Network games
@@ -1066,6 +1194,7 @@ static void save_game(Gui *g)
 {
     if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE) {
         g->saved.valid = false;
+        g->override_result[0] = 0;
         return;
     }
 
@@ -1159,7 +1288,7 @@ static void go_to_menu(Gui *g)
     g->net_waiting = false;
     g->net_sent_ply = 0;
     eval_stop(g);
-    g->menu_index = g->saved.valid ? 0 : 1;
+    g->menu_index = g->saved.valid ? 0 : MENU_ANALYSIS;
     g->scene = SCENE_MENU;
 }
 
@@ -1202,6 +1331,7 @@ static void start_single(Gui *g)
         set_msg(g, "Stockfish not found", NULL);
     }
     g->saved.valid = false;
+    g->override_result[0] = 0;
 }
 
 static void enter_local_game(Gui *g, Color side)
@@ -1243,6 +1373,7 @@ static void enter_local_game(Gui *g, Color side)
                                  : "Connected - you are Black", NULL);
     }
     g->saved.valid = false;
+    g->override_result[0] = 0;
 }
 
 static void promo_rects(Gui *g, SDL_Rect out[4])
@@ -1307,8 +1438,9 @@ void gui_load_config(Gui *g, const char *path)
     char vboardsize[16] = "";
     char vthreads[16] = "", vhash[16] = "", vmultipv[16] = "";
     char vtime[16] = "", vdepth[16] = "", varrows[8] = "";
-    char vmaxfps[16] = "", vsound[8] = "";
+    char vmaxfps[16] = "", vsound[8] = "", vpuzzle[16] = "";
     char vonline[128] = "", vnick[32] = "";
+    char vaccount[80] = "", vauser[40] = "";
     while (fgets(line, sizeof line, f)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
@@ -1338,8 +1470,11 @@ void gui_load_config(Gui *g, const char *path)
         else if (strcmp(key, "engine_arrows") == 0) snprintf(varrows, sizeof varrows, "%s", val);
         else if (strcmp(key, "max_fps") == 0) snprintf(vmaxfps, sizeof vmaxfps, "%s", val);
         else if (strcmp(key, "sound") == 0) snprintf(vsound, sizeof vsound, "%s", val);
+        else if (strcmp(key, "puzzle_rating") == 0) snprintf(vpuzzle, sizeof vpuzzle, "%s", val);
         else if (strcmp(key, "online_server") == 0) snprintf(vonline, sizeof vonline, "%s", rawval);
         else if (strcmp(key, "nick") == 0) snprintf(vnick, sizeof vnick, "%s", rawval);
+        else if (strcmp(key, "account_token") == 0) snprintf(vaccount, sizeof vaccount, "%s", rawval);
+        else if (strcmp(key, "account_user") == 0) snprintf(vauser, sizeof vauser, "%s", rawval);
     }
     fclose(f);
 
@@ -1369,8 +1504,11 @@ void gui_load_config(Gui *g, const char *path)
     if (varrows[0])  g->engine_arrows = (atoi(varrows) != 0);
     if (vmaxfps[0])  { int n = atoi(vmaxfps); if (n >= 0) g->max_fps = n; }
     if (vsound[0])   g->sound = (atoi(vsound) != 0);
+    if (vpuzzle[0])  { int n = atoi(vpuzzle); if (n >= 400) g->puzzle_rating = n; }
     if (vonline[0])  snprintf(g->online_url, sizeof g->online_url, "%s", vonline);
     if (vnick[0])    snprintf(g->online_nick, sizeof g->online_nick, "%s", vnick);
+    if (vaccount[0]) snprintf(g->account_token, sizeof g->account_token, "%s", vaccount);
+    if (vauser[0])   snprintf(g->account_user, sizeof g->account_user, "%s", vauser);
 }
 
 /* Persist the current look to chess.conf (only when it changed). */
@@ -1398,9 +1536,12 @@ void gui_save_config(Gui *g)
     fprintf(f, "engine_arrows = %d\n", g->engine_arrows ? 1 : 0);
     fprintf(f, "sound = %d\n", g->sound ? 1 : 0);
     fprintf(f, "max_fps = %d\n", g->max_fps);
+    fprintf(f, "puzzle_rating = %d\n", g->puzzle_rating);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     if (g->online_url[0]) fprintf(f, "online_server = %s\n", g->online_url);
     if (g->online_nick[0]) fprintf(f, "nick = %s\n", g->online_nick);
+    if (g->account_token[0]) fprintf(f, "account_token = %s\n", g->account_token);
+    if (g->account_user[0]) fprintf(f, "account_user = %s\n", g->account_user);
     fclose(f);
 }
 
@@ -1465,7 +1606,7 @@ Gui *gui_create(void)
     layout_base(g);
     g->scene = SCENE_MENU;
     g->mode = MODE_ANALYSIS;
-    g->menu_index = 1;          /* Analysis is the default selection */
+    g->menu_index = MENU_ANALYSIS;  /* Analysis is the default */
     g->selected = -1;
     g->promo_from = g->promo_to = -1;
     g->input.active = false;
@@ -1496,6 +1637,17 @@ Gui *gui_create(void)
     snprintf(g->net_port, sizeof g->net_port, "7777");
     snprintf(g->online_url, sizeof g->online_url, "ws://127.0.0.1:7681/ws");
     snprintf(g->online_nick, sizeof g->online_nick, "Player");
+    g->puzzle_band = 0;         /* Around my rating */
+    g->puzzle_theme = 0;        /* any */
+    g->puzzle_rating = 1500;
+    g->puzzles = puzzles_load(path_puzzles_file());
+    {
+        char bkpath[1100];
+        snprintf(bkpath, sizeof bkpath, "%s/openings.tsv", path_assets());
+        g->book = opening_load(bkpath);
+    }
+    g->review_ai = NULL;
+    g->pgntree = NULL;
     const char *ep = ai_find_engine(NULL);
     if (ep) snprintf(g->engine_path, sizeof g->engine_path, "%s", ep);
     board_reset(&g->board);
@@ -1553,6 +1705,10 @@ void gui_destroy(Gui *g)
         transport_close(g->net);
     }
     if (g->online) online_destroy(g->online);
+    puzzles_free(g->puzzles);
+    opening_free(g->book);
+    if (g->review_ai) ai_stop(g->review_ai);
+    if (g->pgntree) mt_free(g->pgntree);
     destroy_piece_textures(g);
     if (g->tex_board) SDL_DestroyTexture(g->tex_board);
     destroy_thumbs(&g->board_thumbs, g->boards.count);
@@ -1630,6 +1786,15 @@ static void menu_activate(Gui *g)
             g->menu_msg[0] = 0;
             g->scene = SCENE_SINGLE_SETUP;
             break;
+        case MENU_PUZZLE:
+            if (!g->puzzles) {
+                snprintf(g->menu_msg, sizeof g->menu_msg,
+                         "No puzzles found - run scripts/import_puzzles.py");
+                break;
+            }
+            g->menu_msg[0] = 0;
+            g->scene = SCENE_PUZZLE_SETUP;
+            break;
         case MENU_ANALYSIS: start_analysis(g); break;
         case MENU_LOCAL:
             if (!net_available()) {
@@ -1662,6 +1827,23 @@ static void menu_activate(Gui *g)
             break;
         case MENU_APPEARANCE: open_appearance(g, SCENE_MENU); break;
         case MENU_SETTINGS: open_settings_scene(g, SCENE_MENU); break;
+        case MENU_OPENINGS:
+            if (!g->book || opening_line_count(g->book) == 0) {
+                snprintf(g->menu_msg, sizeof g->menu_msg,
+                         "No opening book - run scripts/import_openings.sh");
+                break;
+            }
+            open_openings(g);
+            break;
+        case MENU_ACCOUNT:
+            if (!net_ws_available()) {
+                snprintf(g->menu_msg, sizeof g->menu_msg,
+                         "Online play unavailable (install libwebsockets)");
+                break;
+            }
+            open_online(g, 0);
+            open_account(g);
+            break;
         case MENU_QUIT: g->quit = true; break;
         default:
             snprintf(g->menu_msg, sizeof g->menu_msg,
@@ -1771,6 +1953,268 @@ static void handle_setup_mousedown(Gui *g)
         if (pt_in(&levels[i], p.x, p.y)) { g->setup_field = 1; g->setup_level = i; return; }
     if (pt_in(&start, p.x, p.y)) { setup_begin(g); return; }
     if (pt_in(&back, p.x, p.y)) { g->scene = SCENE_MENU; return; }
+}
+
+/* ---- puzzles ---- */
+
+/* rmin/rmax == 0 means "auto": a window around the user's puzzle rating. */
+typedef struct { const char *label; int rmin, rmax; } PuzzleBand;
+static const PuzzleBand PUZZLE_BANDS[] = {
+    { "Around my rating", 0, 0 },
+    { "Under 1000",   0,  999 },
+    { "1000-1400", 1000, 1400 },
+    { "1400-1800", 1400, 1800 },
+    { "1800-2200", 1800, 2200 },
+    { "2200+",     2200, 4000 },
+};
+#define PUZZLE_BAND_COUNT ((int)(sizeof PUZZLE_BANDS / sizeof PUZZLE_BANDS[0]))
+
+static const char *const PUZZLE_THEMES[] = {
+    "Any", "mateIn1", "mateIn2", "mateIn3", "fork", "pin", "skewer",
+    "discoveredAttack", "deflection", "attraction", "sacrifice",
+    "defensiveMove", "kingsideAttack", "queensideAttack", "endgame",
+};
+#define PUZZLE_THEME_COUNT ((int)(sizeof PUZZLE_THEMES / sizeof PUZZLE_THEMES[0]))
+
+static void puzzle_split_moves(Gui *g)
+{
+    g->puzzle_nmoves = 0;
+    const char *p = g->puzzle_cur.moves;
+    while (*p && g->puzzle_nmoves < 32) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        int i = 0;
+        while (*p && *p != ' ' && i < 5) g->puzzle_moves[g->puzzle_nmoves][i++] = *p++;
+        g->puzzle_moves[g->puzzle_nmoves][i] = 0;
+        if (i >= 4) g->puzzle_nmoves++;
+    }
+}
+
+/* Elo update: expected score from the user vs. puzzle rating; K scales down a
+ * little as the rating rises so it stays responsive at low ratings. */
+static void puzzle_score(Gui *g, bool solved)
+{
+    double ur = g->puzzle_rating;
+    double pr = g->puzzle_cur.rating;
+    double exp = 1.0 / (1.0 + pow(10.0, (pr - ur) / 400.0));
+    double K = ur < 2000.0 ? 40.0 : 24.0;
+    double nu = ur + K * ((solved ? 1.0 : 0.0) - exp);
+    if (nu < 400) nu = 400;
+    if (nu > 3000) nu = 3000;
+    g->puzzle_rating = (int)(nu + 0.5);
+    g->puzzle_delta = g->puzzle_rating - (int)(ur + 0.5);
+    g->config_dirty = true;
+    if (g->online && online_logged_in(g->online))
+        online_puzzle_result(g->online, g->puzzle_cur.rating, solved);
+}
+
+/* A wrong attempt: score the puzzle as incorrect once (rating drops), but keep
+ * letting the player retry so they can learn from the mistake. */
+static void puzzle_mistake(Gui *g)
+{
+    if (g->puzzle_counted) return;
+    g->puzzle_counted = true;
+    puzzle_score(g, false);
+}
+
+static void open_puzzle(Gui *g)
+{
+    if (!g->puzzles) return;
+    const PuzzleBand *b = &PUZZLE_BANDS[g->puzzle_band];
+    int rmin = b->rmin, rmax = b->rmax;
+    if (rmin == 0 && rmax == 0) {           /* "Around my rating" */
+        rmin = g->puzzle_rating - 200;
+        rmax = g->puzzle_rating + 200;
+        if (rmin < 400) rmin = 400;
+        if (rmax > 4000) rmax = 4000;
+    }
+    const char *theme = g->puzzle_theme > 0 ? PUZZLE_THEMES[g->puzzle_theme] : NULL;
+    if (!puzzles_pick(g->puzzles, rmin, rmax, theme, &g->puzzle_cur)) {
+        snprintf(g->menu_msg, sizeof g->menu_msg, "No puzzle matches that filter");
+        return;
+    }
+    puzzle_split_moves(g);
+    if (g->puzzle_nmoves < 2) { set_msg(g, "Bad puzzle data", NULL); return; }
+
+    Board b2;
+    if (!fen_parse(g->puzzle_cur.fen, &b2)) {
+        set_msg(g, "Bad puzzle FEN", NULL);
+        return;
+    }
+
+    g->mode = MODE_PUZZLE;
+    g->scene = SCENE_GAME;
+    g->flipped = false;
+    g->auto_flip = false;
+    g->puzzle_done = false;
+    g->puzzle_failed = false;
+    g->puzzle_counted = false;
+    g->puzzle_delta = 0;
+    g->input.len = 0; g->input.text[0] = 0; g->input.active = false;
+    g->fen_active = false;
+    g->saved.valid = false;
+    g->override_result[0] = 0;
+
+    g->board = b2;
+    g->ply = 0;
+    reset_board_state(g);
+    fen_refresh(g);
+
+    Move m;
+    if (uci_to_move(&g->board, g->puzzle_moves[0], &m)) push_move(g, m);
+    g->puzzle_step = 1;
+    g->human_color = g->board.side;
+    g->flipped = (g->human_color == BLACK);
+    snprintf(g->white_name, sizeof g->white_name, "Puzzle");
+    snprintf(g->black_name, sizeof g->black_name, "You");
+}
+
+static bool puzzle_human_move(Gui *g, Move m)
+{
+    if (g->mode != MODE_PUZZLE) return false;
+    if (g->puzzle_done || g->puzzle_failed) return false;
+    if (g->puzzle_step >= g->puzzle_nmoves) return false;
+
+    Move want;
+    if (!uci_to_move(&g->board, g->puzzle_moves[g->puzzle_step], &want)) return false;
+    if (MOVE_FROM(m) != MOVE_FROM(want) || MOVE_TO(m) != MOVE_TO(want))
+        return false;
+
+    push_move(g, want);
+    g->puzzle_step++;
+    if (g->puzzle_step < g->puzzle_nmoves) {
+        Move r;
+        if (uci_to_move(&g->board, g->puzzle_moves[g->puzzle_step], &r)) {
+            push_move(g, r);
+            g->puzzle_step++;
+        }
+    }
+    if (g->puzzle_step >= g->puzzle_nmoves) {
+        g->puzzle_done = true;
+        if (!g->puzzle_counted) puzzle_score(g, true);
+        set_msg(g, "Solved!", NULL);
+    }
+    return true;
+}
+
+static void puzzle_hint(Gui *g)
+{
+    if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
+    if (g->puzzle_step < g->puzzle_nmoves)
+        set_msg(g, "Hint: %s", g->puzzle_moves[g->puzzle_step]);
+}
+
+static void puzzle_reveal(Gui *g)
+{
+    if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
+    char line[160];
+    line[0] = '\0';
+    for (int i = g->puzzle_step; i < g->puzzle_nmoves; i++) {
+        if (line[0]) strncat(line, " ", sizeof line - strlen(line) - 1);
+        strncat(line, g->puzzle_moves[i], sizeof line - strlen(line) - 1);
+    }
+    g->puzzle_failed = true;
+    if (!g->puzzle_counted) {
+        g->puzzle_counted = true;
+        puzzle_score(g, false);
+    }
+    set_msg(g, "Answer: %s", line);
+}
+
+static void puzzle_setup_rects(const Gui *g, SDL_Rect bands[PUZZLE_BAND_COUNT],
+                               SDL_Rect *theme, SDL_Rect *start, SDL_Rect *back)
+{
+    int bw = 150, bh = 46, gap = 12;
+    int total = PUZZLE_BAND_COUNT * bw + (PUZZLE_BAND_COUNT - 1) * gap;
+    int x0 = (g->win_w - total) / 2;
+    for (int i = 0; i < PUZZLE_BAND_COUNT; i++)
+        bands[i] = (SDL_Rect){ x0 + i * (bw + gap), 300, bw, bh };
+    theme->w = 320; theme->h = 44; theme->x = g->win_w / 2 - 160; theme->y = 400;
+    start->w = 150; start->h = 46; start->x = g->win_w / 2 - 160; start->y = 520;
+    back->w  = 150; back->h  = 46; back->x  = g->win_w / 2 + 10;  back->y  = 520;
+}
+
+static void handle_puzzle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
+{
+    SDL_Keycode k = ke->keysym.sym;
+    bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+    if (ctrl && k == SDLK_q) { g->quit = true; return; }
+    if (k == SDLK_ESCAPE) { g->scene = SCENE_MENU; return; }
+    if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_TAB) { g->setup_field ^= 1; return; }
+    if (k == SDLK_LEFT || k == SDLK_RIGHT) {
+        int d = (k == SDLK_RIGHT) ? 1 : -1;
+        if (g->setup_field == 0)
+            g->puzzle_band = (g->puzzle_band + d + PUZZLE_BAND_COUNT) % PUZZLE_BAND_COUNT;
+        else
+            g->puzzle_theme = (g->puzzle_theme + d + PUZZLE_THEME_COUNT) % PUZZLE_THEME_COUNT;
+        return;
+    }
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) open_puzzle(g);
+}
+
+static void handle_puzzle_setup_mousedown(Gui *g)
+{
+    SDL_Rect bands[PUZZLE_BAND_COUNT], theme, start, back;
+    puzzle_setup_rects(g, bands, &theme, &start, &back);
+    SDL_Point p = g->mouse;
+    for (int i = 0; i < PUZZLE_BAND_COUNT; i++)
+        if (pt_in(&bands[i], p.x, p.y)) { g->setup_field = 0; g->puzzle_band = i; return; }
+    if (pt_in(&theme, p.x, p.y)) {
+        g->setup_field = 1;
+        g->puzzle_theme = (g->puzzle_theme + 1) % PUZZLE_THEME_COUNT;
+        return;
+    }
+    if (pt_in(&start, p.x, p.y)) { open_puzzle(g); return; }
+    if (pt_in(&back, p.x, p.y)) { g->scene = SCENE_MENU; return; }
+}
+
+static void render_puzzle_setup(Gui *g, SDL_Renderer *ren)
+{
+    set_render_color(ren, 22, 26, 34);
+    SDL_RenderClear(ren);
+    render_text_centered(g, g->font_ui, "Puzzles", g->win_w / 2, 150,
+                         (SDL_Color){ 235, 225, 200, 255 });
+
+    SDL_Rect bands[PUZZLE_BAND_COUNT], theme, start, back;
+    puzzle_setup_rects(g, bands, &theme, &start, &back);
+
+    render_text_centered(g, g->font_small, "Rating", g->win_w / 2, 268,
+                         (SDL_Color){ 150, 180, 200, 255 });
+    for (int i = 0; i < PUZZLE_BAND_COUNT; i++) {
+        bool sel = (g->puzzle_band == i);
+        draw_rect(ren, &bands[i], sel ? 70 : 40, sel ? 80 : 50, sel ? 100 : 60, true);
+        if (sel && g->setup_field == 0) draw_rect(ren, &bands[i], 90, 150, 200, false);
+        render_text_centered(g, g->font_ui, PUZZLE_BANDS[i].label,
+                             bands[i].x + bands[i].w / 2, bands[i].y + 12,
+                             (SDL_Color){ 235, 235, 235, 255 });
+    }
+
+    render_text_centered(g, g->font_small, "Theme", g->win_w / 2, 372,
+                         (SDL_Color){ 150, 180, 200, 255 });
+    draw_rect(ren, &theme, 40, 44, 54, true);
+    if (g->setup_field == 1) draw_rect(ren, &theme, 90, 150, 200, false);
+    char tl[64];
+    snprintf(tl, sizeof tl, "<  %s  >", PUZZLE_THEMES[g->puzzle_theme]);
+    render_text_centered(g, g->font_ui, tl, theme.x + theme.w / 2, theme.y + 8,
+                         (SDL_Color){ 235, 235, 235, 255 });
+
+    draw_rect(ren, &start, 55, 90, 60, true);
+    draw_rect(ren, &start, 120, 120, 130, false);
+    render_text_centered(g, g->font_ui, "Start", start.x + start.w / 2, start.y + 10,
+                         (SDL_Color){ 235, 235, 235, 255 });
+    draw_rect(ren, &back, 45, 45, 50, true);
+    draw_rect(ren, &back, 120, 120, 130, false);
+    render_text_centered(g, g->font_ui, "Back", back.x + back.w / 2, back.y + 10,
+                         (SDL_Color){ 235, 235, 235, 255 });
+
+    char info[128];
+    snprintf(info, sizeof info, "%d puzzles loaded    Your puzzle rating: %d",
+             puzzles_count(g->puzzles), g->puzzle_rating);
+    render_text_centered(g, g->font_small, info, g->win_w / 2, 620,
+                         (SDL_Color){ 150, 210, 230, 255 });
+    if (g->menu_msg[0])
+        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 650,
+                             (SDL_Color){ 255, 170, 120, 255 });
 }
 
 /* ---- local multiplayer host/join ---- */
@@ -1890,7 +2334,8 @@ static void open_online(Gui *g, int matchmaking)
     g->menu_msg[0] = 0;
     g->msg[0] = 0;
     if (net_ws_available() && g->online_url[0])
-        g->online = online_create(g->online_url, g->online_nick, "");
+        g->online = online_create(g->online_url, g->online_nick, "", g->account_token);
+    if (g->online) online_set_rated(g->online, g->online_rated);
     g->scene = SCENE_ONLINE;
 }
 
@@ -1901,7 +2346,8 @@ static bool online_ensure(Gui *g)
     if (g->online && online_state(g->online) != ONLINE_CLOSED) return true;
     online_close(g);
     if (!g->online_url[0]) return false;
-    g->online = online_create(g->online_url, g->online_nick, "");
+    g->online = online_create(g->online_url, g->online_nick, "", g->account_token);
+    if (g->online) online_set_rated(g->online, g->online_rated);
     return g->online != NULL;
 }
 
@@ -2010,6 +2456,7 @@ static void enter_online_game(Gui *g)
     g->online_over = false;
     g->draw_offered = false;
     g->saved.valid = false;
+    g->override_result[0] = 0;
 }
 
 static void online_lobby_tick(Gui *g)
@@ -2023,6 +2470,21 @@ static void online_lobby_tick(Gui *g)
         if (ev == ONLINE_EV_START || ev == ONLINE_EV_SPECTATE) {
             enter_online_game(g);
             return;
+        }
+        if (ev == ONLINE_EV_AUTH) {
+            if (online_logged_in(g->online)) {
+                snprintf(g->account_token, sizeof g->account_token, "%s",
+                         online_auth_token(g->online));
+                snprintf(g->account_user, sizeof g->account_user, "%s",
+                         online_username(g->online));
+                g->puzzle_rating = online_puzzle_rating(g->online);
+                g->config_dirty = true;
+                set_msg(g, "Logged in as %s", online_username(g->online));
+                g->account_open = false;
+            } else if (g->account_open) {
+                snprintf(g->menu_msg, sizeof g->menu_msg, "Login failed: %s",
+                         online_last_error(g->online));
+            }
         }
     }
 }
@@ -2060,6 +2522,7 @@ static void online_tick(Gui *g)
         } else if (ev == ONLINE_EV_GAMEOVER) {
             const char *r = online_result(g->online);
             g->online_over = true;
+            if (r && *r) snprintf(g->override_result, sizeof g->override_result, "%s", r);
             set_msg(g, "Game over: %s", r && *r ? r : "result");
         } else if (ev == ONLINE_EV_OPPONENT_LEFT) {
             set_msg(g, "Opponent disconnected - waiting for them to return", NULL);
@@ -2075,6 +2538,17 @@ static void online_tick(Gui *g)
             set_msg(g, "Draw offer declined", NULL);
         } else if (ev == ONLINE_EV_SPECTATE) {
             enter_online_game(g);
+        } else if (ev == ONLINE_EV_AUTH) {
+            if (online_logged_in(g->online)) {
+                g->puzzle_rating = online_puzzle_rating(g->online);
+                snprintf(g->account_token, sizeof g->account_token, "%s",
+                         online_auth_token(g->online));
+                g->config_dirty = true;
+                char rb[48];
+                snprintf(rb, sizeof rb, "Rating updated: PvP %d",
+                         online_pvp_rating(g->online));
+                set_msg(g, rb, NULL);
+            }
         }
     }
 
@@ -2141,8 +2615,40 @@ static void handle_online_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     SDL_Keycode k = ke->keysym.sym;
     bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
 
+    if (g->account_open) {
+        bool logged = g->online && online_logged_in(g->online);
+        if (k == SDLK_ESCAPE) { g->account_open = false; return; }
+        if (logged) {
+            if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+                online_logout(g->online);
+                g->account_open = false;
+            }
+            return;
+        }
+        if (k == SDLK_TAB || k == SDLK_UP || k == SDLK_DOWN) { g->account_focus ^= 1; return; }
+        if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+            char *d = g->account_focus == 0 ? g->account_user_in : g->account_pass_in;
+            size_t n = strlen(d);
+            if (n) d[n - 1] = '\0';
+            return;
+        }
+        if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { account_submit(g); return; }
+        return;
+    }
+
     if (ctrl && k == SDLK_q) { g->quit = true; return; }
     if (k == SDLK_ESCAPE) { online_back(g); return; }
+    if (k == SDLK_l) { open_account(g); return; }
+    if (k == SDLK_o) {
+        if (g->online && online_logged_in(g->online)) online_logout(g->online);
+        return;
+    }
+    if (k == SDLK_r) {
+        g->online_rated = !g->online_rated;
+        if (g->online) online_set_rated(g->online, g->online_rated);
+        set_msg(g, g->online_rated ? "Rated game" : "Casual game", NULL);
+        return;
+    }
     if (k == SDLK_TAB || k == SDLK_DOWN) { online_cycle_focus(g, 1); return; }
     if (k == SDLK_UP) { online_cycle_focus(g, -1); return; }
 
@@ -2177,6 +2683,20 @@ static void handle_online_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
 static void handle_online_textinput(Gui *g, const SDL_TextInputEvent *te)
 {
+    if (g->account_open) {
+        if (g->online && online_logged_in(g->online)) return;
+        char *d = g->account_focus == 0 ? g->account_user_in : g->account_pass_in;
+        size_t cap = g->account_focus == 0 ? sizeof g->account_user_in
+                                           : sizeof g->account_pass_in;
+        size_t len = strlen(d);
+        for (const char *p = te->text; *p; p++) {
+            if (len + 1 >= cap) break;
+            if (*p >= 0x21 && *p < 0x7f) d[len++] = *p;
+        }
+        d[len] = '\0';
+        return;
+    }
+
     char *dst = NULL;
     size_t cap = 0;
     int room_field = (g->online_ui == 0 && g->online_focus == 2);
@@ -2199,9 +2719,35 @@ static void handle_online_textinput(Gui *g, const SDL_TextInputEvent *te)
 
 static void handle_online_mousedown(Gui *g)
 {
+    SDL_Point p = g->mouse;
+
+    if (g->account_open) {
+        SDL_Rect box, user, pass, btn[3];
+        account_rects(g, &box, &user, &pass, btn);
+        bool logged = g->online && online_logged_in(g->online);
+        if (logged) {
+            if (pt_in(&btn[0], p.x, p.y)) {
+                online_logout(g->online);
+                g->account_open = false;
+                return;
+            }
+            if (pt_in(&btn[2], p.x, p.y)) { g->account_open = false; return; }
+            return;
+        }
+        if (pt_in(&user, p.x, p.y)) { g->account_focus = 0; return; }
+        if (pt_in(&pass, p.x, p.y)) { g->account_focus = 1; return; }
+        if (pt_in(&btn[0], p.x, p.y)) { account_submit(g); return; }
+        if (pt_in(&btn[1], p.x, p.y)) {
+            g->account_register = !g->account_register;
+            g->account_focus = 0;
+            return;
+        }
+        if (pt_in(&btn[2], p.x, p.y)) { g->account_open = false; return; }
+        return;
+    }
+
     SDL_Rect url, time_rc, code, prim, sec, spec, back;
     online_rects(g, &url, &time_rc, &code, &prim, &sec, &spec, &back);
-    SDL_Point p = g->mouse;
 
     if (pt_in(&url, p.x, p.y)) { g->online_focus = 0; return; }
     if (pt_in(&time_rc, p.x, p.y)) { g->online_focus = 1; online_cycle_time(g, 1); return; }
@@ -2215,6 +2761,132 @@ static void handle_online_mousedown(Gui *g)
         if (pt_in(&prim, p.x, p.y)) { g->online_focus = 2; online_primary(g); return; }
         if (pt_in(&sec, p.x, p.y)) { g->online_focus = 3; online_secondary(g); return; }
         if (pt_in(&back, p.x, p.y)) { g->online_focus = 4; online_back(g); return; }
+    }
+}
+
+/* ---- account modal ---- */
+
+static void account_rects(const Gui *g, SDL_Rect *box, SDL_Rect *user,
+                          SDL_Rect *pass, SDL_Rect btn[3])
+{
+    int bw = 460, bh = 280;
+    int x = (g->win_w - bw) / 2, y = (g->win_h - bh) / 2;
+    *box  = (SDL_Rect){ x, y, bw, bh };
+    *user = (SDL_Rect){ x + 30, y + 72, bw - 60, 40 };
+    *pass = (SDL_Rect){ x + 30, y + 138, bw - 60, 40 };
+    int sw = 130, gap = 14, total = 3 * sw + 2 * gap;
+    int sx = x + (bw - total) / 2, by = y + bh - 58;
+    for (int i = 0; i < 3; i++)
+        btn[i] = (SDL_Rect){ sx + i * (sw + gap), by, sw, 40 };
+}
+
+static void open_account(Gui *g)
+{
+    g->account_open = true;
+    g->account_register = false;
+    g->account_focus = 0;
+    g->account_user_in[0] = '\0';
+    g->account_pass_in[0] = '\0';
+    if (g->account_user[0])
+        snprintf(g->account_user_in, sizeof g->account_user_in, "%s", g->account_user);
+}
+
+static void account_submit(Gui *g)
+{
+    if (!online_ensure(g)) {
+        snprintf(g->menu_msg, sizeof g->menu_msg, "Not connected");
+        return;
+    }
+    if (g->account_register)
+        online_register(g->online, g->account_user_in, g->account_pass_in);
+    else
+        online_login(g->online, g->account_user_in, g->account_pass_in);
+}
+
+static void render_account(Gui *g, SDL_Renderer *ren)
+{
+    if (!g->account_open) return;
+    SDL_Rect box, user, pass, btn[3];
+    account_rects(g, &box, &user, &pass, btn);
+
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 150);
+    SDL_Rect full = { 0, 0, g->win_w, g->win_h };
+    SDL_RenderFillRect(ren, &full);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+
+    draw_rect(ren, &box, 40, 44, 52, true);
+    draw_rect(ren, &box, 120, 130, 150, false);
+
+    bool logged = g->online && online_logged_in(g->online);
+    if (logged) {
+        render_text(g, g->font_ui, "Account", box.x + 20, box.y + 16,
+                    (SDL_Color){ 235, 235, 235, 255 });
+        char line[128];
+        snprintf(line, sizeof line, "Logged in as %s", online_username(g->online));
+        render_text(g, g->font_ui, line, box.x + 30, box.y + 78,
+                    (SDL_Color){ 220, 230, 240, 255 });
+        snprintf(line, sizeof line, "PvP %d      Puzzle %d",
+                 online_pvp_rating(g->online), online_puzzle_rating(g->online));
+        render_text(g, g->font_small, line, box.x + 30, box.y + 116,
+                    (SDL_Color){ 150, 210, 230, 255 });
+        snprintf(line, sizeof line, "Offline profile: %s   (puzzle %d)",
+                 g->online_nick[0] ? g->online_nick : "Player", g->puzzle_rating);
+        render_text(g, g->font_small, line, box.x + 30, box.y + 142,
+                    (SDL_Color){ 150, 160, 175, 255 });
+
+        draw_rect(ren, &btn[0], 55, 90, 60, true);
+        draw_rect(ren, &btn[0], 120, 120, 130, false);
+        render_text_centered(g, g->font_small, "Log out",
+                             btn[0].x + btn[0].w / 2, btn[0].y + 11,
+                             (SDL_Color){ 235, 235, 235, 255 });
+        draw_rect(ren, &btn[2], 45, 45, 50, true);
+        draw_rect(ren, &btn[2], 120, 120, 130, false);
+        render_text_centered(g, g->font_small, "Close",
+                             btn[2].x + btn[2].w / 2, btn[2].y + 11,
+                             (SDL_Color){ 235, 235, 235, 255 });
+        return;
+    }
+
+    render_text(g, g->font_ui,
+                g->account_register ? "Create account" : "Log in",
+                box.x + 20, box.y + 16, (SDL_Color){ 235, 235, 235, 255 });
+    render_text(g, g->font_small, "User", user.x, user.y - 20,
+                (SDL_Color){ 180, 180, 190, 255 });
+    draw_rect(ren, &user, 30, 30, 32, true);
+    draw_rect(ren, &user, g->account_focus == 0 ? 90 : 60,
+              g->account_focus == 0 ? 140 : 60, g->account_focus == 0 ? 200 : 70, false);
+    render_text(g, g->font_small, g->account_user_in, user.x + 8, user.y + 11,
+                (SDL_Color){ 225, 225, 230, 255 });
+
+    render_text(g, g->font_small, "Password", pass.x, pass.y - 20,
+                (SDL_Color){ 180, 180, 190, 255 });
+    draw_rect(ren, &pass, 30, 30, 32, true);
+    draw_rect(ren, &pass, g->account_focus == 1 ? 90 : 60,
+              g->account_focus == 1 ? 140 : 60, g->account_focus == 1 ? 200 : 70, false);
+    char hidden[32];
+    int n = (int)strlen(g->account_pass_in);
+    if (n > 31) n = 31;
+    for (int i = 0; i < n; i++) hidden[i] = '*';
+    hidden[n] = '\0';
+    render_text(g, g->font_small, hidden, pass.x + 8, pass.y + 11,
+                (SDL_Color){ 225, 225, 230, 255 });
+
+    char local[96];
+    snprintf(local, sizeof local, "Offline: %s   puzzle %d",
+             g->online_nick[0] ? g->online_nick : "Player", g->puzzle_rating);
+    render_text(g, g->font_small, local, box.x + 30, box.y + 178,
+                (SDL_Color){ 150, 160, 175, 255 });
+
+    const char *l0 = g->account_register ? "Register" : "Log in";
+    const char *l1 = g->account_register ? "Have an account" : "Create account";
+    const char *labels[3] = { l0, l1, "Cancel" };
+    for (int i = 0; i < 3; i++) {
+        draw_rect(ren, &btn[i], 50, 55, 65, true);
+        draw_rect(ren, &btn[i], 120, 120, 130, false);
+        render_text_centered(g, g->font_small, labels[i],
+                             btn[i].x + btn[i].w / 2, btn[i].y + 11,
+                             (SDL_Color){ 235, 235, 235, 255 });
     }
 }
 
@@ -2248,6 +2920,18 @@ static void online_status_text(const Gui *g, char *buf, size_t n)
         size_t len = strlen(buf);
         if (len + strlen(extra) < n) strcat(buf, extra);
     }
+
+    char acc[112];
+    if (g->online && online_logged_in(g->online))
+        snprintf(acc, sizeof acc, "    %s  PvP %d / Puzzle %d%s",
+                 online_username(g->online), online_pvp_rating(g->online),
+                 online_puzzle_rating(g->online),
+                 g->online_rated ? "  [Rated]" : "");
+    else
+        snprintf(acc, sizeof acc, "    not logged in    L login    %s",
+                 g->online_rated ? "[Rated]" : "[Casual]");
+    size_t len = strlen(buf);
+    if (len + strlen(acc) < n) strcat(buf, acc);
 }
 
 static void render_online(Gui *g, SDL_Renderer *ren)
@@ -2324,9 +3008,11 @@ static void render_online(Gui *g, SDL_Renderer *ren)
                              (SDL_Color){ 255, 170, 120, 255 });
 
     render_text_centered(g, g->font_small,
-                         "Tab/Up/Down field    Enter choose    Esc back",
+                         "Tab/Up/Down field    Enter choose    L login    R rated    Esc back",
                          g->win_w / 2, g->win_h - 80,
                          (SDL_Color){ 110, 120, 130, 255 });
+
+    render_account(g, ren);
 }
 
 /* ---- appearance picker ---- */
@@ -2719,20 +3405,231 @@ static void pgn_save(Gui *g)
         snprintf(date, sizeof date, "%04d.%02d.%02d",
                  tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday);
 
-    const char *result = pgn_result(&g->board, g->state);
-    pgn_write(f, (const char (*)[8])g->move_san, g->ply,
-              "OpenChess", "OpenChess", date, 1,
-              g->white_name, g->black_name, result);
+    const char *result = g->override_result[0]
+                       ? g->override_result
+                       : pgn_result(&g->board, g->state);
+    if (g->pgntree) {
+        PgnHeaders h = g->pgn_hdr;
+        if (!h.white[0]) snprintf(h.white, sizeof h.white, "%s", g->white_name);
+        if (!h.black[0]) snprintf(h.black, sizeof h.black, "%s", g->black_name);
+        if (!h.result[0]) snprintf(h.result, sizeof h.result, "%s", result);
+        char *text = pgn_serialize(g->pgntree, &h);
+        if (text) { fputs(text, f); free(text); }
+    } else {
+        pgn_write(f, (const char (*)[8])g->move_san, g->ply,
+                  "OpenChess", "OpenChess", date, 1,
+                  g->white_name, g->black_name, result);
+    }
     fclose(f);
 
     g->pgn_prompt = false;
     set_msg(g, "Saved PGN: %s", path);
 }
 
+/* ---- PGN import pop-up (analysis) ---- */
+
+static void pgn_import_rects(const Gui *g, SDL_Rect *box, SDL_Rect *text,
+                             SDL_Rect btn[4])
+{
+    int bw = 700, bh = 440;
+    int x = (g->win_w - bw) / 2, y = 110;
+    *box  = (SDL_Rect){ x, y, bw, bh };
+    *text = (SDL_Rect){ x + 20, y + 52, bw - 40, bh - 130 };
+    int sw = 140, gap = 16, total = 4 * sw + 3 * gap;
+    int sx = x + (bw - total) / 2, by = y + bh - 60;
+    for (int i = 0; i < 4; i++)
+        btn[i] = (SDL_Rect){ sx + i * (sw + gap), by, sw, 44 };
+}
+
+static void pgn_import_open(Gui *g)
+{
+    g->pgn_import_open = true;
+    g->pgn_text_len = 0;
+    g->pgn_text[0] = '\0';
+    san_close_box(g);
+}
+
+static void pgn_import_close(Gui *g)
+{
+    g->pgn_import_open = false;
+    g->pgn_text_len = 0;
+    g->pgn_text[0] = '\0';
+}
+
+static void pgn_import_paste(Gui *g)
+{
+    char *clip = SDL_GetClipboardText();
+    if (clip) {
+        snprintf(g->pgn_text, sizeof g->pgn_text, "%s", clip);
+        g->pgn_text_len = (int)strlen(g->pgn_text);
+        SDL_free(clip);
+    }
+}
+
+/* Native "open file" dialog; returns the chosen path or false. Uses the OS
+ * helper available on each platform (no bundled dependency). */
+static bool pick_pgn_file(char *out, size_t n)
+{
+    out[0] = '\0';
+#if defined(__APPLE__)
+    FILE *p = popen("osascript -e 'POSIX path of (choose file with prompt "
+                    "\"Open PGN\")' 2>/dev/null", "r");
+#elif defined(__linux__)
+    FILE *p = popen("zenity --file-selection --title='Open PGN' "
+                    "--file-filter='PGN | *.pgn' 2>/dev/null", "r");
+#elif defined(_WIN32)
+    FILE *p = popen("powershell -NoProfile -Command \"Add-Type -AssemblyName "
+                    "System.Windows.Forms; $d=New-Object "
+                    "System.Windows.Forms.OpenFileDialog; "
+                    "$d.Filter='PGN (*.pgn)|*.pgn'; "
+                    "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
+                    "{$d.FileName}\" 2>NUL", "r");
+#else
+    FILE *p = NULL;
+#endif
+    if (!p) return false;
+    bool ok = fgets(out, (int)n, p) != NULL;
+    pclose(p);
+    if (!ok) return false;
+    size_t l = strlen(out);
+    while (l && (out[l - 1] == '\n' || out[l - 1] == '\r')) out[--l] = '\0';
+    return out[0] != '\0';
+}
+
+static bool pgn_import_read_file(Gui *g, const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) { set_msg(g, "Could not read PGN", NULL); return false; }
+    size_t n = fread(g->pgn_text, 1, sizeof g->pgn_text - 1, f);
+    g->pgn_text[n] = '\0';
+    g->pgn_text_len = (int)n;
+    fclose(f);
+    return true;
+}
+
+/* Upload: native file dialog; falls back to the first .pgn in the games dir. */
+static void pgn_import_upload(Gui *g)
+{
+    char path[1200];
+    if (pick_pgn_file(path, sizeof path)) {
+        pgn_import_read_file(g, path);
+        return;
+    }
+
+    DIR *d = opendir(path_games_dir());
+    if (!d) { set_msg(g, "Could not open a file dialog", NULL); return; }
+    char found[1200] = "";
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        size_t n = strlen(e->d_name);
+        if (n > 4 && strcasecmp(e->d_name + n - 4, ".pgn") == 0) {
+            snprintf(found, sizeof found, "%s/%s", path_games_dir(), e->d_name);
+            break;
+        }
+    }
+    closedir(d);
+    if (!found[0]) { set_msg(g, "No .pgn selected", NULL); return; }
+    pgn_import_read_file(g, found);
+}
+
+static void pgn_import_load(Gui *g)
+{
+    PgnHeaders h;
+    MoveNode *root = pgn_parse_text(g->pgn_text, &h);
+
+    if (!root->first) { set_msg(g, "No moves parsed", NULL); mt_free(root); return; }
+
+    /* Merge into the current analysis tree when it starts from the same
+     * position; otherwise replace it. */
+    bool merged = false;
+    if (g->mode == MODE_ANALYSIS && g->pgntree && g->pgntree->first &&
+        board_rep_equal(&g->pgntree->board, &root->board)) {
+        int added = mt_merge(g->pgntree, root);
+        mt_free(root);
+        root = g->pgntree;
+        merged = added > 0;
+    } else {
+        if (g->pgntree) mt_free(g->pgntree);
+        g->pgntree = root;
+    }
+    g->pgn_hdr = h;
+
+    g->scene = SCENE_GAME;
+    g->mode = MODE_ANALYSIS;
+    g->flipped = false;
+    g->auto_flip = false;
+    g->tree_cur = g->pgntree;
+    while (g->tree_cur->first) g->tree_cur = g->tree_cur->first;  /* end of mainline */
+    for (int i = 0; i < MAX_PLY; i++) g->review_cls[i] = RC_NONE;
+    g->review_on = false;
+    sync_from_tree(g);
+    if (merged) set_msg(g, "PGN merged into current tree", NULL);
+    if (h.white[0]) snprintf(g->white_name, sizeof g->white_name, "%s", h.white);
+    if (h.black[0]) snprintf(g->black_name, sizeof g->black_name, "%s", h.black);
+    g->saved.valid = false;
+    g->override_result[0] = 0;
+    analysis_refresh(g);
+    pgn_import_close(g);
+    if (!merged) set_msg(g, "PGN loaded", NULL);
+    if (g->engine_path[0]) review_start(g);   /* auto-analysis with move grades */
+}
+
+static void render_pgn_import(Gui *g, SDL_Renderer *ren)
+{
+    if (!g->pgn_import_open) return;
+    SDL_Rect box, text, btn[4];
+    pgn_import_rects(g, &box, &text, btn);
+
+    set_render_color(ren, 0, 0, 0);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_Rect full = { 0, 0, g->win_w, g->win_h };
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 150);
+    SDL_RenderFillRect(ren, &full);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+
+    draw_rect(ren, &box, 40, 44, 52, true);
+    draw_rect(ren, &box, 120, 130, 150, false);
+    render_text(g, g->font_ui, "Import PGN", box.x + 20, box.y + 14,
+                (SDL_Color){ 235, 235, 235, 255 });
+
+    draw_rect(ren, &text, 25, 25, 30, true);
+    draw_rect(ren, &text, 90, 140, 200, false);
+    SDL_RenderSetClipRect(ren, &text);
+    if (g->pgn_text_len)
+        render_text(g, g->font_small, g->pgn_text, text.x + 8, text.y + 8,
+                    (SDL_Color){ 225, 225, 230, 255 });
+    else
+        render_text(g, g->font_small,
+                    "Paste PGN here (Ctrl+V), or use Upload.", text.x + 8, text.y + 8,
+                    (SDL_Color){ 120, 120, 128, 255 });
+    SDL_RenderSetClipRect(ren, NULL);
+
+    const char *labels[4] = { "Paste", "Upload", "Load", "Cancel" };
+    for (int i = 0; i < 4; i++) {
+        draw_rect(ren, &btn[i], 50, 55, 65, true);
+        draw_rect(ren, &btn[i], 120, 120, 130, false);
+        render_text_centered(g, g->font_ui, labels[i],
+                             btn[i].x + btn[i].w / 2, btn[i].y + 10,
+                             (SDL_Color){ 235, 235, 235, 255 });
+    }
+}
+
 static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 {
     SDL_Keycode k = ke->keysym.sym;
     bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+
+    if (g->pgn_import_open) {
+        if (k == SDLK_ESCAPE) { pgn_import_close(g); return; }
+        if (ctrl && k == SDLK_v) { pgn_import_paste(g); return; }
+        if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+            if (g->pgn_text_len > 0) g->pgn_text[--g->pgn_text_len] = '\0';
+            return;
+        }
+        if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { pgn_import_load(g); return; }
+        return;
+    }
+    if (g->mode == MODE_ANALYSIS && ctrl && k == SDLK_o) { pgn_import_open(g); return; }
 
     if (g->pgn_prompt) {
         if (k == SDLK_ESCAPE) { g->pgn_prompt = false; return; }
@@ -2794,13 +3691,16 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     }
 
     if (ctrl && k == SDLK_u) {
-        if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE)
+        if (g->mode == MODE_PUZZLE) puzzle_hint(g);
+        else if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE)
             set_msg(g, "Undo disabled in multiplayer", NULL);
         else do_undo(g);
         return;
     }
     if (ctrl && k == SDLK_r) {
-        if (g->mode == MODE_ONLINE) {
+        if (g->mode == MODE_PUZZLE) {
+            open_puzzle(g);          /* next puzzle */
+        } else if (g->mode == MODE_ONLINE) {
             if (g->online && g->online_over) online_rematch(g->online);
             else set_msg(g, "Restart disabled online", NULL);
         } else if (g->mode == MODE_LOCAL) {
@@ -2809,6 +3709,27 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
             do_restart(g);
         }
         return;
+    }
+
+    if (g->mode == MODE_PUZZLE && !ctrl) {
+        if (k == SDLK_h) { puzzle_hint(g); return; }
+        if (k == SDLK_r) { puzzle_reveal(g); return; }
+        if (k == SDLK_n) { open_puzzle(g); return; }
+    }
+    if (g->mode == MODE_ANALYSIS && !ctrl && k == SDLK_v) {
+        review_start(g);
+        return;
+    }
+    if (g->mode == MODE_ANALYSIS && g->pgntree && g->tree_cur) {
+        if (k == SDLK_LEFT) { do_undo(g); return; }
+        if (k == SDLK_RIGHT) {
+            if (g->tree_cur->first) {
+                g->tree_cur = g->tree_cur->first;
+                sync_from_tree(g);
+                analysis_refresh(g);
+            }
+            return;
+        }
     }
     if (ctrl && k == SDLK_b) { gui_cycle_board(g); return; }
     if (ctrl && k == SDLK_p) { gui_cycle_pieces(g); return; }
@@ -2862,6 +3783,16 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
 static void handle_game_textinput(Gui *g, const SDL_TextInputEvent *te)
 {
+    if (g->pgn_import_open) {
+        for (const char *p = te->text; *p; p++) {
+            if (g->pgn_text_len >= (int)sizeof g->pgn_text - 1) break;
+            if (*p == '\r' || *p == '\n') continue;
+            if (*p >= 0x20 && *p < 0x7f) g->pgn_text[g->pgn_text_len++] = *p;
+        }
+        g->pgn_text[g->pgn_text_len] = '\0';
+        return;
+    }
+
     if (g->pgn_prompt) {
         for (const char *p = te->text; *p; p++) {
             if (g->pgn_len >= (int)sizeof g->pgn_name - 1) break;
@@ -2904,6 +3835,32 @@ static void handle_game_mousedown(Gui *g)
 
     if (g->pgn_prompt) return;   /* modal: keyboard only */
 
+    /* Click a previous move (or a variation) to jump to that position. */
+    if (g->mode == MODE_ANALYSIS) {
+        for (int i = 0; i < g->move_hit_count; i++) {
+            if (pt_in(&g->move_hit_rect[i], p.x, p.y)) {
+                g->tree_cur = g->move_hit_node[i];
+                sync_from_tree(g);
+                analysis_refresh(g);
+                return;
+            }
+        }
+    }
+
+    if (g->pgn_import_open) {
+        SDL_Rect box, text, btn[4];
+        pgn_import_rects(g, &box, &text, btn);
+        for (int i = 0; i < 4; i++) {
+            if (!pt_in(&btn[i], p.x, p.y)) continue;
+            if (i == 0) pgn_import_paste(g);
+            else if (i == 1) pgn_import_upload(g);
+            else if (i == 2) pgn_import_load(g);
+            else pgn_import_close(g);
+            return;
+        }
+        return;
+    }
+
     /* MultiPV slider + engine-arrow toggle (analysis). */
     if (g->mode == MODE_ANALYSIS) {
         SDL_Rect box;
@@ -2936,13 +3893,18 @@ static void handle_game_mousedown(Gui *g)
     pgn_btn_rect(g, &pgn);
     menu_btn_rect(g, &menu);
     if (pt_in(&undo, p.x, p.y)) {
-        if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE)
+        if (g->mode == MODE_PUZZLE) puzzle_hint(g);
+        else if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE)
             set_msg(g, "Undo disabled in multiplayer", NULL);
         else do_undo(g);
         return;
     }
     if (pt_in(&restart, p.x, p.y)) {
-        if (g->mode == MODE_ONLINE) {
+        if (g->mode == MODE_PUZZLE) {
+            puzzle_reveal(g);
+        } else if (g->mode == MODE_ANALYSIS) {
+            review_start(g);
+        } else if (g->mode == MODE_ONLINE) {
             if (g->online && !online_spectating(g->online)) {
                 if (g->online_over) online_rematch(g->online);
                 else                online_resign(g->online);
@@ -2954,7 +3916,12 @@ static void handle_game_mousedown(Gui *g)
         }
         return;
     }
-    if (pt_in(&styles, p.x, p.y)) { open_appearance(g, SCENE_GAME); return; }
+    if (pt_in(&styles, p.x, p.y)) {
+        if (g->mode == MODE_PUZZLE) open_puzzle(g);
+        else if (g->mode == MODE_ANALYSIS) pgn_import_open(g);
+        else open_appearance(g, SCENE_GAME);
+        return;
+    }
     if (pt_in(&pgn, p.x, p.y)) { pgn_open_prompt(g); return; }
     if (pt_in(&menu, p.x, p.y)) { go_to_menu(g); return; }
 
@@ -3216,8 +4183,10 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             debug_ui_log(g, e->button.x, e->button.y);
             if (g->scene == SCENE_MENU) handle_menu_mousedown(g);
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_mousedown(g);
+            else if (g->scene == SCENE_PUZZLE_SETUP) handle_puzzle_setup_mousedown(g);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_mousedown(g);
             else if (g->scene == SCENE_ONLINE) handle_online_mousedown(g);
+            else if (g->scene == SCENE_OPENINGS) handle_openings_mousedown(g);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_mousedown(g);
             else if (g->scene == SCENE_SETTINGS) handle_settings_mousedown(g);
             else handle_game_mousedown(g);
@@ -3271,8 +4240,10 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
         case SDL_KEYDOWN:
             if (g->scene == SCENE_MENU) handle_menu_keydown(g, &e->key);
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_keydown(g, &e->key);
+            else if (g->scene == SCENE_PUZZLE_SETUP) handle_puzzle_setup_keydown(g, &e->key);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_keydown(g, &e->key);
             else if (g->scene == SCENE_ONLINE) handle_online_keydown(g, &e->key);
+            else if (g->scene == SCENE_OPENINGS) handle_openings_keydown(g, &e->key);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_keydown(g, &e->key);
             else if (g->scene == SCENE_SETTINGS) handle_settings_keydown(g, &e->key);
             else handle_game_keydown(g, &e->key);
@@ -3281,6 +4252,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             if (g->scene == SCENE_GAME) handle_game_textinput(g, &e->text);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_textinput(g, &e->text);
             else if (g->scene == SCENE_ONLINE) handle_online_textinput(g, &e->text);
+            else if (g->scene == SCENE_OPENINGS) handle_openings_textinput(g, &e->text);
             else if (g->scene == SCENE_SETTINGS) handle_engine_textinput(g, &e->text);
             return;
         default:
@@ -3394,23 +4366,26 @@ void gui_tick(Gui *g, Uint32 now)
         local_tick(g);
     } else if (g->mode == MODE_ONLINE) {
         online_tick(g);
-    } else if (g->eval_ai) {
-        /* live analysis: drain info lines and refresh the evaluation */
-        char uci[8];
-        bool done = ai_poll_bestmove(g->eval_ai, uci);
-        int cp, mate, depth;
-        if (ai_get_eval(g->eval_ai, &cp, &mate, &depth)) {
-            if (g->eval_side == BLACK) { cp = -cp; mate = -mate; }
-            g->eval_cp = cp;
-            g->eval_mate = mate;
-            g->eval_depth = depth;
-            g->eval_has_mate = ai_eval_has_mate(g->eval_ai);
-            g->eval_valid = true;
+    } else if (g->mode == MODE_ANALYSIS) {
+        if (g->review_on) { review_step(g); return; }
+        if (g->eval_ai) {
+            /* live analysis: drain info lines and refresh the evaluation */
+            char uci[8];
+            bool done = ai_poll_bestmove(g->eval_ai, uci);
+            int cp, mate, depth;
+            if (ai_get_eval(g->eval_ai, &cp, &mate, &depth)) {
+                if (g->eval_side == BLACK) { cp = -cp; mate = -mate; }
+                g->eval_cp = cp;
+                g->eval_mate = mate;
+                g->eval_depth = depth;
+                g->eval_has_mate = ai_eval_has_mate(g->eval_ai);
+                g->eval_valid = true;
+            }
+            g->eng_line_count = ai_get_lines(g->eval_ai, g->eng_lines, AI_MAX_LINES);
+            /* A capped search ends on bestmove; keep the analysis cycling. */
+            if (done && (g->eng_depth > 0 || g->eng_time_ms > 0))
+                eval_restart(g);
         }
-        g->eng_line_count = ai_get_lines(g->eval_ai, g->eng_lines, AI_MAX_LINES);
-        /* A capped search ends on bestmove; keep the analysis cycling. */
-        if (done && (g->eng_depth > 0 || g->eng_time_ms > 0))
-            eval_restart(g);
     }
 }
 
@@ -3817,6 +4792,10 @@ static void render_status(Gui *g)
         snprintf(line, sizeof line, "Stalemate");
     else if (g->state == INSUFFICIENT_MATERIAL)
         snprintf(line, sizeof line, "Draw (insufficient material)");
+    else if (g->state == THREEFOLD_REPETITION)
+        snprintf(line, sizeof line, "Draw (threefold repetition)");
+    else if (g->state == FIFTY_MOVE_RULE)
+        snprintf(line, sizeof line, "Draw (fifty-move rule)");
     else {
         snprintf(line, sizeof line, "%s to move%s",
                  g->board.side == WHITE ? "White" : "Black",
@@ -3861,6 +4840,17 @@ static void render_status(Gui *g)
         if (g->draw_offered)
             render_text(g, g->font_small, "Draw offered: Ctrl+A accept, Ctrl+D decline",
                         g->panel_x, g->board_y + 50, (SDL_Color){ 240, 200, 120, 255 });
+    } else if (g->mode == MODE_PUZZLE) {
+        char info[160];
+        const char *st = g->puzzle_done ? "Solved!"
+                       : g->puzzle_failed ? "Answer shown"
+                                          : (g->board.side == g->human_color
+                                                 ? "Your move" : "...");
+        snprintf(info, sizeof info, "Puzzle %d  %s   -   Rating %d (%+d)   %s",
+                 g->puzzle_cur.rating, g->puzzle_cur.themes,
+                 g->puzzle_rating, g->puzzle_delta, st);
+        render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
+                    (SDL_Color){ 150, 210, 230, 255 });
     } else if (g->mode == MODE_ANALYSIS) {
         char info[96];
         if (!g->eval_ai)
@@ -3950,6 +4940,170 @@ static void pv_to_san(const Gui *g, const char *pv, char *out, size_t n)
     }
 }
 
+/* ---- move review (analysis) ---- */
+
+static int review_material(const Board *b, Color c)
+{
+    int s = 0;
+    for (int i = 0; i < 64; i++) {
+        Piece p = b->board[i];
+        bool white = WHITE_PIECE(p);
+        if ((c == WHITE) != white || p == EMPTY) continue;
+        switch (p) {
+            case WP: case BP: s += 100; break;
+            case WN: case BN: s += 320; break;
+            case WB: case BB: s += 330; break;
+            case WR: case BR: s += 500; break;
+            case WQ: case BQ: s += 900; break;
+            default: break;
+        }
+    }
+    return s;
+}
+
+static void review_finish_ply(Gui *g, const Board *before)
+{
+    Board after = *before;
+    make_move_plumb(&after, g->history[g->review_i]);
+
+    Color mover = before->side;
+    bool sac = review_material(&after, mover) < review_material(before, mover);
+    MoveList ml;
+    gen_legal(before, &ml);
+    bool book = g->book && opening_is_book(g->book, before);
+
+    g->review_cls[g->review_i] = review_classify(
+        g->rb_cp, g->rb_hm, g->ra_cp, g->ra_hm,
+        g->r2_cp, g->r2_hm, sac, book, ml.count);
+    g->review_i++;
+    g->review_stage = 0;
+}
+
+static void review_finish(Gui *g)
+{
+    g->review_on = false;
+    int n_brilliant = 0, n_great = 0, n_best = 0, n_exc = 0, n_good = 0;
+    int n_inacc = 0, n_mistake = 0, n_blunder = 0, n_miss = 0, n_book = 0;
+    for (int i = 0; i < g->ply && i < MAX_PLY; i++) {
+        switch ((ReviewClass)g->review_cls[i]) {
+            case RC_BRILLIANT:  n_brilliant++; break;
+            case RC_GREAT:      n_great++; break;
+            case RC_BEST:       n_best++; break;
+            case RC_EXCELLENT:  n_exc++; break;
+            case RC_GOOD:       n_good++; break;
+            case RC_INACCURACY: n_inacc++; break;
+            case RC_MISTAKE:    n_mistake++; break;
+            case RC_BLUNDER:    n_blunder++; break;
+            case RC_MISS:       n_miss++; break;
+            case RC_BOOK:       n_book++; break;
+            default: break;
+        }
+    }
+    char s[220];
+    snprintf(s, sizeof s,
+             "Review: %d brilliant, %d great, %d best, %d blunders, "
+             "%d mistakes, %d inaccuracies, %d misses, %d book",
+             n_brilliant, n_great, n_best + n_exc + n_good,
+             n_blunder, n_mistake, n_inacc, n_miss, n_book);
+    set_msg(g, s, NULL);
+    analysis_refresh(g);
+}
+
+static void review_start(Gui *g)
+{
+    if (g->mode != MODE_ANALYSIS || g->ply < 1) return;
+    if (!g->engine_path[0]) { set_msg(g, "Review needs an engine (Stockfish)", NULL); return; }
+    if (!g->review_ai) g->review_ai = ai_start(g->engine_path);
+    if (!g->review_ai) { set_msg(g, "Could not start review engine", NULL); return; }
+
+    eval_stop(g);
+    ai_set_multipv(g->review_ai, 2);
+    ai_set_depth(g->review_ai, 0);
+    ai_set_movetime(g->review_ai, 200);
+    for (int i = 0; i < MAX_PLY; i++) g->review_cls[i] = RC_NONE;
+    g->review_on = true;
+    g->review_i = 0;
+    g->review_stage = 0;
+    g->r_issued = false;
+    set_msg(g, "Reviewing ...", NULL);
+}
+
+static void review_step(Gui *g)
+{
+    if (!g->review_on) return;
+    if (g->review_i >= g->ply) { review_finish(g); return; }
+
+    Board before = g->before[g->review_i];
+    Board after = before;
+    make_move_plumb(&after, g->history[g->review_i]);
+
+    if (!g->r_issued) {
+        ai_go(g->review_ai, g->review_stage == 0 ? &before : &after);
+        g->r_issued = true;
+    }
+
+    char uci[8];
+    if (!ai_poll_bestmove(g->review_ai, uci)) return;   /* still searching */
+    g->r_issued = false;
+
+    if (g->review_stage == 0) {
+        AiLine lines[2];
+        int n = ai_get_lines(g->review_ai, lines, 2);
+        int cp, mate, depth;
+        ai_get_eval(g->review_ai, &cp, &mate, &depth);
+        if (n > 0) {
+            g->rb_cp = lines[0].cp; g->rb_mate = lines[0].mate;
+            g->rb_hm = lines[0].has_mate;
+        } else {
+            g->rb_cp = cp; g->rb_mate = mate;
+            g->rb_hm = ai_eval_has_mate(g->review_ai);
+        }
+        if (n > 1) {
+            g->r2_cp = lines[1].cp; g->r2_mate = lines[1].mate;
+            g->r2_hm = lines[1].has_mate;
+        } else {
+            g->r2_cp = g->rb_cp; g->r2_mate = g->rb_mate; g->r2_hm = g->rb_hm;
+        }
+
+        Move played = g->history[g->review_i], bestm;
+        bool played_best = false;
+        if (n > 0 && lines[0].pv[0] &&
+            ai_uci_to_move(&before, lines[0].pv, &bestm))
+            played_best = (MOVE_FROM(bestm) == MOVE_FROM(played) &&
+                           MOVE_TO(bestm) == MOVE_TO(played));
+
+        if (played_best) {
+            g->ra_cp = g->rb_cp; g->ra_mate = g->rb_mate; g->ra_hm = g->rb_hm;
+            review_finish_ply(g, &before);
+        } else {
+            g->review_stage = 1;
+        }
+        return;
+    }
+
+    int cp, mate, depth;
+    ai_get_eval(g->review_ai, &cp, &mate, &depth);
+    g->ra_cp = -cp; g->ra_mate = -mate;
+    g->ra_hm = ai_eval_has_mate(g->review_ai);
+    review_finish_ply(g, &before);
+}
+
+static void render_review_bar(Gui *g, SDL_Renderer *ren)
+{
+    if (!g->review_on) return;
+    int x = g->panel_x, y = g->board_y + 150, w = 380, h = 12;
+    set_render_color(ren, 45, 45, 50);
+    SDL_Rect bg = { x, y, w, h };
+    SDL_RenderFillRect(ren, &bg);
+    float f = g->ply ? (float)g->review_i / (float)g->ply : 0.0f;
+    SDL_Rect fg = { x, y, (int)(w * f), h };
+    set_render_color(ren, 90, 150, 200);
+    SDL_RenderFillRect(ren, &fg);
+    char t[64];
+    snprintf(t, sizeof t, "Reviewing %d / %d", g->review_i, g->ply);
+    render_text(g, g->font_small, t, x, y - 20, (SDL_Color){ 200, 210, 220, 255 });
+}
+
 static void render_engine_panel(Gui *g, SDL_Renderer *ren)
 {
     if (g->mode != MODE_ANALYSIS) return;
@@ -4004,25 +5158,60 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
     }
 }
 
+/* One full move per row: "1. e4 e5". */
 static void render_move_list(Gui *g)
 {
-    SDL_Color c = { 230, 225, 215, 255 };
+    SDL_Color c  = { 230, 225, 215, 255 };
+    SDL_Color nc = { 150, 150, 150, 255 };
     bool analysis = (g->mode == MODE_ANALYSIS);
     int max_rows = analysis ? 9 : 16;
-    int y = analysis ? g->board_y + 218 : g->board_y + 78;
-    render_text(g, g->font_small, "Moves:", g->panel_x, y - 22, c);
-    int start = g->ply > max_rows ? g->ply - max_rows : 0;
-    for (int i = start; i < g->ply; i++) {
-        int num = i / 2 + 1;
-        if (i % 2 == 0) {
-            char header[16];
-            snprintf(header, sizeof header, "%d.", num);
-            render_text(g, g->font_small, header, g->panel_x, y, (SDL_Color){ 150, 150, 150, 255 });
-            render_text(g, g->font_small, g->move_san[i], g->panel_x + 42, y, c);
-        } else {
-            render_text(g, g->font_small, g->move_san[i], g->panel_x + 150, y, c);
+    int y0 = analysis ? g->board_y + 218 : g->board_y + 78;
+    render_text(g, g->font_small, "Moves:", g->panel_x, y0 - 22, c);
+
+    g->move_hit_count = 0;
+    int total = (g->ply + 1) / 2;                 /* move-number rows */
+    int first = total > max_rows ? total - max_rows : 0;
+    int y = y0;
+    for (int mv = first; mv < total; mv++) {
+        int wi = mv * 2, bi = wi + 1;
+        char header[16], wt[28], bt[28];
+        snprintf(header, sizeof header, "%d.", mv + 1);
+        snprintf(wt, sizeof wt, "%s %s", g->move_san[wi],
+                 review_glyph((ReviewClass)g->review_cls[wi]));
+        render_text(g, g->font_small, header, g->panel_x, y, nc);
+        render_text(g, g->font_small, wt, g->panel_x + 40, y, c);
+        if (g->mode == MODE_ANALYSIS && wi < g->path_len && g->path_nodes[wi]) {
+            SDL_Rect hr = { g->panel_x + 40, y - 2, 70, 18 };
+            g->move_hit_rect[g->move_hit_count] = hr;
+            g->move_hit_node[g->move_hit_count++] = g->path_nodes[wi];
+        }
+        if (bi < g->ply) {
+            snprintf(bt, sizeof bt, "%s %s", g->move_san[bi],
+                     review_glyph((ReviewClass)g->review_cls[bi]));
+            render_text(g, g->font_small, bt, g->panel_x + 150, y, c);
+            if (g->mode == MODE_ANALYSIS && bi < g->path_len && g->path_nodes[bi]) {
+                SDL_Rect hr = { g->panel_x + 150, y - 2, 70, 18 };
+                g->move_hit_rect[g->move_hit_count] = hr;
+                g->move_hit_node[g->move_hit_count++] = g->path_nodes[bi];
+            }
         }
         y += 20;
+    }
+
+    /* Variations: clickable alternatives to the current move. */
+    if (g->mode == MODE_ANALYSIS && g->tree_cur && g->tree_cur->parent) {
+        MoveNode *par = g->tree_cur->parent;
+        int shown = 0;
+        for (MoveNode *s = par->first; s && shown < 4; s = s->next) {
+            if (s == g->tree_cur || g->move_hit_count >= MAX_PLY + 64) continue;
+            char label[24];
+            snprintf(label, sizeof label, "var: %s", s->san);
+            render_text(g, g->font_small, label, g->panel_x, y, (SDL_Color){ 170, 200, 150, 255 });
+            g->move_hit_rect[g->move_hit_count] = (SDL_Rect){ g->panel_x, y - 2, 90, 18 };
+            g->move_hit_node[g->move_hit_count++] = s;
+            y += 18;
+            shown++;
+        }
     }
 }
 
@@ -4131,19 +5320,32 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     menu_btn_rect(g, &menu);
     bool online_spec = g->mode == MODE_ONLINE && g->online &&
                        online_spectating(g->online);
-    render_text_centered_rect(g, ren, &undo, "Undo");
+    render_text_centered_rect(g, ren, &undo,
+                              g->mode == MODE_PUZZLE ? "Hint" : "Undo");
     const char *restart_label;
     if (g->mode == MODE_ONLINE)
         restart_label = online_spec ? "" : (g->online_over ? "Rematch" : "Resign");
+    else if (g->mode == MODE_PUZZLE)
+        restart_label = "Reveal";
+    else if (g->mode == MODE_ANALYSIS)
+        restart_label = "Analyze";
     else
         restart_label = "Restart";
     render_text_centered_rect(g, ren, &restart, restart_label);
-    render_text_centered_rect(g, ren, &styles, "Styles");
+    const char *styles_label = (g->mode == MODE_PUZZLE) ? "Next"
+                             : (g->mode == MODE_ANALYSIS) ? "Import" : "Styles";
+    render_text_centered_rect(g, ren, &styles, styles_label);
     render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
-    const char *legend = (g->mode == MODE_ONLINE)
-        ? "T chat  Ctrl+D draw  Ctrl+U undo  Ctrl+S save PGN  Ctrl+F flip"
-        : "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip";
+    const char *legend;
+    if (g->mode == MODE_ONLINE)
+        legend = "T chat  Ctrl+D draw  Ctrl+U undo  Ctrl+S save PGN  Ctrl+F flip";
+    else if (g->mode == MODE_PUZZLE)
+        legend = "H hint  R reveal  N next  Ctrl+S export  Ctrl+F flip";
+    else if (g->mode == MODE_ANALYSIS)
+        legend = "Ctrl+O import  V review  Ctrl+U undo  Ctrl+S save  Ctrl+F flip";
+    else
+        legend = "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip";
     render_text(g, g->font_tiny, legend,
                 g->panel_x, undo.y + 48, (SDL_Color){ 130, 130, 130, 255 });
 }
@@ -4778,6 +5980,258 @@ static void render_settings(Gui *g, SDL_Renderer *ren)
         g->win_w / 2, g->win_h - 40, (SDL_Color){ 110, 120, 130, 255 });
 }
 
+/* ---- opening browser ---- */
+
+static int openings_current(const Gui *g)
+{
+    return (g->opening_sel >= 0 && g->opening_sel < g->opening_match_count)
+         ? g->opening_match[g->opening_sel] : -1;
+}
+
+static void openings_apply_step(Gui *g)
+{
+    board_reset(&g->board);
+    const char *p = g->opening_moves;
+    int applied = 0, total = 0;
+    while (*p && total < MAX_PLY) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        char tok[16];
+        int i = 0;
+        while (*p && *p != ' ' && i < 15) tok[i++] = *p++;
+        tok[i] = '\0';
+        if (tok[0] >= '0' && tok[0] <= '9' &&
+            strspn(tok, "0123456789.") == strlen(tok)) continue;
+        Move m;
+        if (!san_find(&g->board, tok, &m)) break;
+        make_move_plumb(&g->board, m);
+        total++;
+        applied++;
+        if (applied >= g->opening_step) {
+            /* keep counting the rest for the "x / y" display */
+            const char *q = p;
+            Board b = g->board;
+            while (*q) {
+                while (*q == ' ') q++;
+                if (!*q) break;
+                char t2[16]; int k = 0;
+                while (*q && *q != ' ' && k < 15) t2[k++] = *q++;
+                t2[k] = '\0';
+                if (t2[0] >= '0' && t2[0] <= '9' &&
+                    strspn(t2, "0123456789.") == strlen(t2)) continue;
+                Move mm;
+                if (!san_find(&b, t2, &mm)) break;
+                make_move_plumb(&b, mm);
+                total++;
+            }
+            break;
+        }
+    }
+    g->opening_nmoves = total;
+    if (g->opening_step > total) g->opening_step = total;
+}
+
+static void openings_load_selected(Gui *g)
+{
+    int mi = openings_current(g);
+    g->opening_eco[0] = g->opening_name[0] = g->opening_moves[0] = '\0';
+    g->opening_step = 0;
+    if (mi >= 0)
+        opening_line_at(g->book, mi, g->opening_eco, sizeof g->opening_eco,
+                        g->opening_name, sizeof g->opening_name,
+                        g->opening_moves, sizeof g->opening_moves);
+    openings_apply_step(g);
+}
+
+static void openings_rebuild(Gui *g)
+{
+    g->opening_match_count = 0;
+    int n = opening_line_count(g->book);
+    char eco[8], name[96], moves[256];
+    for (int i = 0; i < n && g->opening_match_count < 4096; i++) {
+        if (!opening_line_at(g->book, i, eco, sizeof eco, name, sizeof name,
+                             moves, sizeof moves)) continue;
+        if (g->opening_filter_len) {
+            /* case-insensitive substring match on the name */
+            char hay[96], nee[24];
+            snprintf(hay, sizeof hay, "%s", name);
+            snprintf(nee, sizeof nee, "%s", g->opening_filter);
+            for (char *p = hay; *p; p++) *p = (char)tolower((unsigned char)*p);
+            for (char *p = nee; *p; p++) *p = (char)tolower((unsigned char)*p);
+            if (!strstr(hay, nee)) continue;
+        }
+        g->opening_match[g->opening_match_count++] = i;
+    }
+    if (g->opening_sel >= g->opening_match_count)
+        g->opening_sel = g->opening_match_count ? g->opening_match_count - 1 : 0;
+    if (g->opening_sel < 0) g->opening_sel = 0;
+}
+
+static void open_openings(Gui *g)
+{
+    g->scene = SCENE_OPENINGS;
+    g->opening_filter_len = 0;
+    g->opening_filter[0] = '\0';
+    g->opening_sel = 0;
+    openings_rebuild(g);
+    openings_load_selected(g);
+}
+
+static void openings_to_analysis(Gui *g)
+{
+    if (openings_current(g) < 0) return;
+    Board b;
+    board_reset(&b);
+    MoveNode *root = mt_new_root(&b);
+    MoveNode *cur = root;
+
+    const char *p = g->opening_moves;
+    while (*p && mt_depth(cur) < MAX_PLY) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        char tok[16]; int i = 0;
+        while (*p && *p != ' ' && i < 15) tok[i++] = *p++;
+        tok[i] = '\0';
+        if (tok[0] >= '0' && tok[0] <= '9' &&
+            strspn(tok, "0123456789.") == strlen(tok)) continue;
+        Move m;
+        if (!san_find(&cur->board, tok, &m)) break;
+        cur = mt_add_child(cur, m, NULL);
+    }
+
+    if (g->pgntree) mt_free(g->pgntree);
+    g->pgntree = root;
+    g->tree_cur = cur;
+    for (int i = 0; i < MAX_PLY; i++) g->review_cls[i] = RC_NONE;
+    g->review_on = false;
+    g->mode = MODE_ANALYSIS;
+    g->scene = SCENE_GAME;
+    g->flipped = false;
+    g->auto_flip = false;
+    g->saved.valid = false;
+    g->override_result[0] = 0;
+    sync_from_tree(g);
+    snprintf(g->white_name, sizeof g->white_name, "White");
+    snprintf(g->black_name, sizeof g->black_name, "Black");
+    analysis_refresh(g);
+    set_msg(g, "Opening loaded", NULL);
+}
+
+static void openings_rects(const Gui *g, SDL_Rect *filter, SDL_Rect *list)
+{
+    filter->x = g->panel_x; filter->y = g->board_y + 60;
+    filter->w = PANEL_W;    filter->h = 30;
+    list->x = g->panel_x;   list->y = filter->y + filter->h + 10;
+    list->w = PANEL_W;      list->h = 8 * g->sq - (list->y - g->board_y) - 20;
+}
+
+static void handle_openings_keydown(Gui *g, const SDL_KeyboardEvent *ke)
+{
+    SDL_Keycode k = ke->keysym.sym;
+    bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+    if (ctrl && k == SDLK_q) { g->quit = true; return; }
+    if (k == SDLK_ESCAPE) { g->scene = SCENE_MENU; return; }
+    if (k == SDLK_UP) { if (g->opening_sel > 0) g->opening_sel--; openings_load_selected(g); return; }
+    if (k == SDLK_DOWN) {
+        if (g->opening_sel + 1 < g->opening_match_count) g->opening_sel++;
+        openings_load_selected(g); return;
+    }
+    if (k == SDLK_LEFT)  { if (g->opening_step > 0) g->opening_step--; openings_apply_step(g); return; }
+    if (k == SDLK_RIGHT) { g->opening_step++; openings_apply_step(g); return; }
+    if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+        if (g->opening_filter_len > 0) g->opening_filter[--g->opening_filter_len] = '\0';
+        openings_rebuild(g); openings_load_selected(g); return;
+    }
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER) { openings_to_analysis(g); return; }
+}
+
+static void handle_openings_textinput(Gui *g, const SDL_TextInputEvent *te)
+{
+    for (const char *p = te->text; *p; p++) {
+        if (g->opening_filter_len >= (int)sizeof g->opening_filter - 1) break;
+        if (*p >= 0x20 && *p < 0x7f) g->opening_filter[g->opening_filter_len++] = *p;
+    }
+    g->opening_filter[g->opening_filter_len] = '\0';
+    openings_rebuild(g);
+    openings_load_selected(g);
+}
+
+static void handle_openings_mousedown(Gui *g)
+{
+    SDL_Rect filter, list;
+    openings_rects(g, &filter, &list);
+    SDL_Point p = g->mouse;
+    if (p.y < list.y || p.y >= list.y + list.h) return;
+    int row = (p.y - list.y) / 18;
+    int idx = g->opening_sel + row;   /* first visible row is the selection */
+    if (idx >= 0 && idx < g->opening_match_count) {
+        g->opening_sel = idx;
+        openings_load_selected(g);
+    }
+}
+
+static void render_openings(Gui *g, SDL_Renderer *ren)
+{
+    set_render_color(ren, 22, 26, 34);
+    SDL_RenderClear(ren);
+
+    draw_board_squares(g, ren);
+    draw_coordinates(g);
+    for (int sq = 0; sq < 64; sq++) {
+        Piece pc = g->board.board[sq];
+        if (pc == EMPTY) continue;
+        SDL_Rect r;
+        window_sq(g, sq, &r);
+        render_piece_box(g, ren, pc, r.x + r.w / 2.0f, r.y + r.h / 2.0f,
+                         (float)g->sq, 1.0f);
+    }
+
+    render_text(g, g->font_ui, "Openings", g->panel_x, g->board_y,
+                (SDL_Color){ 235, 225, 200, 255 });
+
+    SDL_Rect filter, list;
+    openings_rects(g, &filter, &list);
+    draw_rect(ren, &filter, 30, 30, 34, true);
+    draw_rect(ren, &filter, 90, 140, 200, false);
+    render_text(g, g->font_small,
+                g->opening_filter_len ? g->opening_filter : "type to search...",
+                filter.x + 8, filter.y + 8,
+                g->opening_filter_len ? (SDL_Color){ 230, 230, 230, 255 }
+                                      : (SDL_Color){ 120, 120, 128, 255 });
+
+    SDL_RenderSetClipRect(ren, &list);
+    int rows = list.h / 18;
+    char eco[8], name[96], moves[256];
+    for (int r = 0; r < rows; r++) {
+        int idx = g->opening_sel + r;
+        if (idx >= g->opening_match_count) break;
+        if (!opening_line_at(g->book, g->opening_match[idx], eco, sizeof eco,
+                             name, sizeof name, moves, sizeof moves)) continue;
+        int y = list.y + r * 18;
+        SDL_Color c = (r == 0) ? (SDL_Color){ 245, 245, 245, 255 }
+                               : (SDL_Color){ 200, 205, 215, 255 };
+        if (r == 0) {
+            SDL_Rect hl = { list.x - 2, y - 2, list.w + 4, 18 };
+            set_render_color(ren, 70, 80, 100);
+            SDL_RenderFillRect(ren, &hl);
+        }
+        char row[128];
+        snprintf(row, sizeof row, "%s  %s", eco, name);
+        render_text(g, g->font_small, row, list.x + 4, y, c);
+    }
+    SDL_RenderSetClipRect(ren, NULL);
+
+    char info[160];
+    snprintf(info, sizeof info, "%d / %d    %s", g->opening_step,
+             g->opening_nmoves, g->opening_name);
+    render_text(g, g->font_small, info, g->panel_x, list.y + list.h + 6,
+                (SDL_Color){ 150, 210, 230, 255 });
+    render_text(g, g->font_tiny,
+                "type filter  Up/Down select  Left/Right moves  Enter analyse  Esc back",
+                g->panel_x, g->board_y + 8 * g->sq + 6,
+                (SDL_Color){ 110, 120, 130, 255 });
+}
+
 static void render_menu(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
@@ -4789,7 +6243,11 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
                          40 + text_height(g, g->font_piece[0]) + 10,
                          (SDL_Color){ 130, 170, 190, 255 });
 
-    int ty_off = (MENU_ITEM_H - text_height(g, g->font_ui)) / 2;
+    int mh, mgap, mstart;
+    menu_metrics(g, &mh, &mgap, &mstart);
+    (void)mgap; (void)mstart;
+    TTF_Font *mfont = (mh < 40) ? g->font_small : g->font_ui;
+    int ty_off = (mh - text_height(g, mfont)) / 2;
 
     for (int i = 0; i < menu_count(g); i++) {
         SDL_Rect r;
@@ -4807,7 +6265,7 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
         SDL_Color tc = !en ? (SDL_Color){ 100, 105, 115, 255 }
                       : sel ? (SDL_Color){ 245, 245, 245, 255 }
                             : (SDL_Color){ 205, 210, 220, 255 };
-        render_text_centered(g, g->font_ui, menu_label(g, i), g->win_w / 2,
+        render_text_centered(g, mfont, menu_label(g, i), g->win_w / 2,
                              r.y + ty_off, tc);
     }
 
@@ -4936,6 +6394,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     render_status(g);
     render_engine_panel(g, ren);
+    render_review_bar(g, ren);
     render_move_list(g);
     if (g->mode == MODE_ANALYSIS) render_fen_box(g, ren);
     render_hud(g);
@@ -4952,6 +6411,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     }
 
     render_pgn_prompt(g, ren);
+    render_pgn_import(g, ren);
 }
 
 /* Diagnostic overlay (OPENCHESS_DEBUG_UI=1): shows where the app maps the
@@ -5035,10 +6495,14 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         render_menu(g, ren);
     else if (g->scene == SCENE_SINGLE_SETUP)
         render_setup(g, ren);
+    else if (g->scene == SCENE_PUZZLE_SETUP)
+        render_puzzle_setup(g, ren);
     else if (g->scene == SCENE_HOSTJOIN)
         render_hostjoin(g, ren);
     else if (g->scene == SCENE_ONLINE)
         render_online(g, ren);
+    else if (g->scene == SCENE_OPENINGS)
+        render_openings(g, ren);
     else if (g->scene == SCENE_APPEARANCE)
         render_appearance(g, ren);
     else if (g->scene == SCENE_SETTINGS)

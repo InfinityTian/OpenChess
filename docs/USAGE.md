@@ -18,6 +18,10 @@ On launch you see the mode list. Use the **arrow keys** (or `W`/`S`) to move and
   libwebsockets).
 - **Online Matchmaking** — get paired with a waiting player automatically.
 - **Appearance (boards & pieces)** — the visual style picker.
+- **Openings** — browse the bundled opening book; type to filter, Up/Down to
+  select, Left/Right to step through the line, Enter to load it into Analysis.
+- **Account** — your offline profile and puzzle rating, plus online login /
+  register and logout (see **Accounts** below).
 - **Quit** — exit (`Ctrl+Q` works anywhere).
 
 If you left a Singleplayer or Analysis game with the in-game **Menu** button, a
@@ -57,6 +61,17 @@ SDL2_net).
   **Enter** or click **Load** to apply it. **Copy** (or **Ctrl+C**) copies the
   current position to the clipboard.
 - **Undo** (Ctrl+U) steps back one ply; **Restart** (Ctrl+R) resets to the start.
+- **Move list & variations:** the right panel lists the moves; **click any move**
+  (or a `var:` row) to jump to that position, or use **Left/Right** to step. If
+  you play a move after going back, the old continuation is kept as a new
+  variation.
+- **Import (Ctrl+O / Import button):** paste PGN or use **Upload** (a native file
+  dialog for any path). Importing a game that starts from the current position
+  **merges** it into the tree, so shared moves are reused and the rest become
+  variations.
+- **Analyze (Analyze button):** runs Stockfish over the game and grades each move
+  (best / good / inaccuracy / mistake / blunder); a summary and per-move glyphs
+  appear in the panel. Imported games are analysed automatically.
 
 ### Singleplayer
 
@@ -106,6 +121,12 @@ server address with the **Server** field (default `ws://127.0.0.1:7681/ws`) or t
   appear in the panel and go to the opponent and spectators.
 - **Spectating:** in the *Online Multiplayer* lobby enter a room code and press
   **Spectate** to watch a running game read-only (you can chat but not move).
+- **Accounts (optional):** press **L** to log in / register, **O** to log out,
+  or use the welcome-menu **Account** entry. Your PvP and puzzle ratings are
+  saved with the account and you are logged in automatically next time. Press
+  **R** to toggle **Rated** — when both players opt in, the game updates PvP Elo.
+- **Offline profile:** puzzle rating is kept locally and shown on the Account
+  screen; when logged in, the server value is used and kept in sync.
 
 ### Appearance picker
 
@@ -292,6 +313,8 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
   给对手与观战者。
 - **观战**：在 *在线对战* 大厅输入房间码后点击 **Spectate**，可只读观看进行中的对局
   （可聊天，不能走子）。
+- **账户（可选）**：按 **L** 登录/注册，**O** 退出登录。PvP 与谜题评分会保存到账户，
+  下次自动登录。按 **R** 切换 **Rated**（双方都开启时，对局会计入 PvP Elo）。
 
 ### 外观选择器
 

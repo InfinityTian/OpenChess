@@ -3,6 +3,7 @@
 
 #include "board.h"
 #include "move.h"
+#include "movetree.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -47,5 +48,19 @@ void pgn_write(FILE *f, const char moves[][8], int ply,
                const char *event, const char *site, const char *date,
                int round, const char *white, const char *black,
                const char *result);
+
+/* ---- PGN import/export with variations --------------------------------- */
+
+typedef struct {
+    char event[64], site[64], date[16], round[16];
+    char white[64], black[64], result[8];
+} PgnHeaders;
+
+/* Parse PGN text (headers + movetext, including ( ) variations, {} comments,
+ * $n NAGs and [%eval ...]) into a move tree. Never returns NULL. */
+MoveNode *pgn_parse_text(const char *text, PgnHeaders *out);
+
+/* Serialize a tree (mainline + variations + NAGs/comments) to a heap string. */
+char *pgn_serialize(const MoveNode *root, const PgnHeaders *h);
 
 #endif

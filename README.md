@@ -16,14 +16,19 @@ FEN import/export, board flipping, move animations, and SAN text entry.
 
 ### Features
 
-- **Five modes**
+- **Six modes**
   - **Analysis** – control both sides with full rule enforcement; ideal for
-    studying, with FEN import/export, undo/restart and board flipping.
+    studying, with FEN import/export, undo/restart and board flipping, plus
+    **PGN import** (Ctrl+O) and a **move review** (V) with chess.com-style
+    Brilliant/Great/Book/Inaccuracy/Mistake/Blunder/Miss grades.
   - **Singleplayer** – play against Stockfish (choose your side and difficulty).
+  - **Puzzles** – train Lichess puzzles by rating band and theme, with hints,
+    reveal and a local puzzle Elo (import with `scripts/import_puzzles.py`).
   - **Local Multiplayer** – host or join a second running instance over TCP
     (localhost or LAN).
   - **Online Multiplayer** – play over the internet by sharing a room code
-    (needs libwebsockets and the bundled server).
+    (needs libwebsockets and the bundled server); optional **accounts** save your
+    PvP and puzzle ratings.
   - **Online Matchmaking** – get paired with a waiting player automatically.
 - **Appearance picker** – browse every board and piece set with thumbnails,
   preview animations, and apply live. Choices are remembered in `chess.conf`.

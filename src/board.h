@@ -23,6 +23,8 @@ typedef enum {
     CHECKMATE,
     STALEMATE,
     INSUFFICIENT_MATERIAL,
+    THREEFOLD_REPETITION,
+    FIFTY_MOVE_RULE,
 } GameState;
 
 typedef struct {
@@ -47,5 +49,10 @@ Piece char_to_piece(char ch);
 
 bool  sq_in_board(int sq);
 int   square(int file, int rank);            /* file 0-7, rank 0-7; rank0=rank1 */
+
+/* Repetition detection: two positions are "the same" when pieces, side to move,
+ * castling rights and en-passant square match (the clocks are ignored). */
+bool  board_rep_equal(const Board *a, const Board *b);
+int   board_repetitions(const Board *cur, const Board *hist, int n);
 
 #endif

@@ -25,6 +25,13 @@ downloaded from
 (see `scripts/import_sounds.sh`). The sounds are the property of Chess.com and are
 bundled here for personal and educational use only.
 
+### Openings data
+
+`assets/openings.tsv` is derived from the **lichess-org/chess-openings** dataset
+(`https://github.com/lichess-org/chess-openings`), released under **CC0 1.0**
+(public domain). It is fetched by `scripts/import_openings.sh` and used by the
+Openings browser and the review's "book" classification.
+
 ### Fonts
 
 OpenChess does not bundle fonts; it uses a system font (Arial Unicode on macOS,
@@ -60,6 +67,13 @@ Source code is licensed under the MIT License — see [`LICENSE`](LICENSE).
 `https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default.zip`
 （见 `scripts/import_sounds.sh`）。音效版权归 Chess.com 所有，此处仅为个人学习
 与教育用途打包。
+
+### 开局数据
+
+`assets/openings.tsv` 来自 **lichess-org/chess-openings** 数据集
+（`https://github.com/lichess-org/chess-openings`），采用 **CC0 1.0**（公共领域）
+许可。该文件由 `scripts/import_openings.sh` 获取，用于开局浏览器与复盘时的
+“book（开局库）”判定。
 
 ### 字体
 

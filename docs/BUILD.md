@@ -88,6 +88,32 @@ manually instead of letting `pkg-config` add `-mwindows`:
 make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer"
 ```
 
+#### Serving online games on Windows
+
+The online server is a console program (`server/openchessd.exe`) that does not
+need SDL, so it can be built on its own:
+
+```sh
+pacman -S --needed mingw-w64-ucrt-x86_64-libwebsockets   # also pulls in OpenSSL
+make CC=gcc server/openchessd.exe
+./server/openchessd.exe                # default port 7681, binds all interfaces
+./server/openchessd.exe 9000           # or a chosen port
+```
+
+Allow inbound TCP in Windows Defender Firewall (PowerShell **as Administrator**):
+
+```powershell
+New-NetFirewallRule -DisplayName "OpenChess server" -Direction Inbound `
+  -Protocol TCP -LocalPort 7681 -Action Allow
+```
+
+Point clients at it with `online_server = ws://<host>:7681/ws` (same machine:
+`ws://127.0.0.1:7681/ws`). To serve beyond your LAN, either port-forward TCP
+7681 on your router (CGNAT/ISP blocks are common) or run the server on a Linux
+VPS behind nginx/Caddy for `wss://`. If the native build fails on `pthread`,
+`clock_gettime` or `usleep`, build and run the server under **WSL2** instead (see
+below) — the Linux server is the reference target.
+
 ### Windows via WSL2 (Linux build)
 
 On Windows 11 with WSLg the Linux build runs unchanged with a GUI:
@@ -133,6 +159,20 @@ result. Finished games are appended as JSON lines to `$OPENCHESS_RESULTS` when
 that variable is set. For internet play, run it on a host with a public address
 and use `wss://` behind a TLS terminator. The `test_online` test starts this
 binary automatically and drives two clients.
+
+Accounts and ratings use **SQLite** (detected via `pkg-config sqlite3`,
+`HAVE_ACCOUNTS`); the store defaults to `openchess_accounts.db` and can be set
+with `OPENCHESS_ACCOUNTS_DB`. Without SQLite the server still runs, with logins
+disabled. Puzzle data and the opening book are optional extras:
+
+```sh
+pip install huggingface_hub pyarrow   # for the HF source
+scripts/import_puzzles.py --count 20000 --min-rating 800 --max-rating 2400
+scripts/import_openings.sh     # opening book for the Book classification
+```
+
+On Windows (MSYS2/MinGW), build it with `make CC=gcc server/openchessd.exe` and
+open the firewall port — see *Serving online games on Windows* above.
 
 ### Assets
 
@@ -231,6 +271,30 @@ make CC=gcc              # -> openchess.exe
 make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer"
 ```
 
+#### 在 Windows 上运行在线服务器
+
+在线服务器是控制台程序（`server/openchessd.exe`），不依赖 SDL，可单独构建：
+
+```sh
+pacman -S --needed mingw-w64-ucrt-x86_64-libwebsockets   # 同时安装 OpenSSL
+make CC=gcc server/openchessd.exe
+./server/openchessd.exe                # 默认端口 7681，监听所有网卡
+./server/openchessd.exe 9000           # 或指定端口
+```
+
+在 Windows Defender 防火墙中放行入站 TCP（以管理员身份运行 PowerShell）：
+
+```powershell
+New-NetFirewallRule -DisplayName "OpenChess server" -Direction Inbound `
+  -Protocol TCP -LocalPort 7681 -Action Allow
+```
+
+客户端用 `online_server = ws://<主机>:7681/ws` 连接（本机为
+`ws://127.0.0.1:7681/ws`）。若需跨公网，可在路由器上把 TCP 7681 端口转发到本机
+（CGNAT/运营商封锁较常见），或在 Linux VPS 上运行服务器并用 nginx/Caddy 提供
+`wss://`。如果原生构建在 `pthread`、`clock_gettime` 或 `usleep` 上失败，请改用
+**WSL2** 构建并运行服务器（见下文）——Linux 服务器是参考目标。
+
 ### 通过 WSL2 使用 Windows（Linux 构建）
 
 在启用 WSLg 的 Windows 11 上，Linux 构建可直接带界面运行：
@@ -273,6 +337,19 @@ OPENCHESS_PORT=9000 ./server/openchessd
 服务器为权威端：负责走子校验、计时与胜负判定。设置 `OPENCHESS_RESULTS` 时，已结束
 的对局会以 JSON 行追加写入该文件。公网对战请将其部署到有公网地址的主机，并在 TLS
 终结后使用 `wss://`。`test_online` 测试会自动启动该程序并驱动两个客户端。
+
+账户与评分使用 **SQLite**（通过 `pkg-config sqlite3` 检测，宏 `HAVE_ACCOUNTS`）；默认
+数据库为 `openchess_accounts.db`，可用 `OPENCHESS_ACCOUNTS_DB` 指定。未安装 SQLite 时
+服务器仍可运行，但禁用登录。谜题数据与开局库为可选项：
+
+```sh
+pip install huggingface_hub pyarrow   # HF 数据源所需
+scripts/import_puzzles.py --count 20000 --min-rating 800 --max-rating 2400
+scripts/import_openings.sh     # 用于 Book 分类的开局库
+```
+
+在 Windows（MSYS2/MinGW）上，用 `make CC=gcc server/openchessd.exe` 构建并放行
+防火墙端口 —— 见上文 *在 Windows 上运行在线服务器*。
 
 ### 资源
 

@@ -4,6 +4,70 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-09-24
+
+### Added
+- **Accounts & ratings.** Optional SQLite-backed accounts on the server
+  (`server/accounts.c`, PBKDF2-HMAC-SHA256 password hashing). Log in / register
+  from the online lobby (**L**), log out (**O**); the session token is saved in
+  `chess.conf` for auto-login. **PvP Elo** (opt-in **Rated** toggle, **R**) and a
+  **puzzle Elo** are stored per account; puzzle results sync when logged in.
+- **Puzzles mode.** A new welcome-menu entry trains Lichess puzzles with rating
+  bands and themes (attacking/defending/endgame/…), including **Hint** and
+  **Reveal** (marked incorrect) and a local puzzle Elo. `scripts/import_puzzles.py`
+  builds a small local subset from the HF dataset
+  (`Lichess/chess-puzzles-with-games`) or the official Lichess puzzle CSV, with
+  theme-balanced sampling.
+- **PGN import/export with variations.** A move-tree module (`src/movetree.*`) and
+  a PGN parser/serializer (`pgn.c`) that handle `( … )` variations, `{}` comments,
+  `$n` NAGs, `[%eval]` and headers.
+- **Move review.** A chess.com-style classifier (`src/review.*`) for Brilliant,
+  Great, Best, Excellent, Good, Book, Inaccuracy, Mistake, Blunder and Miss,
+  plus an opening-book loader (`src/opening.*`) and
+  `scripts/import_openings.sh` (lichess openings, CC0). In Analysis, press **V**
+  to review the game — a Stockfish pass with a progress bar grades every move and
+  shows its glyph in the move list.
+- **PGN import.** **Ctrl+O** opens an import pop-up with a paste box (Ctrl+V) and
+  an **Upload** button (loads a `.pgn` from the games folder); the loaded game is
+  set up in Analysis and can be reviewed/exported (with variations).
+- **Openings browser.** A new welcome entry lists the lichess opening book
+  (CC0) with search; select a line, step it with Left/Right, and press Enter to
+  load it into Analysis. `scripts/import_openings.sh` fetches `assets/openings.tsv`.
+- **Account screen.** A visible **Account** menu entry (plus `L`/`O` in the
+  online lobby) with local offline profile and puzzle rating, and online
+  login/register with PvP + puzzle ratings synced from the server.
+- **Move-tree merge.** Importing a second PGN that starts from the same position
+  now **merges** it into the current analysis tree, so shared prefixes are reused
+  and the new lines become sibling variations (`src/movetree.c`: `mt_merge`,
+  `mt_copy`, `mt_find_child`).
+- **Clickable move list + variations.** In Analysis, click any move (or a `var:`
+  entry) to jump to that position, use Left/Right to step, and play after going
+  back to create a new variation (the old line is kept).
+- **Analysis import/analyse UI.** Visible **Import** and **Analyze** buttons;
+  **Upload** uses a native file dialog (any path), and imported games are
+  analysed automatically with a graded summary.
+- Shared `uci_to_move()` in the rules engine (used by the server and puzzles).
+
+### Changed
+- The PGN move list now shows a full move per row (`1. e4 e5`).
+- The welcome menu now shrinks its buttons adaptively so any number of entries
+  fits without overlapping the footer.
+
+### Fixed
+- **Saved PGN could not be uploaded to chess.com.** SAN disambiguation ran for
+  pawns too, producing invalid moves like `hhxg4` (should be `hxg4`); pawn
+  captures are now disambiguated only by the origin file. The PGN serializer also
+  emitted variations in the wrong place and wrote `!?`-style suffixes; it now
+  places variations inline and uses numeric NAGs (`$1`…), and includes `Round`.
+- **Threefold repetition and the fifty-move rule now count as draws** (client and
+  server), with `1/2-1/2` results and clear reasons.
+- **Puzzle rating** now updates dynamically per attempt: a wrong move counts the
+  puzzle incorrect once (rating drops, ELO), solving it correctly earns a gain,
+  and puzzles default to a window around your rating (**Around my rating**).
+  Added an on-screen **Next** button, and the panel shows your rating and the
+  change.
+- Saved online games now export the authoritative result instead of `*`.
+
 ## [1.4.0-beta1] - 2026-09-24
 
 > Beta: online multiplayer. The protocol and server may still change before the

@@ -27,6 +27,11 @@ gui_smoke.bmp
 
 # Local configuration (created at runtime)
 chess.conf
+openchess_accounts.db
 
 # macOS
 .DS_Store
+tests/test_puzzle
+tests/test_review
+tests/test_opening
+tests/test_movetree

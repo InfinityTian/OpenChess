@@ -314,3 +314,32 @@ GameState game_state(const Board *b)
         return INSUFFICIENT_MATERIAL;
     return NO_GAME_OVER;
 }
+
+bool uci_to_move(const Board *b, const char *uci, Move *out)
+{
+    if (!b || !uci || !out || strlen(uci) < 4) return false;
+
+    char a[3] = { uci[0], uci[1], 0 };
+    char c[3] = { uci[2], uci[3], 0 };
+    if (a[0] < 'a' || a[0] > 'h' || a[1] < '1' || a[1] > '8') return false;
+    if (c[0] < 'a' || c[0] > 'h' || c[1] < '1' || c[1] > '8') return false;
+    int from = algebraic_to_sq(a), to = algebraic_to_sq(c);
+
+    MoveList legal;
+    gen_legal(b, &legal);
+    for (int i = 0; i < legal.count; i++) {
+        Move m = legal.moves[i];
+        if (MOVE_FROM(m) != from || MOVE_TO(m) != to) continue;
+        if (MOVE_FLAGS(m) & FLAG_PROMO) {
+            if (strlen(uci) < 5) continue;
+            char pc = uci[4];
+            Piece want = (pc == 'r') ? WR : (pc == 'b') ? WB : (pc == 'n') ? WN : WQ;
+            Piece got = MOVE_PROMO(m);
+            if (WHITE_PIECE(got)) { if (got != want) continue; }
+            else                  { if (got != (Piece)(want + (BP - WN))) continue; }
+        }
+        *out = m;
+        return true;
+    }
+    return false;
+}

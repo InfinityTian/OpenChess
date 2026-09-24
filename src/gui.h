@@ -6,6 +6,11 @@
 #include "ai.h"
 #include "net.h"
 #include "online.h"
+#include "puzzle.h"
+#include "review.h"
+#include "opening.h"
+#include "movetree.h"
+#include "pgn.h"
 #include "themes.h"
 #include <SDL.h>
 #include <SDL_ttf.h>
@@ -55,8 +60,10 @@ typedef enum {
 typedef enum {
     SCENE_MENU = 0,       /* welcome / game-mode selection */
     SCENE_SINGLE_SETUP,   /* choose side + difficulty */
+    SCENE_PUZZLE_SETUP,   /* choose puzzle rating band + theme */
     SCENE_HOSTJOIN,       /* local multiplayer host/join */
     SCENE_ONLINE,         /* online lobby: room code / matchmaking */
+    SCENE_OPENINGS,       /* opening book browser */
     SCENE_APPEARANCE,     /* board/piece/animation picker */
     SCENE_SETTINGS,       /* settings: engine + gameplay + audio/video */
     SCENE_GAME,
@@ -68,6 +75,7 @@ typedef enum {
     MODE_SINGLE,       /* vs Stockfish (Phase 2) */
     MODE_LOCAL,        /* LAN play over SDL2_net */
     MODE_ONLINE,       /* internet play over WebSocket */
+    MODE_PUZZLE,       /* Lichess puzzle trainer */
 } GameMode;
 
 #define FEN_MAX 128
@@ -173,6 +181,18 @@ typedef struct {
     int    settings_tab;        /* 0 = Engine, 1 = Gameplay, 2 = Audio/Video */
     int    settings_row;        /* focused row within the gameplay/AV tabs */
 
+    /* opening browser */
+    int    opening_sel;         /* selection within the filtered list */
+    int    opening_step;        /* ply shown on the board */
+    char   opening_filter[24];
+    int    opening_filter_len;
+    int    opening_match[4096];
+    int    opening_match_count;
+    char   opening_eco[8];
+    char   opening_name[96];
+    char   opening_moves[256];
+    int    opening_nmoves;
+
     /* local multiplayer */
     Transport *net;
     Color  local_color;
@@ -188,6 +208,7 @@ typedef struct {
     int    online_focus;        /* focused field/button on the lobby screen */
     int    online_time_idx;     /* index into ONLINE_TIMES */
     bool   online_over;         /* online game finished (show Rematch) */
+    char   override_result[8];  /* authoritative result for PGN export */
     bool   draw_offered;        /* opponent offered a draw */
     bool   chat_open;           /* chat entry active */
     char   chat_text[160];
@@ -197,11 +218,62 @@ typedef struct {
     char   online_url[128];     /* e.g. ws://host:7681/ws */
     char   online_code_in[8];   /* room code typed by the joiner */
     char   online_nick[32];
+    bool   online_rated;        /* request a rated game */
+
+    /* account */
+    char   account_token[80];   /* persisted session token (auto-login) */
+    char   account_user[40];
+    bool   account_open;        /* login/register modal active */
+    bool   account_register;    /* modal mode: register vs login */
+    int    account_focus;       /* 0 user, 1 pass */
+    char   account_user_in[32];
+    char   account_pass_in[32];
+
+    /* puzzles */
+    Puzzles *puzzles;           /* loaded puzzle subset, or NULL */
+    Puzzle puzzle_cur;          /* puzzle being solved */
+    int    puzzle_band;         /* index into PUZZLE_BANDS */
+    int    puzzle_theme;        /* index into PUZZLE_THEMES (0 = any) */
+    int    puzzle_step;         /* index of the next move in puzzle_moves */
+    int    puzzle_nmoves;
+    char   puzzle_moves[32][6];
+    bool   puzzle_done;
+    bool   puzzle_failed;
+    bool   puzzle_counted;      /* rating already applied for this puzzle */
+    int    puzzle_delta;        /* last rating change (for display) */
+    int    puzzle_rating;       /* local puzzle Elo */
 
     int    selected;            /* from-square, or -1 */
     MoveList targets;           /* legal targets when a piece is selected */
 
     char   move_san[MAX_PLY][8];/* SAN per ply for the move list */
+
+    /* move review (analysis mode) */
+    OpeningBook *book;          /* optional opening book, or NULL */
+    AiEngine *review_ai;        /* dedicated review engine, or NULL */
+    bool   review_on;
+    int    review_i;            /* ply currently being reviewed */
+    int    review_stage;        /* 0 = evaluate before, 1 = evaluate after */
+    int    review_cls[MAX_PLY];
+    int    rb_cp, rb_mate;  bool rb_hm;   /* best eval before the move */
+    int    r2_cp, r2_mate;  bool r2_hm;   /* second-best eval before */
+    int    ra_cp, ra_mate;  bool ra_hm;   /* eval after the move (mover view) */
+    bool   r_issued;            /* engine search issued for the current stage */
+
+    /* PGN import + analysis move tree */
+    MoveNode   *pgntree;
+    MoveNode   *tree_cur;
+    MoveNode   *path_nodes[MAX_PLY];
+    int         path_len;
+    SDL_Rect    move_hit_rect[MAX_PLY + 64];
+    MoveNode   *move_hit_node[MAX_PLY + 64];
+    int         move_hit_count;
+    PgnHeaders  pgn_hdr;
+    bool   pgn_import_open;
+    char   pgn_text[4096];
+    int    pgn_text_len;
+    int    pgn_focus;           /* 0 text, 1 load, 2 cancel */
+
     SavedGame saved;            /* last game, resumable from the menu */
     InputBox input;
     bool   san_open;            /* SAN entry revealed (Enter to open) */

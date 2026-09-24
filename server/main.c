@@ -17,11 +17,13 @@
  */
 
 #include "libwebsockets.h"
+#include "accounts.h"
 #include "../src/proto.h"
 #include "../src/board.h"
 #include "../src/move.h"
 #include "../src/fen.h"
 #include "../src/pgn.h"
+#include <math.h>
 
 #include <pthread.h>
 #include <signal.h>
@@ -57,6 +59,14 @@ typedef struct {
     int          queued;
     int          want_time;
     int          want_inc;
+    int          want_rated;
+    /* account (when logged in) */
+    int          user_id;
+    bool         logged_in;
+    char         user[40];
+    char         auth_token[80];
+    int          pvp_rating;
+    int          puzzle_rating;
     uint64_t     last_rx;        /* for the heartbeat watchdog */
     uint64_t     last_ping;
     uint64_t     chat_win;       /* chat rate-limit window */
@@ -71,12 +81,15 @@ typedef struct {
     int      seat[2];                /* session slots, or -1 */
     int      started;
     int      over;
+    int      rated;                  /* rated game (both logged in) */
     char     name[2][40];            /* player nicks, for spectators */
     char     seattok[2][40];         /* stable per-seat resume token */
     int      connected[2];
     uint64_t dc_ts[2];               /* when the seat disconnected */
     int      rematch[2];             /* rematch votes */
     Board    board;
+    Board    pos[MAX_PLY + 1];        /* position at each ply (for repetition) */
+    int      npos;
     Move     history[MAX_PLY];
     char     san[MAX_PLY][8];
     int      ply;
@@ -91,6 +104,7 @@ static Room    rooms[MAX_ROOMS];
 static int     queue_slots[MAX_SESS];
 static int     queue_count;
 static int     g_grace_ms = DEFAULT_GRACE_MS;
+static Accounts *g_accounts = NULL;
 
 static const char CODE_ALPHABET[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -174,6 +188,21 @@ static void send_reject(Session *s, const char *reason)
     sess_send(m, s);
 }
 
+static void send_auth(Session *s, bool ok, const char *reason)
+{
+    cJSON *m = proto_new(PROTO_S2C_AUTH);
+    cJSON_AddBoolToObject(m, "ok", ok);
+    if (!ok) {
+        cJSON_AddStringToObject(m, "reason", reason ? reason : "failed");
+    } else {
+        cJSON_AddStringToObject(m, "user", s->user);
+        cJSON_AddStringToObject(m, "token", s->auth_token);
+        cJSON_AddNumberToObject(m, "pvp_rating", s->pvp_rating);
+        cJSON_AddNumberToObject(m, "puzzle_rating", s->puzzle_rating);
+    }
+    sess_send(m, s);
+}
+
 static void send_room(Session *s, Room *r)
 {
     if (!s || !r) return;
@@ -251,6 +280,8 @@ static int alloc_room(char out_code[CODE_LEN + 1], int time_ms, int inc_ms)
             snprintf(rooms[i].code, sizeof rooms[i].code, "%s", code);
             board_reset(&rooms[i].board);
             rooms[i].ply = 0;
+            rooms[i].pos[0] = rooms[i].board;
+            rooms[i].npos = 1;
             rooms[i].init_time = time_ms > 0 ? time_ms : 0;
             rooms[i].clock_ms[0] = rooms[i].clock_ms[1] =
                 time_ms > 0 ? time_ms : -1;
@@ -279,6 +310,9 @@ static void start_match(Room *r)
     r->started = 1;
     r->over = 0;
     r->last_ts = now_ms();
+    int a = r->seat[0], b = r->seat[1];
+    r->rated = (a >= 0 && b >= 0 && sessions[a].logged_in && sessions[b].logged_in &&
+                sessions[a].want_rated && sessions[b].want_rated);
     send_start(r);
 }
 
@@ -290,45 +324,15 @@ static void leave_if_over(Session *s)
     if (!r->used || r->over) detach_room(s->room);
 }
 
-/* ---- UCI + rules -------------------------------------------------------- */
+/* ---- rules -------------------------------------------------------------- */
 
-static int uci_square(const char *s)
+static GameState referee_state(const Room *r)
 {
-    char alg[3] = { s[0], s[1], 0 };
-    if (alg[0] < 'a' || alg[0] > 'h' || alg[1] < '1' || alg[1] > '8') return -1;
-    return algebraic_to_sq(alg);
-}
-
-static bool uci_to_move(const Board *b, const char *uci, Move *out)
-{
-    if (!uci || strlen(uci) < 4) return false;
-    int from = uci_square(uci), to = uci_square(uci + 2);
-    if (from < 0 || to < 0) return false;
-
-    MoveList legal;
-    gen_legal(b, &legal);
-    for (int i = 0; i < legal.count; i++) {
-        Move m = legal.moves[i];
-        if (MOVE_FROM(m) != from || MOVE_TO(m) != to) continue;
-        if (MOVE_FLAGS(m) & FLAG_PROMO) {
-            if (strlen(uci) < 5) continue;
-            char c = uci[4];
-            Piece want = (c == 'q') ? WQ : (c == 'r') ? WR : (c == 'b') ? WB : WN;
-            Piece got = MOVE_PROMO(m);
-            if (WHITE_PIECE(got)) { if (got != want) continue; }
-            else                  { if (got != (Piece)(want + (BP - WN))) continue; }
-        }
-        *out = m;
-        return true;
-    }
-    return false;
-}
-
-static GameState referee_state(const Board *b)
-{
-    GameState gs = game_state(b);
-    if (gs == NO_GAME_OVER && b->halfmove_clock >= 100) return STALEMATE; /* draw */
-    return gs;
+    GameState gs = game_state(&r->board);
+    if (gs != NO_GAME_OVER) return gs;
+    if (r->board.halfmove_clock >= 100) return FIFTY_MOVE_RULE;
+    if (board_repetitions(&r->board, r->pos, r->npos) >= 3) return THREEFOLD_REPETITION;
+    return NO_GAME_OVER;
 }
 
 static const char *result_for(GameState gs, Color side_to_move)
@@ -336,18 +340,21 @@ static const char *result_for(GameState gs, Color side_to_move)
     switch (gs) {
         case CHECKMATE: return side_to_move == WHITE ? "0-1" : "1-0";
         case STALEMATE:
-        case INSUFFICIENT_MATERIAL: return "1/2-1/2";
+        case INSUFFICIENT_MATERIAL:
+        case THREEFOLD_REPETITION:
+        case FIFTY_MOVE_RULE: return "1/2-1/2";
         default: return "*";
     }
 }
 
-static const char *reason_for(GameState gs, const Board *b)
+static const char *reason_for(GameState gs)
 {
     switch (gs) {
         case CHECKMATE: return "checkmate";
-        case STALEMATE:
-            return b->halfmove_clock >= 100 ? "fifty-move rule" : "stalemate";
+        case STALEMATE: return "stalemate";
         case INSUFFICIENT_MATERIAL: return "insufficient material";
+        case THREEFOLD_REPETITION: return "threefold repetition";
+        case FIFTY_MOVE_RULE: return "fifty-move rule";
         default: return "game over";
     }
 }
@@ -373,6 +380,25 @@ static void finish_game(Room *r, const char *result, const char *reason)
     if (!r || r->over) return;
     r->over = 1;
     log_result(r, result, reason);
+
+    /* Rated game: update both Elo ratings before announcing the result. */
+    if (r->rated && g_accounts && r->seat[0] >= 0 && r->seat[1] >= 0) {
+        Session *w = &sessions[r->seat[0]], *b = &sessions[r->seat[1]];
+        if (w->logged_in && b->logged_in) {
+            double ea = 1.0 / (1.0 + pow(10.0, (b->pvp_rating - w->pvp_rating) / 400.0));
+            double sb, sw;
+            if (strcmp(result, "1-0") == 0) { sw = 1.0; sb = 0.0; }
+            else if (strcmp(result, "0-1") == 0) { sw = 0.0; sb = 1.0; }
+            else { sw = 0.5; sb = 0.5; }
+            w->pvp_rating += (int)(32.0 * (sw - ea) + 0.5);
+            b->pvp_rating += (int)(32.0 * (sb - (1.0 - ea)) + 0.5);
+            if (w->pvp_rating < 400) w->pvp_rating = 400;
+            if (b->pvp_rating < 400) b->pvp_rating = 400;
+            accounts_set_pvp(g_accounts, w->user_id, w->pvp_rating);
+            accounts_set_pvp(g_accounts, b->user_id, b->pvp_rating);
+        }
+    }
+
     for (int k = 0; k < 2; k++) {
         if (r->seat[k] < 0) continue;
         Session *t = &sessions[r->seat[k]];
@@ -382,6 +408,7 @@ static void finish_game(Room *r, const char *result, const char *reason)
         cJSON_AddStringToObject(m, "reason", reason);
         add_clocks(m, r);
         sess_send(m, t);
+        if (r->rated && t->logged_in) send_auth(t, true, NULL);   /* new rating */
     }
     /* spectators */
     for (int i = 0; i < MAX_SESS; i++) {
@@ -462,12 +489,86 @@ static bool try_resume(Session *s, const char *tok)
 
 /* ---- message handlers --------------------------------------------------- */
 
+static void apply_account(Session *s, const Account *ac)
+{
+    s->logged_in = true;
+    s->user_id = ac->id;
+    snprintf(s->user, sizeof s->user, "%s", ac->name);
+    snprintf(s->auth_token, sizeof s->auth_token, "%s", ac->token);
+    s->pvp_rating = ac->pvp_rating;
+    s->puzzle_rating = ac->puzzle_rating;
+    snprintf(s->nick, sizeof s->nick, "%s", ac->name);
+}
+
 static void handle_hello(Session *s, const ProtoFrame *f)
 {
     const char *nick = proto_field_str(f, "nick");
     if (nick && *nick) snprintf(s->nick, sizeof s->nick, "%s", nick);
     const char *tok = proto_field_str(f, "token");
     if (tok && *tok) try_resume(s, tok);
+    const char *auth = proto_field_str(f, "auth");
+    if (auth && *auth && g_accounts) {
+        Account ac;
+        if (accounts_login_token(g_accounts, auth, &ac) == 1) {
+            apply_account(s, &ac);
+            send_auth(s, true, NULL);
+        }
+    }
+}
+
+static void handle_register(Session *s, const ProtoFrame *f)
+{
+    if (!g_accounts) { send_auth(s, false, "accounts unavailable"); return; }
+    const char *u = proto_field_str(f, "user");
+    const char *p = proto_field_str(f, "pass");
+    Account ac;
+    int r = accounts_register(g_accounts, u, p, &ac);
+    if (r == 1) { apply_account(s, &ac); send_auth(s, true, NULL); }
+    else if (r == 0) send_auth(s, false, "name taken");
+    else send_auth(s, false, "registration failed");
+}
+
+static void handle_login(Session *s, const ProtoFrame *f)
+{
+    if (!g_accounts) { send_auth(s, false, "accounts unavailable"); return; }
+    const char *tok = proto_field_str(f, "token");
+    Account ac;
+    if (tok && *tok) {
+        int r = accounts_login_token(g_accounts, tok, &ac);
+        if (r == 1) { apply_account(s, &ac); send_auth(s, true, NULL); }
+        else send_auth(s, false, "session expired");
+        return;
+    }
+    const char *u = proto_field_str(f, "user");
+    const char *p = proto_field_str(f, "pass");
+    int r = accounts_login(g_accounts, u, p, &ac);
+    if (r == 1) { apply_account(s, &ac); send_auth(s, true, NULL); }
+    else send_auth(s, false, "wrong user or password");
+}
+
+static void handle_logout(Session *s)
+{
+    if (g_accounts && s->logged_in) accounts_logout(g_accounts, s->auth_token);
+    s->logged_in = false;
+    s->user_id = 0;
+    s->user[0] = '\0';
+    s->auth_token[0] = '\0';
+    send_auth(s, false, "logged out");
+}
+
+static void handle_puzzle_result(Session *s, const ProtoFrame *f)
+{
+    if (!s->logged_in || !g_accounts) return;
+    int pr = proto_field_int(f, "rating", 1500);
+    bool solved = proto_field_bool(f, "solved", false);
+
+    double ur = s->puzzle_rating, er = 1.0 / (1.0 + pow(10.0, (pr - ur) / 400.0));
+    ur += 32.0 * ((solved ? 1.0 : 0.0) - er);
+    if (ur < 400) ur = 400;
+    if (ur > 3000) ur = 3000;
+    s->puzzle_rating = (int)(ur + 0.5);
+    accounts_set_puzzle(g_accounts, s->user_id, s->puzzle_rating);
+    send_auth(s, true, NULL);
 }
 
 static void handle_create(Session *s, const ProtoFrame *f)
@@ -478,6 +579,7 @@ static void handle_create(Session *s, const ProtoFrame *f)
     }
     int t = proto_field_int(f, "time", 0);
     int inc = proto_field_int(f, "inc", 0);
+    s->want_rated = proto_field_bool(f, "rated", false);
     char code[CODE_LEN + 1];
     int ri = alloc_room(code, t, inc);
     if (ri < 0) { send_reject(s, "server full"); return; }
@@ -498,6 +600,7 @@ static void handle_join(Session *s, const ProtoFrame *f)
         leave_if_over(s);
     }
     const char *code = proto_field_str(f, "code");
+    s->want_rated = proto_field_bool(f, "rated", false);
     int ri = find_room(code);
     if (ri < 0 || rooms[ri].started || rooms[ri].seat[1] >= 0) {
         send_reject(s, "room not available");
@@ -522,6 +625,7 @@ static void handle_queue(Session *s, const ProtoFrame *f)
     }
     s->want_time = proto_field_int(f, "time", 0);
     s->want_inc = proto_field_int(f, "inc", 0);
+    s->want_rated = proto_field_bool(f, "rated", false);
 
     s->queued = 1;
     queue_slots[queue_count++] = sidx(s);
@@ -584,6 +688,8 @@ static void handle_move(Session *s, const ProtoFrame *f)
     move_to_san(&pre, m, r->san[r->ply], sizeof r->san[r->ply]);
     make_move_plumb(&r->board, m);
     r->history[r->ply++] = m;
+    r->pos[r->ply] = r->board;
+    r->npos = r->ply + 1;
 
     if (r->clock_ms[0] >= 0) {
         uint64_t elapsed = now_ms() - r->last_ts;
@@ -600,9 +706,9 @@ static void handle_move(Session *s, const ProtoFrame *f)
 
     broadcast_move(r, uci);
 
-    GameState gs = referee_state(&r->board);
+    GameState gs = referee_state(r);
     if (gs != NO_GAME_OVER)
-        finish_game(r, result_for(gs, r->board.side), reason_for(gs, &r->board));
+        finish_game(r, result_for(gs, r->board.side), reason_for(gs));
 }
 
 static void handle_resign(Session *s)
@@ -644,6 +750,8 @@ static void handle_rematch(Session *s)
 
     board_reset(&r->board);
     r->ply = 0;
+    r->pos[0] = r->board;
+    r->npos = 1;
     r->over = 0;
     r->rematch[0] = r->rematch[1] = 0;
     r->connected[0] = r->connected[1] = 1;
@@ -850,6 +958,10 @@ static int srv_cb(struct lws *wsi, enum lws_callback_reasons reason,
         case PROTO_C2S_DRAW_DECLINE: handle_draw(s, "decline"); break;
         case PROTO_C2S_CHAT:         handle_chat(s, &f); break;
         case PROTO_C2S_SPECTATE:     handle_spectate(s, &f); break;
+        case PROTO_C2S_REGISTER:     handle_register(s, &f); break;
+        case PROTO_C2S_LOGIN:        handle_login(s, &f); break;
+        case PROTO_C2S_LOGOUT:       handle_logout(s); break;
+        case PROTO_C2S_PUZZLE_RESULT:handle_puzzle_result(s, &f); break;
         case PROTO_C2S_PING:         handle_ping(s, &f); break;
         case PROTO_C2S_PONG:         break;   /* heartbeat reply */
         default: break;
@@ -966,6 +1078,12 @@ int main(int argc, char **argv)
 
     if (getenv("OPENCHESS_QUIET")) lws_set_log_level(LLL_ERR | LLL_WARN, NULL);
 
+    const char *db = getenv("OPENCHESS_ACCOUNTS_DB");
+    if (!db || !*db) db = "openchess_accounts.db";
+    g_accounts = accounts_open(db);
+    if (!g_accounts)
+        fprintf(stderr, "openchessd: accounts unavailable (no SQLite store)\n");
+
     struct lws_context *ctx = lws_create_context(&info);
     if (!ctx) {
         fprintf(stderr, "openchessd: could not listen on port %d\n", port);
@@ -991,5 +1109,6 @@ int main(int argc, char **argv)
     g_ctx = NULL;                   /* stop the ticker touching the context */
     usleep(40000);
     lws_context_destroy(ctx);
+    accounts_close(g_accounts);
     return 0;
 }

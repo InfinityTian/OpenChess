@@ -127,3 +127,22 @@ Piece char_to_piece(char ch)
         default: return EMPTY;
     }
 }
+bool board_rep_equal(const Board *a, const Board *b)
+{
+    if (!a || !b) return false;
+    if (a->side != b->side) return false;
+    if (a->castling != b->castling) return false;
+    if (a->ep_square != b->ep_square) return false;
+    for (int i = 0; i < 64; i++)
+        if (a->board[i] != b->board[i]) return false;
+    return true;
+}
+
+int board_repetitions(const Board *cur, const Board *hist, int n)
+{
+    if (!cur || !hist || n <= 0) return 0;
+    int count = 0;
+    for (int i = 0; i < n; i++)
+        if (board_rep_equal(cur, &hist[i])) count++;
+    return count;
+}

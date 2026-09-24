@@ -504,7 +504,7 @@ int main(void)
 
     /* ---- appearance picker: renders thumbnails and applies choices ---- */
     g->scene = SCENE_MENU;
-    g->menu_index = 5;          /* the Appearance entry */
+    g->menu_index = 6;          /* the Appearance entry */
     SDL_Event ape = {0};
     ape.type = SDL_KEYDOWN;
     ape.key.keysym.sym = SDLK_RETURN;
@@ -745,6 +745,179 @@ int main(void)
         }
         g->scene = SCENE_GAME;
         g->mode = MODE_ANALYSIS;
+    }
+
+    /* ---- puzzle setup renders and a puzzle can be solved ---- */
+    {
+        g->scene = SCENE_PUZZLE_SETUP;
+        g->setup_field = 0;
+        gui_render(g, ren);
+        g->setup_field = 1;
+        gui_render(g, ren);
+
+        const char *ppath = "/tmp/oc_gui_puzzle.jsonl";
+        FILE *pf = fopen(ppath, "w");
+        if (pf) {
+            fputs("{\"id\":\"t1\",\"fen\":\"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/"
+                  "RNBQKBNR w KQkq - 0 1\",\"moves\":\"e2e4 e7e5\","
+                  "\"rating\":1500,\"themes\":[\"opening\"]}\n", pf);
+            fclose(pf);
+            g->puzzles = puzzles_load(ppath);
+        }
+        if (g->puzzles) {
+            g->puzzle_band = 0;      /* Around my rating (1500) */
+            g->puzzle_theme = 0;
+            SDL_Event st = {0};
+            st.type = SDL_KEYDOWN;
+            st.key.keysym.sym = SDLK_RETURN;
+            gui_handle_event(g, &st);
+            if (g->scene != SCENE_GAME || g->mode != MODE_PUZZLE) {
+                fprintf(stderr, "puzzle did not start\n");
+                return 1;
+            }
+            /* a wrong move (e7-e6) scores as incorrect and drops the rating */
+            gui_render(g, ren);
+            int e7 = algebraic_to_sq("e7"), e6 = algebraic_to_sq("e6");
+            int cwx, cwy, cwx2, cwy2;
+            sq_window(g, ren, e7, &cwx, &cwy);
+            sq_window(g, ren, e6, &cwx2, &cwy2);
+            SDL_Event wd = {0};
+            wd.type = SDL_MOUSEBUTTONDOWN; wd.button.button = SDL_BUTTON_LEFT;
+            wd.button.x = cwx; wd.button.y = cwy;
+            gui_handle_event(g, &wd);
+            SDL_Event wu = {0};
+            wu.type = SDL_MOUSEBUTTONUP; wu.button.button = SDL_BUTTON_LEFT;
+            wu.button.x = cwx2; wu.button.y = cwy2;
+            gui_handle_event(g, &wu);
+            if (!g->puzzle_counted || g->puzzle_rating >= 1500) {
+                fprintf(stderr, "wrong puzzle move did not lower the rating\n");
+                return 1;
+            }
+            /* solver (Black) plays e5 via the SAN box */
+            SDL_Event en = {0};
+            en.type = SDL_KEYDOWN;
+            en.key.keysym.sym = SDLK_RETURN;
+            gui_handle_event(g, &en);        /* open box */
+            SDL_Event te = {0};
+            te.type = SDL_TEXTINPUT;
+            te.text.text[0] = 'e'; te.text.text[1] = '5';
+            te.text.text[2] = '\0';
+            gui_handle_event(g, &te);
+            gui_handle_event(g, &en);        /* submit */
+            if (!g->puzzle_done) {
+                fprintf(stderr, "puzzle solution not accepted\n");
+                return 1;
+            }
+            puzzles_free(g->puzzles);
+            g->puzzles = NULL;
+            remove(ppath);
+        } else {
+            printf("(puzzle test skipped: could not load sample)\n");
+        }
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+    }
+
+    /* ---- PGN import pop-up loads the mainline into the board ---- */
+    {
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        SDL_Event o = {0};
+        o.type = SDL_KEYDOWN;
+        o.key.keysym.sym = SDLK_o;
+        o.key.keysym.mod = KMOD_LCTRL;
+        gui_handle_event(g, &o);
+        if (!g->pgn_import_open) {
+            fprintf(stderr, "Ctrl+O did not open the PGN import\n");
+            return 1;
+        }
+        snprintf(g->pgn_text, sizeof g->pgn_text, "1. e4 e5 2. Nf3 Nc6");
+        g->pgn_text_len = (int)strlen(g->pgn_text);
+        SDL_Event en = {0};
+        en.type = SDL_KEYDOWN;
+        en.key.keysym.sym = SDLK_RETURN;
+        gui_handle_event(g, &en);
+        if (g->ply != 4 || g->pgntree == NULL) {
+            fprintf(stderr, "PGN import did not load the mainline (ply=%d)\n", g->ply);
+            return 1;
+        }
+        if (strcmp(g->move_san[0], "e4") != 0 || strcmp(g->move_san[3], "Nc6") != 0) {
+            fprintf(stderr, "PGN import move list wrong\n");
+            return 1;
+        }
+        if (g->pgn_import_open) {
+            fprintf(stderr, "import pop-up stayed open\n");
+            return 1;
+        }
+
+        /* click the first move (e4) to jump back, then play c5 -> variation */
+        gui_render(g, ren);
+        int idx = -1;
+        for (int i = 0; i < g->move_hit_count; i++)
+            if (strcmp(g->move_hit_node[i]->san, "e4") == 0) { idx = i; break; }
+        if (idx < 0) {
+            fprintf(stderr, "no clickable move hit for e4\n");
+            return 1;
+        }
+        MoveNode *e4node = g->move_hit_node[idx];
+        int bx = g->move_hit_rect[idx].x + 20;
+        int by = g->move_hit_rect[idx].y + 8;
+        int wx, wy;
+        SDL_RenderLogicalToWindow(ren, (float)bx, (float)by, &wx, &wy);
+        SDL_Event md = {0};
+        md.type = SDL_MOUSEBUTTONDOWN;
+        md.button.button = SDL_BUTTON_LEFT;
+        md.button.x = wx; md.button.y = wy;
+        gui_handle_event(g, &md);
+        if (g->tree_cur != e4node || g->ply != 1) {
+            fprintf(stderr, "clicking a move did not navigate (ply=%d)\n", g->ply);
+            return 1;
+        }
+        SDL_Event en3 = {0};
+        en3.type = SDL_KEYDOWN;
+        en3.key.keysym.sym = SDLK_RETURN;
+        gui_handle_event(g, &en3);           /* open SAN box */
+        SDL_Event tc = {0};
+        tc.type = SDL_TEXTINPUT;
+        tc.text.text[0] = 'c'; tc.text.text[1] = '5'; tc.text.text[2] = '\0';
+        gui_handle_event(g, &tc);
+        gui_handle_event(g, &en3);           /* submit */
+        if (!g->tree_cur || strcmp(g->tree_cur->san, "c5") != 0 ||
+            !g->tree_cur->parent || !g->tree_cur->parent->first ||
+            strcmp(g->tree_cur->parent->first->san, "e5") != 0) {
+            fprintf(stderr, "playing after navigating did not create a variation\n");
+            return 1;
+        }
+    }
+
+    /* ---- opening browser renders and steps ---- */
+    if (g->book && opening_line_count(g->book) > 0) {
+        g->scene = SCENE_MENU;
+        g->menu_index = 8;          /* Openings entry */
+        g->saved.valid = false;
+        SDL_Event en = {0};
+        en.type = SDL_KEYDOWN;
+        en.key.keysym.sym = SDLK_RETURN;
+        gui_handle_event(g, &en);
+        if (g->scene != SCENE_OPENINGS) {
+            fprintf(stderr, "Openings menu entry did not open the browser\n");
+            return 1;
+        }
+        gui_render(g, ren);
+        SDL_Event right = {0};
+        right.type = SDL_KEYDOWN;
+        right.key.keysym.sym = SDLK_RIGHT;
+        int step0 = g->opening_step;
+        gui_handle_event(g, &right);
+        gui_render(g, ren);
+        if (g->opening_step < step0) {
+            fprintf(stderr, "opening step did not advance\n");
+            return 1;
+        }
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+    } else {
+        printf("(opening browser test skipped: no book)\n");
     }
 
     /* ---- input must invert the installed transform exactly ---- */

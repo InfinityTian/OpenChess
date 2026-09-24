@@ -1,7 +1,10 @@
 #include "pgn.h"
+#include "fen.h"
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 /* Piece letter -> piece for the side given (true=white). */
 static Piece letter_to_piece(char c, bool white)
@@ -193,26 +196,34 @@ void move_to_san(const Board *before, Move m, char *out, size_t n)
             buf[k++] = pl;
         }
 
-        /* disambiguation */
-        MoveList legal;
-        gen_legal(before, &legal);
-        bool conflict_file = false, conflict_rank = false, any = false;
-        for (int i = 0; i < legal.count; i++) {
-            Move o = legal.moves[i];
-            if (o == m) continue;
-            if (before->board[MOVE_FROM(o)] != p) continue;
-            if (MOVE_TO(o) != to) continue;
-            any = true;
-            if ((MOVE_FROM(o) % 8) == (from % 8)) conflict_file = true;
-            if ((MOVE_FROM(o) / 8) == (from / 8)) conflict_rank = true;
-        }
-        if (any && conflict_file && conflict_rank) {
-            buf[k++] = (char)('a' + (from % 8));
-            buf[k++] = (char)('1' + (from / 8));
-        } else if (any && conflict_file) {
-            buf[k++] = (char)('1' + (from / 8));
-        } else if (any && conflict_rank) {
-            buf[k++] = (char)('a' + (from % 8));
+        /* Disambiguation (pieces only): pawns are disambiguated by the origin
+         * file that the capture prefix already includes. */
+        if (!is_pawn) {
+            MoveList legal;
+            gen_legal(before, &legal);
+            bool conflict_file = false, conflict_rank = false, any = false;
+            for (int i = 0; i < legal.count; i++) {
+                Move o = legal.moves[i];
+                if (o == m) continue;
+                if (before->board[MOVE_FROM(o)] != p) continue;
+                if (MOVE_TO(o) != to) continue;
+                any = true;
+                if ((MOVE_FROM(o) % 8) == (from % 8)) conflict_file = true;
+                if ((MOVE_FROM(o) / 8) == (from / 8)) conflict_rank = true;
+            }
+            if (any && conflict_file && conflict_rank) {
+                buf[k++] = (char)('a' + (from % 8));
+                buf[k++] = (char)('1' + (from / 8));
+            } else if (any && conflict_file) {
+                /* same file as another candidate -> rank disambiguates */
+                buf[k++] = (char)('1' + (from / 8));
+            } else if (any && conflict_rank) {
+                /* same rank as another candidate -> file disambiguates */
+                buf[k++] = (char)('a' + (from % 8));
+            } else if (any) {
+                /* different file and rank -> the departure file is unique */
+                buf[k++] = (char)('a' + (from % 8));
+            }
         }
 
         if (is_capture) {
@@ -262,6 +273,8 @@ const char *pgn_result(const Board *b, GameState state)
             return (b->side == WHITE) ? "0-1" : "1-0";
         case STALEMATE:
         case INSUFFICIENT_MATERIAL:
+        case THREEFOLD_REPETITION:
+        case FIFTY_MOVE_RULE:
             return "1/2-1/2";
         default:
             return "*";
@@ -315,4 +328,223 @@ void pgn_write(FILE *f, const char moves[][8], int ply,
     else if (col > 0) { fputc(' ', f); col++; }
     fputs(res, f);
     fputc('\n', f);
+}
+/* ---- PGN import (variations/NAGs/comments) ------------------------------ */
+
+static const char *parse_moves(const char *p, MoveNode **cur,
+                               char *res, size_t rn);
+
+static void parse_header_line(const char *start, const char *end, PgnHeaders *out,
+                              Board *fen_out, bool *have_fen)
+{
+    char tag[32] = "", val[160] = "";
+    const char *q = start + 1;
+    while (q < end && (*q == ' ' || *q == '\t')) q++;
+    int i = 0;
+    while (q < end && *q != ' ' && *q != '\t' && *q != ']' && i < 31) tag[i++] = *q++;
+    tag[i] = '\0';
+    while (q < end && (*q == ' ' || *q == '\t')) q++;
+    if (q < end && *q == '"') q++;
+    i = 0;
+    while (q < end && *q != '"' && i < 159) val[i++] = *q++;
+    val[i] = '\0';
+
+    if (!out) return;
+    if (strcasecmp(tag, "Event") == 0) snprintf(out->event, sizeof out->event, "%s", val);
+    else if (strcasecmp(tag, "Site") == 0) snprintf(out->site, sizeof out->site, "%s", val);
+    else if (strcasecmp(tag, "Date") == 0) snprintf(out->date, sizeof out->date, "%s", val);
+    else if (strcasecmp(tag, "Round") == 0) snprintf(out->round, sizeof out->round, "%s", val);
+    else if (strcasecmp(tag, "White") == 0) snprintf(out->white, sizeof out->white, "%s", val);
+    else if (strcasecmp(tag, "Black") == 0) snprintf(out->black, sizeof out->black, "%s", val);
+    else if (strcasecmp(tag, "Result") == 0) snprintf(out->result, sizeof out->result, "%s", val);
+    else if (strcasecmp(tag, "FEN") == 0 && fen_out) {
+        Board b;
+        if (fen_parse(val, &b)) { *fen_out = b; *have_fen = true; }
+    }
+}
+
+static const char *parse_moves(const char *p, MoveNode **cur,
+                               char *res, size_t rn)
+{
+    for (;;) {
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        if (!*p) return p;
+        if (*p == ')') return p;
+
+        if (*p == '{') {
+            const char *e = strchr(p, '}');
+            if (!e) return p + strlen(p);
+            if (*cur) {
+                size_t n = (size_t)(e - p - 1);
+                if (n >= sizeof (*cur)->comment) n = sizeof (*cur)->comment - 1;
+                memcpy((*cur)->comment, p + 1, n);
+                (*cur)->comment[n] = '\0';
+            }
+            p = e + 1;
+            continue;
+        }
+        if (*p == ';') { while (*p && *p != '\n') p++; continue; }
+        if (*p == '$') {
+            int v = 0; p++;
+            while (*p >= '0' && *p <= '9') { v = v * 10 + (*p - '0'); p++; }
+            if (*cur) (*cur)->nag = v;
+            continue;
+        }
+        if (*p == '(') {
+            MoveNode *save = *cur;
+            if (save && save->parent) {
+                MoveNode *vc = save->parent;
+                p = parse_moves(p + 1, &vc, res, rn);
+            } else {
+                int depth = 1; p++;
+                while (*p && depth) { if (*p == '(') depth++; else if (*p == ')') depth--; p++; }
+                continue;
+            }
+            if (*p == ')') p++;
+            continue;
+        }
+        if (*p >= '0' && *p <= '9') {
+            if (strncmp(p, "1-0", 3) == 0) { if (res) snprintf(res, rn, "1-0"); return p + 3; }
+            if (strncmp(p, "0-1", 3) == 0) { if (res) snprintf(res, rn, "0-1"); return p + 3; }
+            if (strncmp(p, "1/2-1/2", 7) == 0) { if (res) snprintf(res, rn, "1/2-1/2"); return p + 7; }
+            while (*p >= '0' && *p <= '9') p++;
+            while (*p == '.') p++;
+            continue;
+        }
+        if (*p == '*') { if (res) snprintf(res, rn, "*"); return p + 1; }
+
+        char tok[16];
+        int i = 0;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\r' && *p != '\n' &&
+               *p != '(' && *p != ')' && *p != '{' && *p != '$' && i < 15)
+            tok[i++] = *p++;
+        tok[i] = '\0';
+        while (i > 0 && tok[i - 1] == '.') tok[--i] = '\0';
+        if (i == 0) continue;
+
+        Move m;
+        if (*cur && san_find(&(*cur)->board, tok, &m))
+            *cur = mt_add_child(*cur, m, NULL);
+    }
+}
+
+MoveNode *pgn_parse_text(const char *text, PgnHeaders *out)
+{
+    Board start;
+    board_reset(&start);
+    bool have_fen = false;
+    if (out) memset(out, 0, sizeof *out);
+
+    const char *p = text ? text : "";
+    for (;;) {
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
+        if (*p != '[') break;
+        const char *e = strchr(p, ']');
+        if (!e) break;
+        parse_header_line(p, e, out, &start, &have_fen);
+        p = e + 1;
+    }
+    (void)have_fen;
+
+    MoveNode *root = mt_new_root(&start);
+    MoveNode *cur = root;
+    parse_moves(p, &cur, out ? out->result : NULL, out ? sizeof out->result : 0);
+    return root;
+}
+
+typedef struct { char *p; size_t len, cap; } Buf;
+
+static void buf_reserve(Buf *b, size_t extra)
+{
+    if (b->len + extra + 1 <= b->cap) return;
+    size_t nc = b->cap ? b->cap : 1024;
+    while (nc < b->len + extra + 1) nc *= 2;
+    b->p = realloc(b->p, nc);
+    b->cap = nc;
+}
+
+static void buf_str(Buf *b, const char *s)
+{
+    size_t l = strlen(s);
+    buf_reserve(b, l);
+    memcpy(b->p + b->len, s, l);
+    b->len += l;
+    b->p[b->len] = '\0';
+}
+
+static void buf_ch(Buf *b, char c)
+{
+    buf_reserve(b, 1);
+    b->p[b->len++] = c;
+    b->p[b->len] = '\0';
+}
+
+static void emit_token(const MoveNode *n, Buf *b)
+{
+    int d = mt_depth(n);
+    bool white = (d % 2 == 1);
+    if (white) {
+        char num[16];
+        snprintf(num, sizeof num, "%d. ", (d + 1) / 2);
+        buf_str(b, num);
+    }
+    buf_str(b, n->san[0] ? n->san : "?");
+    if (n->nag) {
+        /* Always use the standard numeric NAG form ($1, $2, ...) - never the
+         * "!?" glyph suffix, which is not valid PGN movetext. */
+        char t[16];
+        snprintf(t, sizeof t, " $%d", n->nag);
+        buf_str(b, t);
+    }
+    if (n->comment[0]) { buf_str(b, " {"); buf_str(b, n->comment); buf_ch(b, '}'); }
+    buf_ch(b, ' ');
+}
+
+/* Emit a move, then its sibling alternatives as variations (placed right after
+ * it), then continue to its child. */
+static void emit_line(const MoveNode *first, Buf *b);
+
+static void emit_variation(const MoveNode *v, Buf *b)
+{
+    emit_token(v, b);
+    if (v->first) emit_line(v->first, b);
+}
+
+static void emit_line(const MoveNode *first, Buf *b)
+{
+    for (const MoveNode *m = first; m; m = m->first) {
+        emit_token(m, b);
+        for (const MoveNode *alt = m->next; alt; alt = alt->next) {
+            buf_str(b, "(");
+            emit_variation(alt, b);
+            buf_str(b, ") ");
+        }
+    }
+}
+
+char *pgn_serialize(const MoveNode *root, const PgnHeaders *h)
+{
+    Buf b = {0};
+    buf_reserve(&b, 1);
+    b.p[0] = '\0';
+
+    if (h) {
+        if (h->event[0]) { buf_str(&b, "[Event \""); buf_str(&b, h->event); buf_str(&b, "\"]\n"); }
+        if (h->site[0])  { buf_str(&b, "[Site \"");  buf_str(&b, h->site);  buf_str(&b, "\"]\n"); }
+        if (h->date[0])  { buf_str(&b, "[Date \"");  buf_str(&b, h->date);  buf_str(&b, "\"]\n"); }
+        if (h->round[0]) { buf_str(&b, "[Round \""); buf_str(&b, h->round); buf_str(&b, "\"]\n"); }
+        if (h->white[0]) { buf_str(&b, "[White \""); buf_str(&b, h->white); buf_str(&b, "\"]\n"); }
+        if (h->black[0]) { buf_str(&b, "[Black \""); buf_str(&b, h->black); buf_str(&b, "\"]\n"); }
+        if (h->result[0]){ buf_str(&b, "[Result \"");buf_str(&b, h->result);buf_str(&b, "\"]\n"); }
+        buf_ch(&b, '\n');
+    }
+
+    if (root && root->first) {
+        emit_line(root->first, &b);
+        buf_ch(&b, '\n');
+        if (h && h->result[0]) { buf_str(&b, h->result); buf_ch(&b, '\n'); }
+    } else {
+        buf_str(&b, "*\n");
+    }
+    return b.p;
 }

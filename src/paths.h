@@ -21,8 +21,14 @@ const char *path_config(void);
 /* Create the parent directory of `file` (best effort). */
 void path_make_parent(const char *file);
 
+/* Base data directory (XDG_DATA_HOME/openchess or %APPDATA%\openchess). */
+const char *path_data_dir(void);
+
 /* Directory where exported PGN games are stored. */
 const char *path_games_dir(void);
+
+/* JSONL file with the imported Lichess puzzle subset. */
+const char *path_puzzles_file(void);
 
 /* Build "<games>/<name>.pgn" (name sanitised) into `out`. */
 void path_game_file(char *out, size_t n, const char *name);

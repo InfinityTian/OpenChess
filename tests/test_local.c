@@ -55,7 +55,7 @@ int main(void)
     const char *port = "45812";
 
     /* host: menu -> Local Multiplayer -> Host */
-    host->menu_index = 2;
+    host->menu_index = 3;
     send_key(host, SDLK_RETURN);
     CHECK(host->scene == SCENE_HOSTJOIN);
     snprintf(host->net_port, sizeof host->net_port, "%s", port);
@@ -63,7 +63,7 @@ int main(void)
     send_key(host, SDLK_RETURN);
 
     /* join: menu -> Local Multiplayer -> Join */
-    join->menu_index = 2;
+    join->menu_index = 3;
     send_key(join, SDLK_RETURN);
     snprintf(join->net_addr, sizeof join->net_addr, "127.0.0.1");
     snprintf(join->net_port, sizeof join->net_port, "%s", port);

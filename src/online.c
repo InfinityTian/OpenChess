@@ -50,6 +50,12 @@ struct OnlineSession {
     char   nick[40];
     char   token[40];        /* latest welcome token */
     char   resume[40];       /* token sent in hello to reclaim a seat */
+    char   auth_token[80];   /* account session token */
+    bool   logged_in;
+    bool   rated;            /* request a rated game */
+    char   user[40];
+    int    pvp_rating;
+    int    puzzle_rating;
     bool   had_room;
     bool   reconnecting;
     int    attempts;
@@ -121,11 +127,12 @@ static void send_hello(OnlineSession *o)
     cJSON *h = proto_new(PROTO_C2S_HELLO);
     cJSON_AddStringToObject(h, "nick", o->nick[0] ? o->nick : "Player");
     if (o->resume[0]) cJSON_AddStringToObject(h, "token", o->resume);
+    if (o->auth_token[0]) cJSON_AddStringToObject(h, "auth", o->auth_token);
     send_json(o, h);
 }
 
 OnlineSession *online_create(const char *url, const char *nick,
-                             const char *resume_token)
+                             const char *resume_token, const char *auth_token)
 {
     if (!url || !*url) return NULL;
     OnlineSession *o = calloc(1, sizeof *o);
@@ -133,6 +140,7 @@ OnlineSession *online_create(const char *url, const char *nick,
     snprintf(o->url, sizeof o->url, "%s", url);
     snprintf(o->nick, sizeof o->nick, "%s", nick && *nick ? nick : "Player");
     snprintf(o->resume, sizeof o->resume, "%s", resume_token ? resume_token : "");
+    snprintf(o->auth_token, sizeof o->auth_token, "%s", auth_token ? auth_token : "");
     o->net = net_ws_connect(url);
     if (!o->net) { free(o); return NULL; }
     o->state = ONLINE_CONNECTING;
@@ -276,6 +284,26 @@ static void on_frame(OnlineSession *o, ProtoFrame *f)
         }
         break;
     }
+    case PROTO_S2C_AUTH: {
+        bool ok = proto_field_bool(f, "ok", false);
+        if (ok) {
+            const char *u = proto_field_str(f, "user");
+            const char *tk = proto_field_str(f, "token");
+            snprintf(o->user, sizeof o->user, "%s", u ? u : "");
+            if (tk && *tk) snprintf(o->auth_token, sizeof o->auth_token, "%s", tk);
+            o->pvp_rating = proto_field_int(f, "pvp_rating", 1500);
+            o->puzzle_rating = proto_field_int(f, "puzzle_rating", 1500);
+            o->logged_in = true;
+            snprintf(o->nick, sizeof o->nick, "%s", o->user);
+        } else {
+            o->logged_in = false;
+            const char *r = proto_field_str(f, "reason");
+            if (r && strcmp(r, "logged out") != 0)
+                snprintf(o->error, sizeof o->error, "%s", r);
+        }
+        emit(o, ONLINE_EV_AUTH);
+        break;
+    }
     case PROTO_S2C_PING:
         /* Reply so the server's rx watchdog stays happy. */
         send_json(o, proto_new(PROTO_C2S_PONG));
@@ -386,6 +414,11 @@ void online_clocks(const OnlineSession *o, int *white_ms, int *black_ms)
     if (black_ms) *black_ms = b;
 }
 
+void online_set_rated(OnlineSession *o, bool rated)
+{
+    if (o) o->rated = rated;
+}
+
 void online_create_room(OnlineSession *o, int time_ms, int inc_ms)
 {
     if (!o) return;
@@ -394,6 +427,7 @@ void online_create_room(OnlineSession *o, int time_ms, int inc_ms)
         cJSON_AddNumberToObject(m, "time", time_ms);
         cJSON_AddNumberToObject(m, "inc", inc_ms);
     }
+    if (o->rated) cJSON_AddBoolToObject(m, "rated", true);
     send_json(o, m);
 }
 
@@ -402,6 +436,7 @@ void online_join_room(OnlineSession *o, const char *code)
     if (!o || !code || !*code) return;
     cJSON *m = proto_new(PROTO_C2S_JOIN);
     cJSON_AddStringToObject(m, "code", code);
+    if (o->rated) cJSON_AddBoolToObject(m, "rated", true);
     send_json(o, m);
 }
 
@@ -413,6 +448,7 @@ void online_queue(OnlineSession *o, int time_ms, int inc_ms)
         cJSON_AddNumberToObject(m, "time", time_ms);
         cJSON_AddNumberToObject(m, "inc", inc_ms);
     }
+    if (o->rated) cJSON_AddBoolToObject(m, "rated", true);
     send_json(o, m);
 }
 
@@ -462,6 +498,44 @@ void online_send_chat(OnlineSession *o, const char *text)
     cJSON_AddStringToObject(m, "text", text);
     send_json(o, m);
 }
+
+void online_register(OnlineSession *o, const char *user, const char *pass)
+{
+    if (!o || !user || !*user || !pass || !*pass) return;
+    cJSON *m = proto_new(PROTO_C2S_REGISTER);
+    cJSON_AddStringToObject(m, "user", user);
+    cJSON_AddStringToObject(m, "pass", pass);
+    send_json(o, m);
+}
+
+void online_login(OnlineSession *o, const char *user, const char *pass)
+{
+    if (!o || !user || !*user || !pass || !*pass) return;
+    cJSON *m = proto_new(PROTO_C2S_LOGIN);
+    cJSON_AddStringToObject(m, "user", user);
+    cJSON_AddStringToObject(m, "pass", pass);
+    send_json(o, m);
+}
+
+void online_logout(OnlineSession *o)
+{
+    if (o) send_json(o, proto_new(PROTO_C2S_LOGOUT));
+}
+
+void online_puzzle_result(OnlineSession *o, int puzzle_rating, bool solved)
+{
+    if (!o || !o->logged_in) return;
+    cJSON *m = proto_new(PROTO_C2S_PUZZLE_RESULT);
+    cJSON_AddNumberToObject(m, "rating", puzzle_rating);
+    cJSON_AddBoolToObject(m, "solved", solved);
+    send_json(o, m);
+}
+
+bool        online_logged_in(const OnlineSession *o) { return o && o->logged_in; }
+const char *online_username(const OnlineSession *o) { return o ? o->user : ""; }
+const char *online_auth_token(const OnlineSession *o) { return o ? o->auth_token : ""; }
+int         online_pvp_rating(const OnlineSession *o) { return o ? o->pvp_rating : 1500; }
+int         online_puzzle_rating(const OnlineSession *o) { return o ? o->puzzle_rating : 1500; }
 
 void online_spectate(OnlineSession *o, const char *code)
 {

@@ -34,14 +34,16 @@ typedef enum {
     ONLINE_EV_DRAW_OFFER,     /* opponent offered a draw */
     ONLINE_EV_DRAW_DECLINE,   /* opponent declined our draw offer */
     ONLINE_EV_SPECTATE,       /* joined a game as a spectator */
+    ONLINE_EV_AUTH,           /* account login/register result */
 } OnlineEvent;
 
 typedef struct OnlineSession OnlineSession;
 
 /* `resume_token` is the token from a previous session (may be NULL/empty); when
- * it matches a disconnected seat, the server restores that game. */
+ * it matches a disconnected seat, the server restores that game. `auth_token`
+ * is the stored account token for auto-login (may be NULL). */
 OnlineSession *online_create(const char *url, const char *nick,
-                             const char *resume_token);
+                             const char *resume_token, const char *auth_token);
 void online_destroy(OnlineSession *o);
 
 /* Pump the socket and dispatch incoming messages. Call once per frame. */
@@ -78,6 +80,19 @@ void online_draw_offer(OnlineSession *o);
 void online_draw_accept(OnlineSession *o);
 void online_draw_decline(OnlineSession *o);
 void online_send_chat(OnlineSession *o, const char *text);
+void online_set_rated(OnlineSession *o, bool rated);
+
+/* Accounts. */
+void online_register(OnlineSession *o, const char *user, const char *pass);
+void online_login(OnlineSession *o, const char *user, const char *pass);
+void online_logout(OnlineSession *o);
+void online_puzzle_result(OnlineSession *o, int puzzle_rating, bool solved);
+
+bool        online_logged_in(const OnlineSession *o);
+const char *online_username(const OnlineSession *o);
+const char *online_auth_token(const OnlineSession *o);
+int         online_pvp_rating(const OnlineSession *o);
+int         online_puzzle_rating(const OnlineSession *o);
 
 /* Spectate a running game by room code (read-only). */
 void online_spectate(OnlineSession *o, const char *code);

@@ -137,7 +137,7 @@ const char *path_config(void)
     return s_config;
 }
 
-const char *path_games_dir(void)
+const char *path_data_dir(void)
 {
     static char dir[PATHS_MAX];
     if (dir[0]) return dir;
@@ -145,7 +145,7 @@ const char *path_games_dir(void)
 #if defined(_WIN32)
     const char *appdata = getenv("APPDATA");
     if (appdata && *appdata) {
-        snprintf(dir, sizeof dir, "%s\\openchess\\games", appdata);
+        snprintf(dir, sizeof dir, "%s\\openchess", appdata);
         return dir;
     }
 #endif
@@ -153,12 +153,28 @@ const char *path_games_dir(void)
     const char *xdg = getenv("XDG_DATA_HOME");
     const char *home = getenv("HOME");
     if (xdg && *xdg)
-        snprintf(dir, sizeof dir, "%s/openchess/games", xdg);
+        snprintf(dir, sizeof dir, "%s/openchess", xdg);
     else if (home && *home)
-        snprintf(dir, sizeof dir, "%s/.local/share/openchess/games", home);
+        snprintf(dir, sizeof dir, "%s/.local/share/openchess", home);
     else
-        snprintf(dir, sizeof dir, "games");
+        snprintf(dir, sizeof dir, ".");
     return dir;
+}
+
+const char *path_games_dir(void)
+{
+    static char dir[PATHS_MAX];
+    if (dir[0]) return dir;
+    snprintf(dir, sizeof dir, "%s/games", path_data_dir());
+    return dir;
+}
+
+const char *path_puzzles_file(void)
+{
+    static char file[PATHS_MAX];
+    if (file[0]) return file;
+    snprintf(file, sizeof file, "%s/puzzles/puzzles.jsonl", path_data_dir());
+    return file;
 }
 
 void path_game_file(char *out, size_t n, const char *name)

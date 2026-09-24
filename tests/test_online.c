@@ -120,6 +120,10 @@ int main(void)
 
     int port = 42000 + (int)(getpid() % 10000);
 
+    char dbpath[64];
+    snprintf(dbpath, sizeof dbpath, "/tmp/oc_accounts_%d.db", (int)getpid());
+    remove(dbpath);
+
     /* Start the server and wait for its "listening" line. */
     int fds[2];
     if (pipe(fds) != 0) { printf("SKIP: pipe failed\n"); return 0; }
@@ -130,6 +134,7 @@ int main(void)
         dup2(fds[1], STDOUT_FILENO);
         setenv("OPENCHESS_QUIET", "1", 1);
         setenv("OPENCHESS_GRACE_MS", "1500", 1);   /* short grace for testing */
+        setenv("OPENCHESS_ACCOUNTS_DB", dbpath, 1);
         char portstr[16];
         snprintf(portstr, sizeof portstr, "%d", port);
         execl(server, server, portstr, (char *)NULL);
@@ -156,6 +161,8 @@ int main(void)
     Transport *p1 = NULL, *p2 = NULL, *p2r = NULL;
     Transport *q1 = NULL, *q2 = NULL;
     Transport *s1 = NULL;
+    Transport *u1 = NULL, *u2 = NULL;
+    Transport *r1 = NULL, *r2 = NULL;
 
     /* --- two clients, hello/welcome --- */
     a = net_ws_connect(url);
@@ -442,7 +449,158 @@ int main(void)
           strcmp(proto_field_str(&f, "reason"), "abandoned") == 0);
     proto_frame_free(&f);
 
+    /* --- accounts: register/login, puzzle rating, rated Elo --- */
+    u1 = net_ws_connect(url);
+    u2 = net_ws_connect(url);
+    CHECK(u1 && u2);
+    if (!u1 || !u2) goto cleanup;
+    hello(u1, "alice");
+    hello(u2, "bob");
+    {
+        char t[80];
+        CHECK(welcome_token(u1, t, sizeof t));
+        CHECK(welcome_token(u2, t, sizeof t));
+    }
+
+    /* register alice */
+    {
+        cJSON *m = proto_new(PROTO_C2S_REGISTER);
+        cJSON_AddStringToObject(m, "user", "alice");
+        cJSON_AddStringToObject(m, "pass", "pw1");
+        send_json(u1, m);
+    }
+    bool has_accounts = false;
+    CHECK(expect(u1, PROTO_S2C_AUTH, 2000, &f));
+    has_accounts = proto_field_bool(&f, "ok", false);
+    proto_frame_free(&f);
+
+    if (has_accounts) {
+        /* duplicate name rejected */
+        {
+            cJSON *m = proto_new(PROTO_C2S_REGISTER);
+            cJSON_AddStringToObject(m, "user", "alice");
+            cJSON_AddStringToObject(m, "pass", "pw1");
+            send_json(u1, m);
+        }
+        CHECK(expect(u1, PROTO_S2C_AUTH, 2000, &f));
+        CHECK(proto_field_bool(&f, "ok", true) == false);
+        proto_frame_free(&f);
+
+        /* wrong password rejected */
+        {
+            cJSON *m = proto_new(PROTO_C2S_LOGIN);
+            cJSON_AddStringToObject(m, "user", "alice");
+            cJSON_AddStringToObject(m, "pass", "nope");
+            send_json(u2, m);
+        }
+        CHECK(expect(u2, PROTO_S2C_AUTH, 2000, &f));
+        CHECK(proto_field_bool(&f, "ok", true) == false);
+        proto_frame_free(&f);
+
+        /* register bob (u2) */
+        {
+            cJSON *m = proto_new(PROTO_C2S_REGISTER);
+            cJSON_AddStringToObject(m, "user", "bob");
+            cJSON_AddStringToObject(m, "pass", "pw2");
+            send_json(u2, m);
+        }
+        CHECK(expect(u2, PROTO_S2C_AUTH, 2000, &f));
+        CHECK(proto_field_bool(&f, "ok", false) == true);
+        proto_frame_free(&f);
+
+        /* puzzle result raises the puzzle rating above 1500 */
+        {
+            cJSON *m = proto_new(PROTO_C2S_PUZZLE_RESULT);
+            cJSON_AddNumberToObject(m, "rating", 1200);
+            cJSON_AddBoolToObject(m, "solved", true);
+            send_json(u1, m);
+        }
+        CHECK(expect(u1, PROTO_S2C_AUTH, 2000, &f));
+        CHECK(proto_field_int(&f, "puzzle_rating", 0) > 1500);
+        proto_frame_free(&f);
+
+        /* rated game: alice (White) resigns, Elo moves both ways */
+        {
+            cJSON *m = proto_new(PROTO_C2S_CREATE);
+            cJSON_AddBoolToObject(m, "rated", true);
+            send_json(u1, m);
+        }
+        CHECK(expect(u1, PROTO_S2C_ROOM, 2000, &f));
+        char rcode[8] = "";
+        const char *rc = proto_field_str(&f, "code");
+        if (rc) snprintf(rcode, sizeof rcode, "%s", rc);
+        proto_frame_free(&f);
+        {
+            cJSON *m = proto_new(PROTO_C2S_JOIN);
+            cJSON_AddStringToObject(m, "code", rcode);
+            cJSON_AddBoolToObject(m, "rated", true);
+            send_json(u2, m);
+        }
+        CHECK(expect(u1, PROTO_S2C_START, 2000, &f)); proto_frame_free(&f);
+        CHECK(expect(u2, PROTO_S2C_START, 2000, &f)); proto_frame_free(&f);
+
+        send_json(u1, proto_new(PROTO_C2S_RESIGN));
+        CHECK(expect(u1, PROTO_S2C_GAMEOVER, 2000, &f)); proto_frame_free(&f);
+        CHECK(expect(u1, PROTO_S2C_AUTH, 2000, &f));
+        CHECK(proto_field_int(&f, "pvp_rating", 1500) < 1500);   /* loser */
+        proto_frame_free(&f);
+        CHECK(expect(u2, PROTO_S2C_GAMEOVER, 2000, &f)); proto_frame_free(&f);
+        CHECK(expect(u2, PROTO_S2C_AUTH, 2000, &f));
+        CHECK(proto_field_int(&f, "pvp_rating", 1500) > 1500);   /* winner */
+        proto_frame_free(&f);
+        printf("accounts + rated Elo  ok\n");
+    } else {
+        printf("SKIP: accounts unavailable (no SQLite)\n");
+    }
+
+    /* --- threefold repetition ends the game as a draw --- */
+    r1 = net_ws_connect(url);
+    r2 = net_ws_connect(url);
+    CHECK(r1 && r2);
+    if (!r1 || !r2) goto cleanup;
+    hello(r1, "R1");
+    hello(r2, "R2");
+    {
+        char t[80];
+        CHECK(welcome_token(r1, t, sizeof t));
+        CHECK(welcome_token(r2, t, sizeof t));
+    }
+    send_json(r1, proto_new(PROTO_C2S_CREATE));
+    CHECK(expect(r1, PROTO_S2C_ROOM, 2000, &f));
+    char rcode[8] = "";
+    const char *rc2 = proto_field_str(&f, "code");
+    if (rc2) snprintf(rcode, sizeof rcode, "%s", rc2);
+    proto_frame_free(&f);
+    {
+        cJSON *m = proto_new(PROTO_C2S_JOIN);
+        cJSON_AddStringToObject(m, "code", rcode);
+        send_json(r2, m);
+    }
+    CHECK(expect(r1, PROTO_S2C_START, 2000, &f)); proto_frame_free(&f);
+    CHECK(expect(r2, PROTO_S2C_START, 2000, &f)); proto_frame_free(&f);
+
+    /* Nf3 Nf6 Ng1 Ng8 twice returns to the start position a third time */
+    const char *shuf[8] = { "g1f3","g8f6","f3g1","f6g8",
+                            "g1f3","g8f6","f3g1","f6g8" };
+    for (int i = 0; i < 8; i++) {
+        Transport *mover = (i % 2 == 0) ? r1 : r2;
+        send_move(mover, shuf[i], i);
+        expect_move_both(r1, r2, shuf[i]);
+    }
+    CHECK(expect(r1, PROTO_S2C_GAMEOVER, 2000, &f));
+    CHECK(proto_field_str(&f, "reason") &&
+          strcmp(proto_field_str(&f, "reason"), "threefold repetition") == 0);
+    CHECK(proto_field_str(&f, "result") &&
+          strcmp(proto_field_str(&f, "result"), "1/2-1/2") == 0);
+    proto_frame_free(&f);
+    CHECK(expect(r2, PROTO_S2C_GAMEOVER, 2000, &f)); proto_frame_free(&f);
+    printf("threefold repetition draw  ok\n");
+
 cleanup:
+    if (r2) transport_close(r2);
+    if (r1) transport_close(r1);
+    if (u2) transport_close(u2);
+    if (u1) transport_close(u1);
     if (s1) transport_close(s1);
     if (q2) transport_close(q2);
     if (q1) transport_close(q1);
@@ -458,6 +616,7 @@ cleanup:
     if (a) transport_close(a);
     kill(pid, SIGTERM);
     waitpid(pid, NULL, 0);
+    remove(dbpath);
 
     if (failures == 0) {
         printf("online lobby + relay  ok\n\nALL TESTS PASSED\n");

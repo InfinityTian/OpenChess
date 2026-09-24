@@ -32,6 +32,10 @@ typedef enum {
     PROTO_C2S_PING,
     PROTO_C2S_PONG,
     PROTO_C2S_SPECTATE,
+    PROTO_C2S_REGISTER,
+    PROTO_C2S_LOGIN,
+    PROTO_C2S_LOGOUT,
+    PROTO_C2S_PUZZLE_RESULT,
 
     /* server -> client */
     PROTO_S2C_WELCOME,
@@ -49,6 +53,7 @@ typedef enum {
     PROTO_S2C_REMATCH,
     PROTO_S2C_DRAW,
     PROTO_S2C_SPECTATE,
+    PROTO_S2C_AUTH,
 
     PROTO_MSG_COUNT
 } ProtoMsg;

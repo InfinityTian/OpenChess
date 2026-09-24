@@ -3,6 +3,7 @@
 #include "../src/pgn.h"
 #include "../src/fen.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int failures = 0;
@@ -59,10 +60,116 @@ static void test_result(void)
     printf("pgn_result tokens  ok\n");
 }
 
+static void test_import(void)
+{
+    const char *pgn =
+        "[Event \"T\"]\n[White \"A\"]\n[Black \"B\"]\n\n"
+        "1. e4 (1. d4 d5) e5 2. Nf3 {good} Nc6 $1 3. Bb5 a6 1/2-1/2\n";
+
+    PgnHeaders h;
+    MoveNode *root = pgn_parse_text(pgn, &h);
+    CHECK(root != NULL);
+    CHECK(strcmp(h.event, "T") == 0);
+    CHECK(strcmp(h.white, "A") == 0);
+    CHECK(strcmp(h.result, "1/2-1/2") == 0);
+
+    CHECK(root->first && strcmp(root->first->san, "e4") == 0);
+    /* variation sibling of e4 */
+    MoveNode *var = root->first ? root->first->next : NULL;
+    CHECK(var && strcmp(var->san, "d4") == 0);
+    CHECK(var && var->first && strcmp(var->first->san, "d5") == 0);
+    CHECK(var && var->next == NULL);
+    /* mainline continues */
+    CHECK(root->first->first && strcmp(root->first->first->san, "e5") == 0);
+
+    /* comment + NAG */
+    MoveNode *nf3 = root->first->first->first;
+    CHECK(nf3 && strcmp(nf3->san, "Nf3") == 0);
+    CHECK(nf3 && strcmp(nf3->comment, "good") == 0);
+    MoveNode *nc6 = nf3 ? nf3->first : NULL;
+    CHECK(nc6 && strcmp(nc6->san, "Nc6") == 0);
+    CHECK(nc6 && nc6->nag == 1);
+
+    char *out = pgn_serialize(root, &h);
+    CHECK(out != NULL);
+    if (out) {
+        CHECK(strstr(out, "(1. d4 d5") != NULL);
+        CHECK(strstr(out, "{good}") != NULL);
+        CHECK(strstr(out, "Nc6 $1") != NULL);
+        CHECK(strstr(out, "1/2-1/2") != NULL);
+        free(out);
+    }
+    mt_free(root);
+    printf("pgn import/export variations  ok\n");
+}
+
+/* Two pawns can capture the same square: disambiguation must not add a rank. */
+static void test_pawn_disambiguation(void)
+{
+    Board b;
+    CHECK(fen_parse("6k1/8/8/8/6p1/5P1P/8/6K1 w - - 0 1", &b));
+    Move m;
+    char san[16];
+    CHECK(uci_to_move(&b, "h3g4", &m));
+    move_to_san(&b, m, san, sizeof san);
+    CHECK(strcmp(san, "hxg4") == 0);
+    CHECK(uci_to_move(&b, "f3g4", &m));
+    move_to_san(&b, m, san, sizeof san);
+    CHECK(strcmp(san, "fxg4") == 0);
+    printf("pawn capture SAN  ok\n");
+}
+
+/* Two knights reach the same square from different files and ranks. */
+static void test_knight_disambiguation(void)
+{
+    Board b;
+    CHECK(fen_parse("4k3/8/8/8/8/8/4N3/1N4K1 w - - 0 1", &b));
+    Move m;
+    char san[16];
+    CHECK(uci_to_move(&b, "b1c3", &m));
+    move_to_san(&b, m, san, sizeof san);
+    CHECK(strcmp(san, "Nbc3") == 0);
+    CHECK(uci_to_move(&b, "e2c3", &m));
+    move_to_san(&b, m, san, sizeof san);
+    CHECK(strcmp(san, "Nec3") == 0);
+    printf("knight SAN disambiguation  ok\n");
+}
+
+/* Round-trip a real chess.com PGN when present (regression for bad SAN/NAGs). */
+static void test_chesscom_file(void)
+{
+    const char *p = "/Users/infinitytian/Downloads/"
+                    "Coach-Dante_vs_InfinityTian_2026.05.25.pgn";
+    FILE *f = fopen(p, "r");
+    if (!f) { printf("(chess.com sample not found; skipped)\n"); return; }
+    static char txt[131072];
+    size_t n = fread(txt, 1, sizeof txt - 1, f);
+    txt[n] = '\0';
+    fclose(f);
+
+    PgnHeaders h;
+    MoveNode *root = pgn_parse_text(txt, &h);
+    char *out = pgn_serialize(root, &h);
+    CHECK(out != NULL);
+    if (out) {
+        CHECK(strstr(out, "hhxg4") == NULL);
+        CHECK(strstr(out, "hxg4") != NULL);
+        CHECK(strstr(out, "(17. Nxc7") != NULL);
+        CHECK(strstr(out, " $1") != NULL);
+        free(out);
+    }
+    mt_free(root);
+    printf("chess.com PGN round-trip  ok\n");
+}
+
 int main(void)
 {
     test_write();
     test_result();
+    test_import();
+    test_pawn_disambiguation();
+    test_knight_disambiguation();
+    test_chesscom_file();
 
     if (failures == 0) {
         printf("\nALL TESTS PASSED\n");
