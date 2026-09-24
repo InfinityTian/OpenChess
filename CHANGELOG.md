@@ -4,7 +4,10 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.0-beta1] - 2026-09-24
+
+> Beta: online multiplayer. The protocol and server may still change before the
+> final 1.4.0.
 
 ### Added
 - **Online multiplayer (authoritative).** Two welcome-menu entries:
