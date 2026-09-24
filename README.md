@@ -91,7 +91,8 @@ See [`docs/INSTALL.md`](docs/INSTALL.md).
    move in SAN.
 
 Full details and controls: [`docs/USAGE.md`](docs/USAGE.md) and
-[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md).
+[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md). Internet play is described (as a
+plan) in [`docs/ONLINE_MULTIPLAYER.md`](docs/ONLINE_MULTIPLAYER.md).
 
 ### Controls
 
@@ -210,7 +211,8 @@ make dmg        # 生成 dist/OpenChess.app 与 dist/OpenChess.dmg
 3. 点击棋子再点目标格即可移动；或按**回车**后用 SAN 输入走子。
 
 完整说明与操作见 [`docs/USAGE.md`](docs/USAGE.md) 与
-[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md)。
+[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md)。互联网对战方案（规划）见
+[`docs/ONLINE_MULTIPLAYER.md`](docs/ONLINE_MULTIPLAYER.md)。
 
 ### 操作
 

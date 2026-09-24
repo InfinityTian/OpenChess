@@ -69,6 +69,29 @@ typedef enum {
 
 #define FEN_MAX 128
 
+/* Snapshot of a game kept in memory so "Menu" can offer to continue it. Local
+ * (network) games are never saved because the peer connection is gone. */
+typedef struct {
+    bool     valid;
+    GameMode mode;
+    Board    board;
+    Board    before[MAX_PLY];
+    Move     history[MAX_PLY];
+    int      ply;
+    GameState state;
+    char     last_san[16];
+    bool     flipped;
+    bool     auto_flip;
+    Color    human_color;
+    int      ai_skill;
+    int      ai_movetime;
+    int      setup_side;
+    int      setup_level;
+    char     white_name[64];
+    char     black_name[64];
+    char     move_san[MAX_PLY][8];
+} SavedGame;
+
 /* One queued visual move. Board state already reflects every queued move; the
  * queue only describes how to draw the transition. */
 typedef struct {
@@ -160,6 +183,7 @@ typedef struct {
     MoveList targets;           /* legal targets when a piece is selected */
 
     char   move_san[MAX_PLY][8];/* SAN per ply for the move list */
+    SavedGame saved;            /* last game, resumable from the menu */
     InputBox input;
     bool   san_open;            /* SAN entry revealed (Enter to open) */
 
@@ -258,6 +282,7 @@ typedef struct {
     TTF_Font *font_piece[2];    /* [0] filled glyph, [1] outline via same */
     TTF_Font *font_ui;
     TTF_Font *font_small;
+    TTF_Font *font_tiny;
     SDL_Texture *tex_board;     /* active board image, or NULL for procedural */
     SDL_Texture *tex_piece[16]; /* piece textures (indexed by Piece) */
     bool   quit;

@@ -507,8 +507,9 @@ static void rebuild_fonts(Gui *g)
     if (g->font_piece[1]) TTF_CloseFont(g->font_piece[1]);
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
+    if (g->font_tiny) TTF_CloseFont(g->font_tiny);
     g->font_piece[0] = g->font_piece[1] = NULL;
-    g->font_ui = g->font_small = NULL;
+    g->font_ui = g->font_small = g->font_tiny = NULL;
 
     const char *fpath = find_font();
     if (fpath) {
@@ -517,7 +518,9 @@ static void rebuild_fonts(Gui *g)
         g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
         g->font_ui      = TTF_OpenFont(fpath, (int)lroundf(22 * sc));
         g->font_small   = TTF_OpenFont(fpath, (int)lroundf(15 * sc));
-        if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui || !g->font_small)
+        g->font_tiny    = TTF_OpenFont(fpath, (int)lroundf(12 * sc));
+        if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui ||
+            !g->font_small || !g->font_tiny)
             fprintf(stderr, "TTF_OpenFont: %s\n", TTF_GetError());
     }
 
@@ -960,6 +963,30 @@ static bool menu_enabled(int i)
     return i >= 0 && i < MENU_COUNT;
 }
 
+/* A "Continue" entry is prepended while a resumable game exists. */
+static int menu_count(const Gui *g)
+{
+    return MENU_COUNT + (g->saved.valid ? 1 : 0);
+}
+
+static int menu_base_index(const Gui *g, int i)
+{
+    return g->saved.valid ? i - 1 : i;
+}
+
+static const char *menu_label(const Gui *g, int i)
+{
+    if (g->saved.valid && i == 0) return "Continue";
+    int b = menu_base_index(g, i);
+    return (b >= 0 && b < MENU_COUNT) ? MENU_ITEMS[b] : "";
+}
+
+static bool menu_item_enabled(const Gui *g, int i)
+{
+    if (g->saved.valid && i == 0) return true;
+    return menu_enabled(menu_base_index(g, i));
+}
+
 /* Difficulty presets: engine skill (0..20) and think time in ms. */
 typedef struct { const char *label; int skill; int movetime; } AiLevel;
 static const AiLevel AI_LEVELS[3] = {
@@ -984,7 +1011,8 @@ static void menu_item_rect(const Gui *g, int i, SDL_Rect *r)
     r->h = MENU_ITEM_H;
     r->x = (g->win_w - r->w) / 2;
 
-    int total = MENU_COUNT * r->h + (MENU_COUNT - 1) * MENU_GAP;
+    int n = menu_count(g);
+    int total = n * r->h + (n - 1) * MENU_GAP;
     int area  = (g->win_h - MENU_BOTTOM) - MENU_TOP;
     int start = MENU_TOP + (area - total) / 2;
     if (start < MENU_TOP) start = MENU_TOP;
@@ -1011,10 +1039,84 @@ static void start_analysis(Gui *g)
     reset_board_state(g);
     fen_refresh(g);
     eval_restart(g);
+    g->saved.valid = false;
+}
+
+/* Snapshot the current game so the menu can offer to resume it. Network games
+ * cannot be resumed (the peer is gone), so they clear the snapshot instead. */
+static void save_game(Gui *g)
+{
+    if (g->mode == MODE_LOCAL) { g->saved.valid = false; return; }
+
+    SavedGame *s = &g->saved;
+    s->mode        = g->mode;
+    s->board       = g->board;
+    memcpy(s->before, g->before, sizeof s->before);
+    memcpy(s->history, g->history, sizeof s->history);
+    s->ply         = g->ply;
+    s->state       = g->state;
+    snprintf(s->last_san, sizeof s->last_san, "%s", g->last_san);
+    s->flipped     = g->flipped;
+    s->auto_flip   = g->auto_flip;
+    s->human_color = g->human_color;
+    s->ai_skill    = g->ai_skill;
+    s->ai_movetime = g->ai_movetime;
+    s->setup_side  = g->setup_side;
+    s->setup_level = g->setup_level;
+    snprintf(s->white_name, sizeof s->white_name, "%s", g->white_name);
+    snprintf(s->black_name, sizeof s->black_name, "%s", g->black_name);
+    memcpy(s->move_san, g->move_san, sizeof s->move_san);
+    s->valid = true;
+}
+
+/* Restore the snapshot saved by save_game() and re-enter the game screen. */
+static void resume_game(Gui *g)
+{
+    if (!g->saved.valid) return;
+
+    SavedGame *s = &g->saved;
+    eval_stop(g);
+    g->mode        = s->mode;
+    g->board       = s->board;
+    memcpy(g->before, s->before, sizeof g->before);
+    memcpy(g->history, s->history, sizeof g->history);
+    g->ply         = s->ply;
+    g->state       = s->state;
+    snprintf(g->last_san, sizeof g->last_san, "%s", s->last_san);
+    g->flipped     = s->flipped;
+    g->auto_flip   = s->auto_flip;
+    g->human_color = s->human_color;
+    g->ai_skill    = s->ai_skill;
+    g->ai_movetime = s->ai_movetime;
+    g->setup_side  = s->setup_side;
+    g->setup_level = s->setup_level;
+    snprintf(g->white_name, sizeof g->white_name, "%s", s->white_name);
+    snprintf(g->black_name, sizeof g->black_name, "%s", s->black_name);
+    memcpy(g->move_san, s->move_san, sizeof g->move_san);
+
+    g->scene       = SCENE_GAME;
+    g->ai_thinking = false;
+    g->fen_active  = false;
+    g->msg[0]      = 0;
+    g->menu_msg[0] = 0;
+    reset_board_state(g);
+    fen_refresh(g);
+
+    if (g->mode == MODE_SINGLE) {
+        if (!g->ai && g->engine_path[0]) g->ai = ai_start(g->engine_path);
+        if (g->ai) {
+            ai_set_skill(g->ai, g->ai_skill);
+            ai_set_movetime(g->ai, g->ai_movetime);
+            ai_new_game(g->ai);
+        }
+    } else {
+        analysis_refresh(g);
+    }
 }
 
 static void go_to_menu(Gui *g)
 {
+    save_game(g);
     clear_selection(g);
     g->promo_from = g->promo_to = -1;
     g->fen_active = false;
@@ -1032,6 +1134,7 @@ static void go_to_menu(Gui *g)
     g->net_waiting = false;
     g->net_sent_ply = 0;
     eval_stop(g);
+    g->menu_index = g->saved.valid ? 0 : 1;
     g->scene = SCENE_MENU;
 }
 
@@ -1073,6 +1176,7 @@ static void start_single(Gui *g)
     } else {
         set_msg(g, "Stockfish not found", NULL);
     }
+    g->saved.valid = false;
 }
 
 static void enter_local_game(Gui *g, Color side)
@@ -1113,6 +1217,7 @@ static void enter_local_game(Gui *g, Color side)
         set_msg(g, side == WHITE ? "Connected - you are White"
                                  : "Connected - you are Black", NULL);
     }
+    g->saved.valid = false;
 }
 
 static void promo_rects(Gui *g, SDL_Rect out[4])
@@ -1423,6 +1528,7 @@ void gui_destroy(Gui *g)
     if (g->font_piece[1]) TTF_CloseFont(g->font_piece[1]);
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
+    if (g->font_tiny) TTF_CloseFont(g->font_tiny);
     free(g);
 }
 
@@ -1472,15 +1578,18 @@ static bool fen_char_ok(char c)
 
 static void menu_move(Gui *g, int dir)
 {
-    for (int n = 0; n < MENU_COUNT; n++) {
-        g->menu_index = (g->menu_index + dir + MENU_COUNT) % MENU_COUNT;
-        if (menu_enabled(g->menu_index)) return;
+    int count = menu_count(g);
+    for (int n = 0; n < count; n++) {
+        g->menu_index = (g->menu_index + dir + count) % count;
+        if (menu_item_enabled(g, g->menu_index)) return;
     }
 }
 
 static void menu_activate(Gui *g)
 {
-    switch (g->menu_index) {
+    if (g->saved.valid && g->menu_index == 0) { resume_game(g); return; }
+
+    switch (menu_base_index(g, g->menu_index)) {
         case 0:
             g->setup_field = 0;
             g->menu_msg[0] = 0;
@@ -1505,7 +1614,7 @@ static void menu_activate(Gui *g)
         case 5: g->quit = true; break;
         default:
             snprintf(g->menu_msg, sizeof g->menu_msg,
-                     "'%s' is not available yet", MENU_ITEMS[g->menu_index]);
+                     "'%s' is not available yet", menu_label(g, g->menu_index));
             break;
     }
 }
@@ -1523,16 +1632,16 @@ static void handle_menu_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
 static void handle_menu_mousedown(Gui *g)
 {
-    for (int i = 0; i < MENU_COUNT; i++) {
+    for (int i = 0; i < menu_count(g); i++) {
         SDL_Rect r;
         menu_item_rect(g, i, &r);
         if (!pt_in(&r, g->mouse.x, g->mouse.y)) continue;
         g->menu_index = i;
-        if (menu_enabled(i)) {
+        if (menu_item_enabled(g, i)) {
             menu_activate(g);
         } else {
             snprintf(g->menu_msg, sizeof g->menu_msg,
-                     "'%s' is not available yet", MENU_ITEMS[i]);
+                     "'%s' is not available yet", menu_label(g, i));
         }
         return;
     }
@@ -1540,10 +1649,10 @@ static void handle_menu_mousedown(Gui *g)
 
 static void handle_menu_mousemotion(Gui *g)
 {
-    for (int i = 0; i < MENU_COUNT; i++) {
+    for (int i = 0; i < menu_count(g); i++) {
         SDL_Rect r;
         menu_item_rect(g, i, &r);
-        if (pt_in(&r, g->mouse.x, g->mouse.y) && menu_enabled(i)) {
+        if (pt_in(&r, g->mouse.x, g->mouse.y) && menu_item_enabled(g, i)) {
             g->menu_index = i;
             return;
         }
@@ -2566,9 +2675,8 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                             if (g->ann_arrows[i].from == g->ann_from &&
                                 g->ann_arrows[i].to == sq) { found = i; break; }
                         if (found >= 0) {
-                            g->ann_arrows[found].r = r;
-                            g->ann_arrows[found].g = gg;
-                            g->ann_arrows[found].b = b;
+                            g->ann_arrows[found] =
+                                g->ann_arrows[--g->ann_arrow_count];
                         } else if (g->ann_arrow_count < MAX_ANN) {
                             AnnArrow *a = &g->ann_arrows[g->ann_arrow_count++];
                             a->from = g->ann_from; a->to = sq;
@@ -3397,14 +3505,20 @@ static void render_fen_box(Gui *g, SDL_Renderer *ren)
                 (SDL_Color){ 230, 230, 230, 255 });
 }
 
-static void render_text_centered_rect(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
-                                      const char *label)
+static void render_text_centered_rect_f(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
+                                        TTF_Font *font, const char *label)
 {
     draw_rect(ren, r, 45, 45, 50, true);
     draw_rect(ren, r, 120, 120, 130, false);
-    int ty = r->y + (r->h - text_height(g, g->font_ui)) / 2;
-    render_text_centered(g, g->font_ui, label, r->x + r->w / 2, ty,
+    int ty = r->y + (r->h - text_height(g, font)) / 2;
+    render_text_centered(g, font, label, r->x + r->w / 2, ty,
                          (SDL_Color){ 230, 230, 230, 255 });
+}
+
+static void render_text_centered_rect(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
+                                      const char *label)
+{
+    render_text_centered_rect_f(g, ren, r, g->font_ui, label);
 }
 
 static void render_buttons(Gui *g, SDL_Renderer *ren)
@@ -3417,9 +3531,9 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &undo, "Undo");
     render_text_centered_rect(g, ren, &restart, "Restart");
     render_text_centered_rect(g, ren, &styles, "Styles");
-    render_text_centered_rect(g, ren, &pgn, "PGN");
+    render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
-    render_text(g, g->font_small, "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip",
+    render_text(g, g->font_tiny, "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip",
                 g->panel_x, undo.y + 48, (SDL_Color){ 130, 130, 130, 255 });
 }
 
@@ -3451,9 +3565,13 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
                          (SDL_Color){ 150, 180, 200, 255 });
     const char *side_labels[2] = { "White", "Black" };
     for (int i = 0; i < 2; i++) {
-        bool sel = (g->setup_field == 0 && g->setup_side == i);
-        draw_rect(ren, &sides[i], sel ? 70 : 40, sel ? 80 : 50, sel ? 100 : 60, true);
-        if (sel) draw_rect(ren, &sides[i], 90, 150, 200, false);
+        bool chosen = (g->setup_side == i);
+        bool focus  = chosen && g->setup_field == 0;
+        draw_rect(ren, &sides[i], chosen ? 70 : 40, chosen ? 80 : 50,
+                  chosen ? 100 : 60, true);
+        if (chosen)
+            draw_rect(ren, &sides[i], focus ? 90 : 65, focus ? 150 : 105,
+                      focus ? 200 : 140, false);
         render_text_centered(g, g->font_ui, side_labels[i],
                              sides[i].x + sides[i].w / 2, sides[i].y + 12,
                              (SDL_Color){ 235, 235, 235, 255 });
@@ -3462,9 +3580,13 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
     render_text_centered(g, g->font_small, "Difficulty", g->win_w / 2, 388,
                          (SDL_Color){ 150, 180, 200, 255 });
     for (int i = 0; i < AI_LEVEL_COUNT; i++) {
-        bool sel = (g->setup_field == 1 && g->setup_level == i);
-        draw_rect(ren, &levels[i], sel ? 70 : 40, sel ? 80 : 50, sel ? 100 : 60, true);
-        if (sel) draw_rect(ren, &levels[i], 90, 150, 200, false);
+        bool chosen = (g->setup_level == i);
+        bool focus  = chosen && g->setup_field == 1;
+        draw_rect(ren, &levels[i], chosen ? 70 : 40, chosen ? 80 : 50,
+                  chosen ? 100 : 60, true);
+        if (chosen)
+            draw_rect(ren, &levels[i], focus ? 90 : 65, focus ? 150 : 105,
+                      focus ? 200 : 140, false);
         render_text_centered(g, g->font_ui, AI_LEVELS[i].label,
                              levels[i].x + levels[i].w / 2, levels[i].y + 12,
                              (SDL_Color){ 235, 235, 235, 255 });
@@ -4058,11 +4180,11 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
 
     int ty_off = (MENU_ITEM_H - text_height(g, g->font_ui)) / 2;
 
-    for (int i = 0; i < MENU_COUNT; i++) {
+    for (int i = 0; i < menu_count(g); i++) {
         SDL_Rect r;
         menu_item_rect(g, i, &r);
         bool sel = (i == g->menu_index);
-        bool en = menu_enabled(i);
+        bool en = menu_item_enabled(g, i);
 
         if (en) {
             Uint8 base = sel ? 70 : 40;
@@ -4074,7 +4196,7 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
         SDL_Color tc = !en ? (SDL_Color){ 100, 105, 115, 255 }
                       : sel ? (SDL_Color){ 245, 245, 245, 255 }
                             : (SDL_Color){ 205, 210, 220, 255 };
-        render_text_centered(g, g->font_ui, MENU_ITEMS[i], g->win_w / 2,
+        render_text_centered(g, g->font_ui, menu_label(g, i), g->win_w / 2,
                              r.y + ty_off, tc);
     }
 
@@ -4120,8 +4242,7 @@ static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
     }
     SDL_RenderSetClipRect(ren, NULL);
 
-    render_text_centered(g, g->font_small,
-                         "Enter save    Esc cancel    (games are stored under ~/.local/share/openchess/games)",
+    render_text_centered(g, g->font_small, "Enter save    Esc cancel",
                          box.x + bw / 2, box.y + bh - 26,
                          (SDL_Color){ 150, 160, 175, 255 });
 }

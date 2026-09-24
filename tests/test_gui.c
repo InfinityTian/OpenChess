@@ -569,39 +569,60 @@ int main(void)
         sq_window(g, ren, e2, &wx, &wy);
         sq_window(g, ren, e4, &wx2, &wy2);
 
-        /* right-click toggles a square highlight */
         SDL_Event cd = {0};
         cd.type = SDL_MOUSEBUTTONDOWN;
         cd.button.button = SDL_BUTTON_RIGHT;
         cd.button.x = wx; cd.button.y = wy;
-        gui_handle_event(g, &cd);
         SDL_Event cu = cd;
         cu.type = SDL_MOUSEBUTTONUP;
+        SDL_Event cm = {0};
+        cm.type = SDL_MOUSEMOTION;
+        cm.motion.x = wx2; cm.motion.y = wy2;
+        cm.motion.state = SDL_BUTTON_RMASK;
+        SDL_Event cu2 = {0};
+        cu2.type = SDL_MOUSEBUTTONUP;
+        cu2.button.button = SDL_BUTTON_RIGHT;
+        cu2.button.x = wx2; cu2.button.y = wy2;
+
+        /* right-click toggles a square highlight on... */
+        gui_handle_event(g, &cd);
         gui_handle_event(g, &cu);
         if (g->ann_square_count != 1 || g->ann_squares[0].sq != e2) {
             fprintf(stderr, "right-click did not add a square\n");
             return 1;
         }
-
-        /* right-drag draws an arrow */
+        /* ...and a second one erases it. */
         gui_handle_event(g, &cd);
-        SDL_Event cm = {0};
-        cm.type = SDL_MOUSEMOTION;
-        cm.motion.x = wx2; cm.motion.y = wy2;
-        cm.motion.state = SDL_BUTTON_RMASK;
+        gui_handle_event(g, &cu);
+        if (g->ann_square_count != 0) {
+            fprintf(stderr, "second right-click did not erase the square\n");
+            return 1;
+        }
+
+        /* right-drag draws an arrow... */
+        gui_handle_event(g, &cd);
         gui_handle_event(g, &cm);
-        SDL_Event cu2 = {0};
-        cu2.type = SDL_MOUSEBUTTONUP;
-        cu2.button.button = SDL_BUTTON_RIGHT;
-        cu2.button.x = wx2; cu2.button.y = wy2;
         gui_handle_event(g, &cu2);
         if (g->ann_arrow_count != 1 || g->ann_arrows[0].from != e2 ||
             g->ann_arrows[0].to != e4) {
             fprintf(stderr, "right-drag did not add an arrow\n");
             return 1;
         }
+        /* ...and drawing the same arrow again erases it. */
+        gui_handle_event(g, &cd);
+        gui_handle_event(g, &cm);
+        gui_handle_event(g, &cu2);
+        if (g->ann_arrow_count != 0) {
+            fprintf(stderr, "second right-drag did not erase the arrow\n");
+            return 1;
+        }
 
-        /* a left click on the board clears them */
+        /* put both back, then a left click on the board clears them */
+        gui_handle_event(g, &cd);
+        gui_handle_event(g, &cu);
+        gui_handle_event(g, &cd);
+        gui_handle_event(g, &cm);
+        gui_handle_event(g, &cu2);
         SDL_Event ld = {0};
         ld.type = SDL_MOUSEBUTTONDOWN;
         ld.button.button = SDL_BUTTON_LEFT;
@@ -632,6 +653,70 @@ int main(void)
             return 1;
         }
         g->engine_arrows = before;
+        g->config_dirty = false;
+    }
+
+    /* ---- returning to the menu stashes the game; Continue resumes it ---- */
+    {
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        board_reset(&g->board);
+        g->state = game_state(&g->board);
+        g->flipped = false;
+        g->ply = 0;
+        g->selected = -1;
+        g->saved.valid = false;
+        gui_render(g, ren);
+
+        int e2 = algebraic_to_sq("e2"), e4 = algebraic_to_sq("e4");
+        SDL_Event md = {0}, mu = {0};
+        md.type = SDL_MOUSEBUTTONDOWN; md.button.button = SDL_BUTTON_LEFT;
+        md.button.x = BOARD_X + (e2 % 8) * SQ_SIZE + SQ_SIZE / 2;
+        md.button.y = BOARD_Y + (7 - e2 / 8) * SQ_SIZE + SQ_SIZE / 2;
+        mu.type = SDL_MOUSEBUTTONUP; mu.button.button = SDL_BUTTON_LEFT;
+        mu.button.x = BOARD_X + (e4 % 8) * SQ_SIZE + SQ_SIZE / 2;
+        mu.button.y = BOARD_Y + (7 - e4 / 8) * SQ_SIZE + SQ_SIZE / 2;
+        gui_handle_event(g, &md);
+        gui_handle_event(g, &mu);
+        if (g->ply != 1) {
+            fprintf(stderr, "resume test setup move failed\n");
+            return 1;
+        }
+
+        /* click the Menu button (panel_x+352..432, win_h-120..-80) */
+        int mwx, mwy;
+        SDL_RenderLogicalToWindow(ren, (float)(g->panel_x + 392),
+                                  (float)(g->win_h - 100), &mwx, &mwy);
+        SDL_Event mc = {0};
+        mc.type = SDL_MOUSEBUTTONDOWN;
+        mc.button.button = SDL_BUTTON_LEFT;
+        mc.button.x = mwx; mc.button.y = mwy;
+        gui_handle_event(g, &mc);
+        if (g->scene != SCENE_MENU) {
+            fprintf(stderr, "Menu button did not return to the menu\n");
+            return 1;
+        }
+        if (!g->saved.valid) {
+            fprintf(stderr, "game was not stashed on return to menu\n");
+            return 1;
+        }
+        if (g->menu_index != 0) {
+            fprintf(stderr, "Continue was not selected on the menu\n");
+            return 1;
+        }
+
+        SDL_Event ent = {0};
+        ent.type = SDL_KEYDOWN;
+        ent.key.keysym.sym = SDLK_RETURN;
+        gui_handle_event(g, &ent);
+        if (g->scene != SCENE_GAME || g->mode != MODE_ANALYSIS) {
+            fprintf(stderr, "Continue did not resume the game\n");
+            return 1;
+        }
+        if (g->ply != 1 || strcmp(g->move_san[0], "e4") != 0) {
+            fprintf(stderr, "resumed game state is wrong (ply=%d)\n", g->ply);
+            return 1;
+        }
         g->config_dirty = false;
     }
 

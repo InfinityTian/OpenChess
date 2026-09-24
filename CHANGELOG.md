@@ -4,6 +4,26 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0] - 2026-09-24
+
+### Added
+- **Resume game.** Leaving a game with the **Menu** button stashes it in memory;
+  the menu then offers a **Continue** entry (default-selected) that restores the
+  board, move list, side, difficulty and engine state. Singleplayer and Analysis
+  games are resumable; Local Multiplayer games are not, since the peer is gone.
+- **Save PGN** button (formerly **PGN**) now renders with the small font so the
+  longer label fits the same button.
+
+### Changed
+- **Setup screen** now marks the chosen side and difficulty at the same time;
+  the keyboard focus is shown as a brighter border instead of hiding the other
+  selection.
+- **Annotations** erase when drawn twice: right-clicking the same square toggles
+  it off (as before) and right-dragging the same arrow now removes it too.
+- **PGN prompt** no longer prints the storage directory in its caption; the full
+  saved path is still shown in the status message after saving.
+- Shortcut legend under the move box uses a smaller font.
+
 ## [1.2.2] - 2026-09-22
 
 ### Added

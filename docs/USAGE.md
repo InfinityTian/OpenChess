@@ -17,6 +17,11 @@ On launch you see the mode list. Use the **arrow keys** (or `W`/`S`) to move and
 - **Appearance (boards & pieces)** — the visual style picker.
 - **Quit** — exit (`Ctrl+Q` works anywhere).
 
+If you left a Singleplayer or Analysis game with the in-game **Menu** button, a
+**Continue** entry appears at the top of the list (and is selected by default) to
+resume that exact game. Local Multiplayer games cannot be resumed once the
+connection ends.
+
 A greyed-out entry is unavailable (for example Local Multiplayer without
 SDL2_net).
 
@@ -35,6 +40,7 @@ SDL2_net).
 
 - **Right-click** a square to toggle a coloured highlight on it.
 - **Right-drag** from one square to another to draw a solid arrow.
+- Drawing the same square or the same arrow **a second time erases it**.
 - Hold **Ctrl** (green) or **Alt** (blue) while right-clicking/dragging to
   change the colour; the default is amber.
 - Annotations are cleared when you make a move, press **Esc**, or left-click the
@@ -119,7 +125,7 @@ change it. Everything is saved to `chess.conf` (`sound`, `max_fps`).
 
 ### Export as PGN
 
-- Press **Ctrl+S** or click **PGN** (only when at least one move has been made).
+- Press **Ctrl+S** or click **Save PGN** (only when at least one move has been made).
 - Type a file name and press **Enter**; the game is written to
   `~/.local/share/openchess/games/<name>.pgn` (honouring `XDG_DATA_HOME`) with
   `Event/Site/Date/Round/White/Black/Result` headers and the movetext.
@@ -179,6 +185,9 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 - **外观（棋盘与棋子）** —— 可视化风格选择器。
 - **退出** —— 结束程序（任意界面可用 `Ctrl+Q`）。
 
+如果你用游戏内的 **Menu** 按钮离开单人/分析对局，菜单顶部会出现 **Continue**
+条目（并默认选中），用于继续该局。本地多人对局在连接结束后无法继续。
+
 灰色条目表示不可用（例如未安装 SDL2_net 时的本地多人）。
 
 ### 走子
@@ -194,6 +203,7 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 
 - **右键**点击格子可切换圆圈标记。
 - **右键拖动**可从一格到另一格画箭头。
+- 对同一个格子或同一条箭头**再画一次即可擦除**。
 - 按住 **Ctrl**（绿色）或 **Alt**（蓝色）再右键/拖动可改变颜色，默认为琥珀色。
 - 走子、按 **Esc** 或左键点击棋盘会清除标注。
 
@@ -261,7 +271,7 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 
 ### 导出 PGN
 
-- 按 **Ctrl+S** 或点击 **PGN** 按钮（至少走过一步时可用）。
+- 按 **Ctrl+S** 或点击 **Save PGN** 按钮（至少走过一步时可用）。
 - 输入文件名后按 **Enter**，对局会写入
   `~/.local/share/openchess/games/<name>.pgn`（遵循 `XDG_DATA_HOME`），包含
   `Event/Site/Date/Round/White/Black/Result` 头部与着法文本。
