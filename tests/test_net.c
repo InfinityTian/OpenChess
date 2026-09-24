@@ -22,47 +22,47 @@ int main(void)
     }
 
     const unsigned short port = 45789;
-    Net *host = net_host(port);
+    Transport *host = net_host(port);
     CHECK(host != NULL);
     if (!host) { net_shutdown(); return 1; }
 
-    Net *join = net_join("127.0.0.1", port);
+    Transport *join = net_join("127.0.0.1", port);
     CHECK(join != NULL);
-    if (!join) { net_close(host); net_shutdown(); return 1; }
+    if (!join) { transport_close(host); net_shutdown(); return 1; }
 
     /* wait for the host to accept the connection */
     char line[128];
     bool connected = false;
     for (int i = 0; i < 500 && !connected; i++) {
-        net_poll(host, line, sizeof line);
-        if (net_state(host) == NET_STATE_CONNECTED) connected = true;
+        transport_poll(host, line, sizeof line);
+        if (transport_state(host) == NET_STATE_CONNECTED) connected = true;
         else nap(10);
     }
     CHECK(connected);
-    CHECK(net_state(join) == NET_STATE_CONNECTED);
+    CHECK(transport_state(join) == NET_STATE_CONNECTED);
 
     /* join -> host */
-    CHECK(net_send(join, "PING"));
+    CHECK(transport_send(join, "PING"));
     bool got = false;
     for (int i = 0; i < 500 && !got; i++) {
-        int r = net_poll(host, line, sizeof line);
+        int r = transport_poll(host, line, sizeof line);
         if (r == 1 && strcmp(line, "PING") == 0) got = true;
         else nap(10);
     }
     CHECK(got);
 
     /* host -> join */
-    CHECK(net_send(host, "MOVE e2e4"));
+    CHECK(transport_send(host, "MOVE e2e4"));
     got = false;
     for (int i = 0; i < 500 && !got; i++) {
-        int r = net_poll(join, line, sizeof line);
+        int r = transport_poll(join, line, sizeof line);
         if (r == 1 && strcmp(line, "MOVE e2e4") == 0) got = true;
         else nap(10);
     }
     CHECK(got);
 
-    net_close(join);
-    net_close(host);
+    transport_close(join);
+    transport_close(host);
     net_shutdown();
 
     if (failures == 0) {

@@ -1,261 +1,257 @@
 # Online Multiplayer — Design & Implementation Plan
 
-Status: **plan** (not implemented). This document describes how to grow the
-existing LAN **Local Multiplayer** into internet **Online Multiplayer**.
+Status: **Phases 0–3 complete, Phase 4 partly done** (draws, chat, spectators
+and file-based result logging; accounts/ratings/DB deferred). The LAN **Local
+Multiplayer** mode stays as-is; this document describes how OpenChess grows into
+internet play.
+
+> **Phase 0 (done):** `src/transport.h/.c` vtable, `src/net_tcp.c` (LAN) and
+> `src/net_ws.c`, vendored cJSON, and the `src/proto.h/.c` message vocabulary.
+> `libwebsockets` is detected as `HAVE_WS` with graceful fallback.
+>
+> **Phase 1 (done):** real libwebsockets client (`src/net_ws.c`), C server
+> `server/openchessd` (sessions, rooms, matchmaking queue, relay), the
+> `src/online.h/.c` session layer, the **Online Multiplayer** and **Online
+> Matchmaking** menu entries + lobby screen, and the `test_online` integration
+> test.
+>
+> **Phase 2 (done):** the server compiles the shared engine (`board/move/fen/pgn`)
+> and is authoritative — it validates moves, sends `reject` + `state`, decides
+> checkmate/stalemate/insufficient/fifty-move/timeout, and enforces an optional
+> clock. The client applies the authoritative echo, resyncs on `state`, and shows
+> clocks; the lobby has a time-control selector.
+>
+> **Phase 3 (done):** seat tokens + reconnect (a dropped player reclaims their
+> seat and gets `state`), a disconnect grace period with `opponent` presence and
+> "abandoned" timeout, heartbeats (server ping/client pong, client ping +
+> auto-reconnect) and rematch (both agree; colours swap).
+>
+> **Phase 4 (partly done):** draw offers (offer/accept/decline → `1/2-1/2` on
+> agreement), in-game chat relayed to the opponent and spectators, read-only
+> **spectating** by room code, and finished-game logging to `$OPENCHESS_RESULTS`.
+> Still planned: accounts + ratings, a rating-aware matchmaking queue, and
+> database/HTTP history (libpq).
+
+## Locked decisions
+
+| Topic | Decision |
+| --- | --- |
+| Server language | **C** — reuse `src/board.c` / `src/move.c` / `src/fen.c` so there is a single rules engine |
+| Client modes | **Two menu entries**: *Online Multiplayer* (private room code) and *Online Matchmaking* (public queue) |
+| Transport | **WebSocket over TLS** (`wss://`) via **libwebsockets** (client *and* server share the same lib) |
+| JSON | vendored **cJSON** (single file), keeps the build light |
+| Persistence | optional **libpq** (Postgres) for results/ratings; v1 can run in-memory |
+| Deployment | one small VM/PaaS Docker image; no P2P/NAT punching needed because clients only dial out |
 
 ---
 
 ## 1. Where we are today
 
-- `src/net.c` / `src/net.h`: a tiny newline-delimited TCP transport on
-  **SDL2_net**. Non-blocking poll (`net_poll`), one-line sends (`net_send`).
-- `src/gui.c` (`SCENE_HOSTJOIN`, `enter_local_game`, `local_tick`): a Host/Join
-  screen where the user types an IP and port. Host plays White, joiner Black.
-- Wire protocol (plain text, one message per line):
-  - `HELLO CHESS1 <white|black>` — role/side handshake.
-  - `FEN <fen>` — initial position.
-  - `MOVE <uci>` — a move (`e2e4`, `e7e8q`).
-  - `BYE` — intentional close.
-- Limitations for the internet: manual addresses, no NAT traversal, no
-  rendezvous/matchmaking, no TLS, no reconnection, no protocol version, no
-  server-side validation, no clocks, no rematch, no spectator/reconnect.
+- `src/net.c` / `src/net.h`: newline-delimited TCP on **SDL2_net**, non-blocking
+  poll, one-line sends. LAN only.
+- `src/gui.c`: `SCENE_HOSTJOIN` (IP + port), `enter_local_game`, `local_tick`.
+- Protocol: `HELLO CHESS1 <white|black>`, `FEN <fen>`, `MOVE <uci>`, `BYE`.
+- Missing for the internet: rendezvous/matchmaking, NAT-safe transport, TLS,
+  reconnection, protocol versioning, server-side validation, clocks, rematch.
 
-Good news: chess is **turn-based and tiny**. Bandwidth is bytes per move and
-latency is irrelevant, so we do **not** need peer-to-peer UDP or hole punching to
-ship a great experience. An outbound-only **relay** solves NAT, CGNAT, and
-firewalls cleanly.
+Chess is turn-based and tiny, so an **outbound-only relay** beats UDP hole
+punching: it works through every NAT, CGNAT and firewall, and latency is
+irrelevant.
 
 ---
 
-## 2. Goals & non-goals
+## 2. User-facing modes (two entries)
 
-### Goals
-- Connect two players from anywhere with **no port forwarding**.
-- A short **room code** instead of an IP address.
-- **Server-validated** moves (never trust the client) so games are cheat-proof.
-- Reconnect after a brief drop; graceful handling of resignation/timeouts.
-- Optional, additive features: clocks, rematch, chat, spectators, rating.
+Both appear in the welcome menu, next to the existing modes.
 
-### Non-goals (initially)
-- Real-time low-latency twitch play (irrelevant for chess).
-- Full tournament/rating infrastructure in v1.
-- Mobile/native clients beyond the desktop SDL app.
+1. **Online Multiplayer** — private game. Create a room, share the 6-character
+   code, the opponent joins that code. No account required.
+2. **Online Matchmaking** — public game. Enter the queue and the server pairs
+   you with the first waiting player (rating-aware later). No code to share.
+
+Both converge on the same game session and `MODE_ONLINE` code path; only the
+lobby step differs.
 
 ---
 
 ## 3. Architecture
 
 ```
-┌──────────┐        wss/https        ┌───────────────┐
-│ Client A │ ───────────────────────▶│  Lobby/Relay  │
-│  (SDL)   │◀─────── relayed ────────│    Server     │
-└──────────┘        messages         │  (authoritative)
-┌──────────┐                          │
-│ Client B │ ───────────────────────▶│
-└──────────┘                          └───────┬───────┘
-                                              │
-                                       ┌──────▼──────┐
-                                       │  Postgres   │
-                                       │ (rooms,     │
-                                       │  results)   │
-                                       └─────────────┘
+┌──────────┐      wss:// (outbound only)      ┌─────────────────────────┐
+│ Client A │ ────────────────────────────────▶│      Chess Server (C)   │
+│  (SDL)   │◀──────────── relayed ────────────│  libwebsockets + cJSON  │
+└──────────┘                                  │  ├ room manager         │
+┌──────────┐                                   │  ├ matchmaking queue    │
+│ Client B │ ────────────────────────────────▶│  ├ authoritative board  │
+└──────────┘                                   │  └ (optional) libpq     │
+                                              └─────────────────────────┘
 ```
 
-- **Clients only make outbound connections** to one well-known server. No NAT
-  configuration ever.
-- The **server relays** messages between the two seats of a room and is the
-  single source of truth: it holds the `Board`, validates legality, tracks the
-  clock, and decides the result.
-- The client-side board/move engine (`src/board.c`, `src/move.c`, `src/fen.c`)
-  is already pure C and can be **compiled into the server** to avoid a second
-  rules implementation. Alternatively use a small independent validator.
+- Clients make exactly one outbound `wss://` connection; nothing to configure.
+- The server holds one `Board` per game. The **same C engine** used by the GUI is
+  compiled into the server, so legality, checkmate, stalemate, repetition and the
+  clocks are decided once, authoritatively.
+- The server relays the accepted move to both seats and persists the result.
 
-### Transport choice
-Move from raw TCP/SDL_net to **WebSocket (`wss://`)** for online mode:
-- Works through every HTTP proxy/firewall and terminates cleanly with TLS.
-- Well-supported in C (e.g. `libwebsockets`, `libcurl` WS, or a tiny embeddable
-  client) and trivially in Go/Node/Rust servers.
-- Keep SDL2_net for **LAN** mode (local play should keep working offline); add a
-  transport abstraction so the GUI does not care which one is active.
-
-### Server language
-Recommended: **Go** (single static binary, first-class concurrency, easy WS +
-Postgres, trivial Docker/Fly.io deploy). Alternative: **C** to reuse the engine
-and keep the repo single-language, at the cost of more boilerplate (still very
-doable with POSIX sockets or `libwebsockets`). Decide before Phase 2; the client
-protocol is language-agnostic.
+### Why libwebsockets for both sides
+One dependency gives the client `wss://`, the server listener, and TLS via
+OpenSSL/mbedTLS. It builds on macOS and Windows (MSYS2), matching the project's
+existing cross-platform constraints.
 
 ---
 
 ## 4. Protocol (v2)
 
-JSON over WebSocket, one object per frame, with a `type` discriminator. Keep the
-existing line protocol as the LAN fallback. Every frame carries `v` (protocol
-version) at connect time.
+JSON object per WebSocket frame, `type` discriminator, `v` negotiated at
+connect. Unknown fields ignored; unknown types no-op. LAN keeps the old line
+protocol untouched.
 
 ### Client → Server
 | type | fields | meaning |
 | --- | --- | --- |
-| `hello` | `v`, `token?`, `nick` | open session, resume if `token` known |
-| `create` | `color?`, `clock?` | create a room, returns code |
-| `join` | `code` | join a room by code |
+| `hello` | `v`, `token?`, `nick` | open/resume a session |
+| `create` | `color?`, `clock?` | create a private room → returns code |
+| `join` | `code` | join a private room by code |
+| `queue` | `clock?` | enter public matchmaking |
+| `cancel_queue` | — | leave matchmaking |
 | `move` | `uci`, `ply` | propose a move |
 | `resign` | — | resign |
 | `draw_offer` / `draw_accept` / `draw_decline` | — | draw negotiation |
 | `rematch` | — | request a new game in the same room |
-| `chat` | `text` | in-game chat (rate-limited) |
+| `chat` | `text` | rate-limited chat |
 | `ping` | `t` | heartbeat / RTT |
 
 ### Server → Client
 | type | fields | meaning |
 | --- | --- | --- |
-| `welcome` | `token`, `server_time` | session id for reconnect |
+| `welcome` | `token`, `server_time` | session id (reconnect) |
+| `queued` | `position?` | entered/updated matchmaking position |
 | `room` | `code`, `color`, `white`, `black`, `clock` | room state |
 | `start` | `fen`, `side`, `clock`, `opponent` | game begins |
 | `move` | `uci`, `ply`, `san`, `clock`, `fen?` | accepted move (authoritative) |
-| `reject` | `reason` | illegal/out-of-turn move (keeps client honest) |
+| `reject` | `reason` | illegal/out-of-turn move |
 | `state` | `fen`, `ply`, `clock`, `result?` | resync after reconnect |
 | `gameover` | `result`, `reason` | checkmate/stalemate/resign/time/draw |
-| `opponent` | `connected`, `nick` | presence changes |
+| `opponent` | `connected`, `nick` | presence |
 | `chat` | `from`, `text` | relayed chat |
 | `pong` | `t` | heartbeat reply |
 
-### Rules
-- Server assigns side on `create`/`join` (host = White by default, optional
-  random).
-- Server validates **every** `move` against the authoritative board; a client
-  may still pre-validate locally for instant feedback, but the server's `move`
-  echo is the truth. On mismatch send `reject` + `state`.
-- Clocks are computed server-side (client interpolates for display only).
-- Protocol is versioned; unknown fields are ignored, unknown `type` is a no-op.
+Rules: server assigns sides, validates every move, computes clocks, and is the
+only writer of results. Clients may pre-validate for instant feedback but accept
+the server echo as truth.
 
 ---
 
-## 5. Server components
+## 5. Server (C) components
 
-1. **HTTP API** (TLS):
-   - `POST /v1/session` → anonymous token (device id / OAuth later).
-   - `POST /v1/rooms` → `{code}`.
-   - `GET  /healthz`, `GET /metrics`.
-2. **WebSocket endpoint** `/v1/ws` — the game loop.
-3. **Room manager** — in-memory map `code → Room{seats, board, clock, tokens}`;
-   persist results asynchronously.
-4. **Authoritative referee** — wraps the C engine (or a Go port) for legality,
-   checkmate/stalemate/insufficient-material, repetition, 50-move.
-5. **Reconnect** — a room survives a seat disconnecting for N seconds; a holder
-   of the seat token sends `hello{token}` and gets `state`.
-6. **Observability** — structured logs, Prometheus metrics (rooms, connects,
-   illegal moves), graceful shutdown.
+New `server/` directory, buildable on its own but linking the shared engine:
 
-### Room lifecycle
-```
-created ──join──▶ ready ──start──▶ playing ──gameover──▶ finished
-   │                                     │
-   └────────── abandoned ◀── timeout ────┘        (rematch → ready)
-```
+- `server/main.c` — config (env: `PORT`, `TLS_CERT`, `TLS_KEY`, `DATABASE_URL`),
+  libwebsockets event loop, graceful shutdown.
+- `server/session.c` — connection table, `hello`, tokens (128-bit random;
+  separate single-use seat token), rate limits, bounds.
+- `server/rooms.c` — `code → Room{seats, Board, Clock, tokens}`; lifecycle
+  `created → ready → playing → finished`; abandoned-room reaper; `rematch`.
+- `server/matchmaking.c` — FIFO (later rating-bucketed) queue of waiting
+  sessions; pairs two, assigns White/Black, creates a room, emits `start`.
+- `server/referee.c` — thin wrapper over `board/move/fen` + repetition/50-move;
+  emits `move`/`reject`/`gameover`.
+- `server/store.c` — optional libpq persistence of players/results (v1 can log
+  only, add DB behind a flag).
+
+HTTP endpoints on the same listener: `GET /healthz`, `GET /metrics`,
+`POST /v1/session` (anonymous token). WebSocket upgrade at `/v1/ws`.
 
 ---
 
 ## 6. Client changes (SDL app)
 
-### Transport abstraction
-Introduce `NetTransport` vtable (`connect`, `send`, `poll`, `close`,
-`state`) implemented by:
-- `net_tcp.c` — current SDL2_net LAN transport (unchanged behavior),
-- `net_ws.c` — WebSocket transport for online mode.
-`local_tick`/`hostjoin_tick` are refactored to talk to the transport interface,
-not to `Net` directly.
+### Transport abstraction (Phase 0)
+- New `src/transport.h` vtable: `open/send/poll/role/state/close`.
+- `src/net.c` → `src/net_tcp.c` (SDL2_net) implements it; `src/net.h` stays the
+  LAN API.
+- New `src/net_ws.c` implements it over libwebsockets (`wss://`). Build-guarded
+  by `HAVE_WS`, mirroring the existing `HAVE_SDL_NET` fallback pattern.
+- New `src/proto.c/.h` + vendored `src/cJSON.c/.h` for frame encode/decode.
 
-### New scenes / UI
-- **Menu**: add **Online Multiplayer** (alongside Local Multiplayer).
-- **`SCENE_ONLINE`** (replaces/enriches Host/Join for internet):
-  - Sign-in / display name.
-  - **Create room** → shows a 6-character code + copy button.
-  - **Join room** → code entry field.
-  - Connection status, cancellable wait, error messages.
-- **In-game**: connection indicator, opponent presence ("opponent
-  reconnecting…"), clock display, resign/draw/rematch buttons, chat panel.
-- Reuse the existing auto-flip / SAN / status UI.
+### Scenes & modes
+- `src/gui.h`: add `MODE_ONLINE` (`GameMode`) and `SCENE_ONLINE` (`Scene`); add
+  online fields (`online_server`, `room_code`, `online_token`, `online_waiting`,
+  `online_queueing`, clocks).
+- Menu: add **Online Multiplayer** and **Online Matchmaking** entries; greyed out
+  when `!HAVE_WS` (same mechanism as Local Multiplayer without SDL2_net).
+- New handlers modelled on `SCENE_HOSTJOIN` (`gui.c:1725`): create/join room,
+  show/copy code, matchmaking queue status; cancellable.
+- New `online_tick()` beside `local_tick()` (`gui.c:~2730`) and
+  `enter_online_game(g, color)` beside `enter_local_game` (`gui.c:1155`).
+- In-game: connection indicator, opponent presence, clocks, **Resign**;
+  `Undo`/`Restart` disabled (reuse the `MODE_LOCAL` guards at `gui.c:2251/2256`).
+- `SavedGame`: skip `MODE_ONLINE` in `save_game` (online resume is server-side).
 
-### State
-- `MODE_ONLINE` (new `GameMode`) or reuse `MODE_LOCAL` with a `bool online`
-  flag. Prefer a distinct mode so feature flags (clocks, resign) are explicit.
-- Extend the in-memory `SavedGame` snapshot: online games are **not** resumable
-  locally; resumption is server-side via the seat token.
-
----
-
-## 7. Security & integrity
-
-- **TLS everywhere** (`wss://`, `https://`). No plaintext online traffic.
-- **Never trust the client**: server validates moves and computes results.
-- **Auth**: anonymous signed token in v1 (device-scoped); optional OAuth later.
-  Tokens are random 128-bit values; seat tokens are separate and single-use.
-- **Rate limiting**: per-IP and per-session message caps; reject oversized
-  frames; cap chat length.
-- **Abuse**: profanity filtering / chat opt-out, report/block later; CSAM/abuse
-  reporting policy before any public lobby.
-- **Resource bounds**: max rooms per IP, idle-room reaper, per-connection
-  buffers, timeouts.
-- **Privacy**: minimal data (nick, result). Document retention; allow deletion.
+### Config
+- Extend `gui_load_config`/`gui_save_config` and `src/paths.c` with
+  `online_server`, `nick`, and a stored `online_token`.
 
 ---
 
-## 8. Deployment & operations
+## 7. Testing & CI
 
-- One small VM or PaaS (Fly.io / Render / Hetzner) + managed Postgres.
-- Dockerfile; config via env (`PORT`, `DATABASE_URL`, `TLS_CERT`, `JWT_SECRET`).
-- CI: build server, run unit + integration tests, publish image; deploy on tag.
-- Health checks + autoscaling; sticky not required if rooms are single-process
-  (use a consistent-hash router or Redis pub/sub before scaling out).
-- Version negotiation: the server advertises a min/max protocol version; old
-  clients get a clear "please update" message.
-
----
-
-## 9. Testing strategy
-
-- **Protocol unit tests** — frame encode/decode, versioning, unknown fields.
+- **Protocol unit tests** — encode/decode, versioning, unknown fields
+  (`tests/test_proto.c`).
+- **Transport tests** — `tests/test_transport.c` plus the existing
+  `tests/test_net.c` / `tests/test_local.c` stay green.
 - **Referee tests** — reuse `tests/test_rules.c` cases server-side.
-- **Integration harness** — spin up a local server and two headless clients
-  (extend the approach in `tests/test_local.c`) to assert create/join/move/
-  gameover/reconnect.
-- **Chaos** — drop the socket mid-game, assert reconnect + `state` resync;
-  duplicate/reordered/out-of-turn moves; illegal move injection.
-- **Load** — many idle rooms; message flood; reconnect storms.
-- **Security** — malformed frames, oversized payloads, token replay.
+- **Integration harness** — start the C server locally and drive two headless
+  clients (pattern from `tests/test_local.c`): create/join, matchmaking pairing,
+  move/gameover, reconnect+resync, illegal-move injection.
+- **Chaos/security** — socket drops, duplicate/reordered/out-of-turn moves,
+  malformed/oversized frames, token replay, message floods.
+- **CI** — build server + client, run all tests, publish the server Docker
+  image; client DMG/app packaging (`scripts/make_app.sh`, `make dmg`) unchanged.
 
 ---
 
-## 10. Milestones
+## 8. Milestones
 
 | Phase | Deliverable | Notes |
 | --- | --- | --- |
-| **0. Refactor** | Transport vtable; LAN mode unchanged; protocol v2 types defined | No user-visible change; keeps `test_local` green |
-| **1. Lobby** | Server with `create`/`join`/code + relay; client `SCENE_ONLINE` | Connect from two networks, no port forwarding |
-| **2. Authoritative play** | Server validates moves, clocks, resign, gameover | Cheat-proof core |
-| **3. Resilience** | Heartbeats, reconnect + `state` resync, rematch, presence | Survives brief drops |
-| **4. Polish** | Draw offers, chat, spectators, sound/clock UI | |
-| **5. Meta** | Accounts, ratings, matchmaking queue, history | Larger effort, optional |
+| **0. Refactor** ✅ | Transport vtable, vendored cJSON, `proto` types, `HAVE_WS` build plumbing | No user-visible change; LAN + all tests stay green |
+| **1. Lobby + relay** ✅ | C server: sessions, rooms (code), matchmaking queue; client menu adds the **two entries** | Connect from two networks, no port forwarding |
+| **2. Authoritative play** ✅ | Server referee/clocks/resign/gameover; client `reject`/`state` handling | Cheat-proof core |
+| **3. Resilience** ✅ | Heartbeats, reconnect + resync, presence, rematch | Survives brief drops |
+| **4. Meta** ◐ | Draw offers, chat, spectators, file result log ✅; accounts + ratings, rating queue, DB history remaining | Optional, incremental |
 
-Phases 0–2 are the minimum for a credible "play a friend online" release.
-Phases 3–5 can ship incrementally.
+Phases 0–2 are the minimum for a shippable "play a friend online" release.
 
 ---
 
-## 11. Open questions
+## 9. Security & operations
 
-- Server language: **Go** vs **C** (engine reuse). *Decision needed before
-  Phase 2.*
-- Anonymous play vs required accounts for v1.
-- Hosting budget / domain; TLS via Let's Encrypt or PaaS-managed.
-- Whether to keep LAN TCP as the default and make Online opt-in, or unify.
-- Clock time controls to expose (e.g. 5+0, 10+5, unlimited).
+- TLS everywhere; never trust the client; server validates all moves.
+- Anonymous signed tokens in v1; separate single-use seat tokens; rate limits;
+  bounded frames; chat length caps; profanity/opt-out before public lobbies.
+- Resource bounds: max rooms per IP, idle-room reaper, per-connection buffers.
+- Dockerfile + env config; health checks; Prometheus metrics; consistent-hash
+  router or Redis pub/sub before scaling beyond one process.
+- Protocol min/max version advertised; old clients get "please update".
 
 ---
 
-## 12. Immediate next step
+## 10. Risks
 
-Do **Phase 0** only: add the transport abstraction and freeze the v2 message
-types, leaving LAN behavior and all existing tests untouched. That de-risks the
-rest without committing to a server stack yet.
+- New client dependency (libwebsockets/cJSON) on macOS + Windows → keep it
+  optional behind `HAVE_WS`, with the same graceful-degradation pattern already
+  used for SDL2_net/SDL2_mixer.
+- Server ops/cost and abuse handling before a public matchmaking queue goes live.
+- Client/server rules drift → prevented by compiling the shared C engine into
+  both.
+
+---
+
+## 11. Immediate next step
+
+**Phases 0–3 are done and Phase 4's social features are in.** What remains for a
+full Phase 4: accounts + OAuth, Elo ratings persisted via **libpq**, a
+rating-aware matchmaking queue, an HTTP `/v1/history` endpoint, and moderation
+for chat/public lobbies. See `server/main.c` (rooms, draw/chat/spectate,
+`log_result`), `src/online.c` and `src/gui.c`.

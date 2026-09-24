@@ -4,6 +4,63 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Online multiplayer (authoritative).** Two welcome-menu entries:
+  **Online Multiplayer** (create/join a private room by 6-character code) and
+  **Online Matchmaking** (public queue), talking to a C server over `ws(s)://`
+  via **libwebsockets**.
+- **Authoritative server** `server/openchessd` (built when libwebsockets is
+  present). It compiles the shared rules engine and referees every game: it owns
+  the board, validates each move, rejects illegal/out-of-turn moves with a
+  `reject` + `state` resync, and declares **checkmate / stalemate / insufficient
+  material / fifty-move / timeout**.
+- **Clocks.** The server enforces an optional time control (`time`/`inc`) and
+  includes `wtime`/`btime` on every `start`/`move`/`state`/`gameover`; the client
+  shows interpolated clocks in the panel. The lobby has a **Time control**
+  selector (Unlimited / 5+0 / 10+0 / 10+5 / 15+10).
+- **Resilience.** Brief disconnects no longer end the game: seats are held for a
+  **grace period** (default 30 s, `OPENCHESS_GRACE_MS`) while the opponent is told
+  "opponent disconnected". A player who reconnects with their **session token**
+  reclaims their seat and receives the authoritative `state`; if nobody returns
+  in time the game is awarded to the opponent ("abandoned").
+- **Heartbeats.** The server pings idle clients and watches for silence; the
+  client pings too and auto-reconnects (up to 5 attempts) if the link drops
+  mid-game, showing "Reconnecting ...".
+- **Rematch.** After a game ends, the Restart button becomes **Rematch**; when
+  both players agree the server swaps colours, resets the board/clocks and starts
+  a new game.
+- **Draw offers.** In an online game **Ctrl+D** offers a draw (or declines an
+  incoming offer); **Ctrl+A** accepts. The server relays offers and ends the game
+  `1/2-1/2` ("agreement") when accepted.
+- **In-game chat.** Press **T** to type a line; messages are relayed to the
+  opponent and any spectators and shown in the panel (rate-limited server-side).
+- **Spectators.** A third person can watch a running game by room code — the
+  lobby has a **Spectate** button; spectators see the live board/clocks and can
+  chat, but cannot move.
+- **Result logging.** Finished games are appended (one JSON object per line) to
+  `$OPENCHESS_RESULTS` when set; no database required.
+- **Client session layer** `src/online.h/.c` (authoritative move echo, `state`
+  resync, clocks, heartbeat, reconnect) and a threaded WebSocket transport
+  (`src/net_ws.c`) so the SDL loop never blocks on the network.
+- Config keys `online_server` and `nick` (persisted in `chess.conf`).
+- Tests: `test_online` starts the real server and covers create/join, illegal and
+  out-of-turn rejection, both-seat move echo, fool's-mate checkmate, matchmaking,
+  a clock flag, presence + reconnect (resume `state`), rematch colour swap,
+  draw offer/accept, chat relay and spectating.
+
+### Fixed
+- **Network event loop.** libwebsockets' blocking `lws_service(ctx, timeout)` can
+  stall in `poll()` on some builds (notably while reaping a dead peer). The client
+  and server drive it non-blocking (`lws_service(ctx, 0)`) with their own pacing,
+  and the server also runs a wakeup ticker (`lws_cancel_service`) so clocks and
+  the disconnect grace period are enforced on schedule.
+
+### Changed
+- The welcome menu now lists eight entries; the GUI smoke test and LAN
+  multiplayer keep working unchanged.
+
 ## [1.3.0] - 2026-09-24
 
 ### Added

@@ -20,13 +20,16 @@ Optional:
   but the Local Multiplayer menu entry is disabled.
 - **SDL2_mixer** — enables move sounds. If absent, the build runs silently and
   the Settings → Sound option has no effect.
+- **libwebsockets** — enables the online (internet) multiplayer transport. If
+  absent, the online menu entries are disabled; LAN Local Multiplayer is
+  unaffected.
 - **Stockfish** — the engine used by Singleplayer. If absent, Singleplayer
   reports "Stockfish not found".
 
 ### macOS (Homebrew)
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfish
 ```
 
 ### Debian / Ubuntu
@@ -103,14 +106,33 @@ Keep the checkout in the Linux home directory (accessing `/mnt/c/...` is slow).
 ### Build
 
 ```sh
-make            # produces ./openchess
+make            # produces ./openchess (and ./server/openchessd with libwebsockets)
 make test       # runs the test suite
 make run        # builds and launches
 make clean      # removes binaries and object files
 ```
 
-The Makefile detects SDL2_net with `pkg-config` and defines `HAVE_SDL_NET`
-accordingly; every other dependency must be present.
+The Makefile detects SDL2_net and libwebsockets with `pkg-config` and defines
+`HAVE_SDL_NET` / `HAVE_WS` accordingly; the other dependencies must be present.
+Both are optional: without them the corresponding menu entries are disabled.
+
+### Online server
+
+When libwebsockets is installed, `make` also builds `server/openchessd`. Run it
+and point the clients at it (`online_server` in `chess.conf`, default
+`ws://127.0.0.1:7681/ws`):
+
+```sh
+./server/openchessd            # listens on port 7681
+./server/openchessd 9000       # or a chosen port
+OPENCHESS_PORT=9000 ./server/openchessd
+```
+
+The server is authoritative: it validates moves, runs the clocks and decides the
+result. Finished games are appended as JSON lines to `$OPENCHESS_RESULTS` when
+that variable is set. For internet play, run it on a host with a public address
+and use `wss://` behind a TLS terminator. The `test_online` test starts this
+binary automatically and drives two clients.
 
 ### Assets
 
@@ -124,8 +146,9 @@ scripts/import_assets.sh
 ### Verifying the build
 
 - `make` should finish without warnings.
-- `make test` runs `test_rules`, `test_fen`, `test_ai` (skips without Stockfish),
-  `test_net` (skips without SDL2_net), `test_local`, and the GUI smoke test.
+- `make test` runs `test_rules`, `test_fen`, `test_pgn`, `test_ai` (skips without
+  Stockfish), `test_transport`, `test_proto`, `test_net` (skips without
+  SDL2_net), `test_local`, and the GUI smoke test.
 
 ---
 
@@ -144,13 +167,15 @@ scripts/import_assets.sh
 - **SDL2_net** —— 启用本地多人模式。缺失时程序仍可构建运行，但菜单中的
   本地多人项会被禁用。
 - **SDL2_mixer** —— 启用走子音效。缺失时程序静默运行，设置中的 Sound 选项无效。
+- **libwebsockets** —— 启用在线（互联网）对战传输。缺失时在线菜单项被禁用，
+  不影响局域网本地多人。
 - **Stockfish** —— 单人模式使用的引擎。缺失时单人模式会提示
   “Stockfish not found”。
 
 ### macOS（Homebrew）
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfish
 ```
 
 ### Debian / Ubuntu
@@ -224,14 +249,30 @@ make
 ### 构建
 
 ```sh
-make            # 生成 ./openchess
+make            # 生成 ./openchess（有 libwebsockets 时还有 ./server/openchessd）
 make test       # 运行测试
 make run        # 构建并运行
 make clean      # 清理二进制与目标文件
 ```
 
-Makefile 通过 `pkg-config` 检测 SDL2_net 并据此定义 `HAVE_SDL_NET`；
-其余依赖必须存在。
+Makefile 通过 `pkg-config` 检测 SDL2_net 与 libwebsockets，并据此定义
+`HAVE_SDL_NET` / `HAVE_WS`；其余依赖必须存在。两者均可选：缺失时对应菜单项被
+禁用。
+
+### 在线服务器
+
+安装 libwebsockets 后，`make` 还会构建 `server/openchessd`。运行它，并让客户端
+指向它（`chess.conf` 中的 `online_server`，默认 `ws://127.0.0.1:7681/ws`）：
+
+```sh
+./server/openchessd            # 监听 7681 端口
+./server/openchessd 9000       # 或指定端口
+OPENCHESS_PORT=9000 ./server/openchessd
+```
+
+服务器为权威端：负责走子校验、计时与胜负判定。设置 `OPENCHESS_RESULTS` 时，已结束
+的对局会以 JSON 行追加写入该文件。公网对战请将其部署到有公网地址的主机，并在 TLS
+终结后使用 `wss://`。`test_online` 测试会自动启动该程序并驱动两个客户端。
 
 ### 资源
 
@@ -245,5 +286,6 @@ scripts/import_assets.sh
 ### 构建校验
 
 - `make` 应无警告完成。
-- `make test` 会运行 `test_rules`、`test_fen`、`test_ai`（无 Stockfish 时跳过）、
-  `test_net`（无 SDL2_net 时跳过）、`test_local` 以及 GUI 冒烟测试。
+- `make test` 会运行 `test_rules`、`test_fen`、`test_pgn`、`test_ai`
+  （无 Stockfish 时跳过）、`test_transport`、`test_proto`、`test_net`
+  （无 SDL2_net 时跳过）、`test_local` 以及 GUI 冒烟测试。

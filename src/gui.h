@@ -5,6 +5,7 @@
 #include "move.h"
 #include "ai.h"
 #include "net.h"
+#include "online.h"
 #include "themes.h"
 #include <SDL.h>
 #include <SDL_ttf.h>
@@ -55,6 +56,7 @@ typedef enum {
     SCENE_MENU = 0,       /* welcome / game-mode selection */
     SCENE_SINGLE_SETUP,   /* choose side + difficulty */
     SCENE_HOSTJOIN,       /* local multiplayer host/join */
+    SCENE_ONLINE,         /* online lobby: room code / matchmaking */
     SCENE_APPEARANCE,     /* board/piece/animation picker */
     SCENE_SETTINGS,       /* settings: engine + gameplay + audio/video */
     SCENE_GAME,
@@ -64,7 +66,8 @@ typedef enum {
 typedef enum {
     MODE_ANALYSIS = 0, /* one person controls both sides */
     MODE_SINGLE,       /* vs Stockfish (Phase 2) */
-    MODE_LOCAL,        /* network play (Phase 3) */
+    MODE_LOCAL,        /* LAN play over SDL2_net */
+    MODE_ONLINE,       /* internet play over WebSocket */
 } GameMode;
 
 #define FEN_MAX 128
@@ -171,13 +174,29 @@ typedef struct {
     int    settings_row;        /* focused row within the gameplay/AV tabs */
 
     /* local multiplayer */
-    Net   *net;
+    Transport *net;
     Color  local_color;
     int    net_sent_ply;        /* plies already transmitted to the peer */
     bool   net_waiting;         /* host is waiting for a peer */
     int    hj_focus;            /* host/join screen focus index */
     char   net_addr[64];
     char   net_port[8];
+
+    /* online multiplayer */
+    OnlineSession *online;      /* NULL until the lobby connects */
+    int    online_ui;           /* 0 = private room, 1 = matchmaking */
+    int    online_focus;        /* focused field/button on the lobby screen */
+    int    online_time_idx;     /* index into ONLINE_TIMES */
+    bool   online_over;         /* online game finished (show Rematch) */
+    bool   draw_offered;        /* opponent offered a draw */
+    bool   chat_open;           /* chat entry active */
+    char   chat_text[160];
+    int    chat_len;
+    char   chat_log[4][192];    /* recent chat lines */
+    int    chat_log_n;
+    char   online_url[128];     /* e.g. ws://host:7681/ws */
+    char   online_code_in[8];   /* room code typed by the joiner */
+    char   online_nick[32];
 
     int    selected;            /* from-square, or -1 */
     MoveList targets;           /* legal targets when a piece is selected */

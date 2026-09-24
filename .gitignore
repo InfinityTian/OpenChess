@@ -1,6 +1,8 @@
 # Build output
 /openchess
 /chess
+/server/openchessd
+/server/openchessd.exe
 *.o
 *.a
 *.dSYM/
@@ -11,6 +13,9 @@
 /tests/test_fen
 /tests/test_pgn
 /tests/test_ai
+/tests/test_transport
+/tests/test_proto
+/tests/test_online
 /tests/test_net
 /tests/test_local
 /tests/test_gui

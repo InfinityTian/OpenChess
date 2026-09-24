@@ -14,6 +14,9 @@ On launch you see the mode list. Use the **arrow keys** (or `W`/`S`) to move and
 - **Singleplayer (vs AI)** — play Stockfish.
 - **Analysis (both sides)** — one person controls both colours.
 - **Local Multiplayer** — connect to another instance (needs SDL2_net).
+- **Online Multiplayer** — play over the internet via a room code (needs
+  libwebsockets).
+- **Online Matchmaking** — get paired with a waiting player automatically.
 - **Appearance (boards & pieces)** — the visual style picker.
 - **Quit** — exit (`Ctrl+Q` works anywhere).
 
@@ -66,6 +69,43 @@ SDL2_net).
 
 If Stockfish is missing, install it (see `BUILD.md`) or set `engine =` in the
 config file.
+
+### Online multiplayer
+
+Both online modes need a running server (see `BUILD.md` → *Online server*) and a
+build with **libwebsockets**; otherwise the menu entries are greyed out. Set the
+server address with the **Server** field (default `ws://127.0.0.1:7681/ws`) or the
+`online_server` config key.
+
+- **Online Multiplayer (private room):** press **Create room**, share the
+  six-character code shown in the status line, and have your opponent type it in
+  the **Room code** field and press **Join room**. The game starts automatically
+  and your board is oriented to your colour.
+- **Online Matchmaking:** press **Find opponent** to enter the public queue; you
+  are paired with the first waiting player.
+- **Time control:** click the time row (or press the arrow keys) to choose
+  Unlimited / 5+0 / 10+0 / 10+5 / 15+10 before creating or queueing. Remaining
+  time is shown next to the status and in the game panel; the server enforces the
+  flag.
+- Moves use the same mouse/SAN input as the other modes; **Undo**/**Restart** are
+  disabled and the Restart button becomes **Resign**. If the opponent drops, an
+  "Opponent disconnected" message appears.
+- The server is **authoritative**: it validates every move (an illegal or
+  out-of-turn move is rejected and the position is resynced), and it decides
+  checkmate, stalemate, draws and timeouts. Games start from the standard
+  position.
+- **Reconnect:** if the connection drops mid-game the client automatically
+  reconnects ("Reconnecting ...") and resumes your seat; the opponent sees
+  "opponent disconnected" until you return. If nobody returns within the grace
+  period the game is awarded to the other player.
+- **Rematch:** after the game ends, the **Resign** button becomes **Rematch**;
+  when both players agree a new game starts with the colours swapped.
+- **Draw offers:** **Ctrl+D** offers a draw (or declines an incoming offer),
+  **Ctrl+A** accepts. If accepted the game ends `1/2-1/2`.
+- **Chat:** press **T**, type, then **Enter** to send (**Esc** cancels); messages
+  appear in the panel and go to the opponent and spectators.
+- **Spectating:** in the *Online Multiplayer* lobby enter a room code and press
+  **Spectate** to watch a running game read-only (you can chat but not move).
 
 ### Appearance picker
 
@@ -182,6 +222,8 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 - **单人（对战 AI）** —— 与 Stockfish 对弈。
 - **分析（双方）** —— 一人控制双方。
 - **本地多人** —— 连接另一个实例（需要 SDL2_net）。
+- **在线对战** —— 通过房间码经互联网对弈（需要 libwebsockets）。
+- **在线匹配** —— 自动与等待中的玩家配对。
 - **外观（棋盘与棋子）** —— 可视化风格选择器。
 - **退出** —— 结束程序（任意界面可用 `Ctrl+Q`）。
 
@@ -222,6 +264,34 @@ Environment overrides: `OPENCHESS_ASSETS`, `OPENCHESS_CONFIG`.
 4. **Undo** 会退回到你上一次的回合。
 
 若缺少 Stockfish，请安装（见 `BUILD.md`）或在配置文件中设置 `engine =`。
+
+### 在线对战
+
+两种在线模式都需要运行中的服务器（见 `BUILD.md` → *Online server*），并且构建
+时包含 **libwebsockets**；否则菜单项为灰色。用 **Server** 输入框（默认
+`ws://127.0.0.1:7681/ws`）或配置项 `online_server` 设置服务器地址。
+
+- **在线对战（私人房间）**：点击 **Create room**，把状态栏显示的 6 位房间码发给
+  对手，对手在 **Room code** 输入框输入后点击 **Join room**。对局自动开始，棋盘
+  自动朝向你的颜色。
+- **在线匹配**：点击 **Find opponent** 进入公共队列，与首位等待的玩家配对。
+- **时间控制**：在创建/匹配前点击时间行（或按方向键）选择
+  Unlimited / 5+0 / 10+0 / 10+5 / 15+10。剩余时间显示在状态栏与对局面板中，
+  超时由服务器判负。
+- 走子方式与其他模式一致（鼠标 / SAN）；**Undo**/**Restart** 被禁用，Restart 按钮
+  变为 **Resign**。对手掉线会提示 “Opponent disconnected”。
+- 服务器为**权威端**：校验每一步（非法或未轮到的着法会被拒绝并重新同步局面），
+  并判定将杀、逼和、和棋与超时。对局从标准初始局面开始。
+- **断线重连**：对局中掉线会自动重连（显示 “Reconnecting ...”），并恢复你的座位；
+  对手会看到 “opponent disconnected”，直到你返回。若超过宽限期无人返回，判对手胜。
+- **再战**：对局结束后，**Resign** 按钮变为 **Rematch**；双方都同意后交换颜色开始
+  新的一局。
+- **提和**：**Ctrl+D** 提和（对手提和时再次按下表示拒绝），**Ctrl+A** 接受。接受后
+  对局以 `1/2-1/2` 结束。
+- **聊天**：按 **T** 输入，**Enter** 发送（**Esc** 取消）；消息显示在面板中，并发送
+  给对手与观战者。
+- **观战**：在 *在线对战* 大厅输入房间码后点击 **Spectate**，可只读观看进行中的对局
+  （可聊天，不能走子）。
 
 ### 外观选择器
 

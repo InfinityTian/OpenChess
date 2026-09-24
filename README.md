@@ -16,12 +16,15 @@ FEN import/export, board flipping, move animations, and SAN text entry.
 
 ### Features
 
-- **Three modes**
+- **Five modes**
   - **Analysis** – control both sides with full rule enforcement; ideal for
     studying, with FEN import/export, undo/restart and board flipping.
   - **Singleplayer** – play against Stockfish (choose your side and difficulty).
   - **Local Multiplayer** – host or join a second running instance over TCP
     (localhost or LAN).
+  - **Online Multiplayer** – play over the internet by sharing a room code
+    (needs libwebsockets and the bundled server).
+  - **Online Matchmaking** – get paired with a waiting player automatically.
 - **Appearance picker** – browse every board and piece set with thumbnails,
   preview animations, and apply live. Choices are remembered in `chess.conf`.
 - **Engine selection** – pick a detected UCI engine or a custom path; used by
@@ -36,7 +39,7 @@ FEN import/export, board flipping, move animations, and SAN text entry.
 - **Resizable / magnifiable UI** – resize the window or drag the grip in the
   board's bottom-right corner; the board, pieces, panel and menus all scale
   together, keeping the grip under the cursor.
-- **Export as PGN** – press `Ctrl+S` (or the **PGN** button) to save the game
+- **Export as PGN** – press `Ctrl+S` (or the **Save PGN** button) to save the game
   with headers and result.
 - **FEN** – load a position from a FEN string and copy the current position.
 - **On-demand SAN input** – press Enter to reveal a move box, type SAN
@@ -49,6 +52,8 @@ FEN import/export, board flipping, move animations, and SAN text entry.
 - A C11 compiler (`cc`/`clang`/`gcc`) and `make`, plus `pkg-config`.
 - **SDL2**, **SDL2_ttf**, **SDL2_image**.
 - **SDL2_net** – optional; needed only for Local Multiplayer.
+- **libwebsockets** – optional; needed only for Online Multiplayer (also builds
+  the `server/openchessd` game server).
 - **SDL2_mixer** – optional; needed only for move sounds.
 - **Stockfish** – optional; needed only for Singleplayer.
 
@@ -83,16 +88,19 @@ See [`docs/INSTALL.md`](docs/INSTALL.md).
 ### How to play
 
 1. Launch OpenChess; the welcome menu lists the modes.
-2. Pick **Analysis**, **Singleplayer (vs AI)** or **Local Multiplayer**.
+2. Pick a mode: **Analysis**, **Singleplayer (vs AI)**, **Local Multiplayer**,
+   **Online Multiplayer** or **Online Matchmaking**.
    - Singleplayer: choose your side and difficulty, then **Start**.
-   - Multiplayer: one side **Hosts**, the other **Joins** `127.0.0.1:7777`
-     (or the host's LAN IP).
+   - Local Multiplayer: one side **Hosts**, the other **Joins**
+     `127.0.0.1:7777` (or the host's LAN IP).
+   - Online: run `./server/openchessd`, then **Create room** and share the code,
+     or **Find opponent** for matchmaking.
 3. Move by clicking a piece and its destination, or press **Enter** and type a
    move in SAN.
 
-Full details and controls: [`docs/USAGE.md`](docs/USAGE.md) and
-[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md). Internet play is described (as a
-plan) in [`docs/ONLINE_MULTIPLAYER.md`](docs/ONLINE_MULTIPLAYER.md).
+Full details and controls: [`docs/USAGE.md`](docs/USAGE.md),
+[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md) and
+[`docs/ONLINE_MULTIPLAYER.md`](docs/ONLINE_MULTIPLAYER.md).
 
 ### Controls
 
@@ -153,12 +161,15 @@ were collected by a third-party repository — see
 
 ### 功能
 
-- **三种模式**
+- **五种模式**
   - **分析（Analysis）**：一人控制双方，严格遵循规则；可导入/导出 FEN、悔棋、
     重新开始以及翻转棋盘。
   - **单人（Singleplayer）**：与 Stockfish 对弈（可选择执子方与难度）。
   - **本地多人（Local Multiplayer）**：通过 TCP 连接另一个运行中的实例
     （本机或局域网）。
+  - **在线对战（Online Multiplayer）**：通过房间码经互联网对弈（需要
+    libwebsockets 与随附的服务器）。
+  - **在线匹配（Online Matchmaking）**：自动与等待中的玩家配对。
 - **外观选择器**：用缩略图浏览全部棋盘与棋子，预览动画并即时应用；选择会保存到
   `chess.conf`。
 - **FEN**：从 FEN 字符串载入局面，并可复制当前局面。
@@ -171,6 +182,7 @@ were collected by a third-party repository — see
 - C11 编译器（`cc`/`clang`/`gcc`）、`make` 与 `pkg-config`。
 - **SDL2**、**SDL2_ttf**、**SDL2_image**。
 - **SDL2_net** —— 可选，仅本地多人模式需要。
+- **libwebsockets** —— 可选，仅在线对战需要（同时构建 `server/openchessd` 服务器）。
 - **Stockfish** —— 可选，仅单人模式需要。
 
 各平台安装命令见 [`docs/BUILD.md`](docs/BUILD.md)。
@@ -204,14 +216,17 @@ make dmg        # 生成 dist/OpenChess.app 与 dist/OpenChess.dmg
 ### 玩法
 
 1. 启动 OpenChess，欢迎菜单会列出各模式。
-2. 选择**分析**、**单人（对战 AI）**或**本地多人**。
+2. 选择模式：**分析**、**单人（对战 AI）**、**本地多人**、**在线对战**或
+   **在线匹配**。
    - 单人：选择执子方与难度，然后点击 **Start**。
-   - 多人：一方 **Host**，另一方 **Join** 到 `127.0.0.1:7777`
+   - 本地多人：一方 **Host**，另一方 **Join** 到 `127.0.0.1:7777`
      （或主机的局域网 IP）。
+   - 在线：先运行 `./server/openchessd`，然后 **Create room** 并分享房间码，
+     或点击 **Find opponent** 进行匹配。
 3. 点击棋子再点目标格即可移动；或按**回车**后用 SAN 输入走子。
 
-完整说明与操作见 [`docs/USAGE.md`](docs/USAGE.md) 与
-[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md)。互联网对战方案（规划）见
+完整说明与操作见 [`docs/USAGE.md`](docs/USAGE.md)、
+[`docs/MULTIPLAYER.md`](docs/MULTIPLAYER.md) 与
 [`docs/ONLINE_MULTIPLAYER.md`](docs/ONLINE_MULTIPLAYER.md)。
 
 ### 操作

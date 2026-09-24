@@ -33,6 +33,8 @@ DejaVu Sans on Linux) for glyphs and UI text.
 ### Libraries
 
 - **SDL2**, **SDL2_ttf**, **SDL2_image**, **SDL2_net**, **SDL2_mixer** — zlib license.
+- **cJSON** (vendored under `src/cJSON.c`, `src/cJSON.h`, v1.7.18) — MIT license.
+- **libwebsockets** — optional, for online multiplayer (MIT license); not bundled.
 - **Stockfish** — GPLv3. It is an external program that OpenChess launches; it is
   not distributed with this project.
 
@@ -67,6 +69,8 @@ DejaVu Sans）渲染字形与界面文字。
 ### 依赖库
 
 - **SDL2**、**SDL2_ttf**、**SDL2_image**、**SDL2_net**、**SDL2_mixer** —— zlib 许可证。
+- **cJSON**（内置于 `src/cJSON.c`、`src/cJSON.h`，v1.7.18）—— MIT 许可证。
+- **libwebsockets** —— 可选，用于在线对战（MIT 许可证）；本项目不打包。
 - **Stockfish** —— GPLv3。它是由 OpenChess 启动的外部程序，本项目不附带分发。
 
 源代码采用 MIT 许可证 —— 详见 [`LICENSE`](LICENSE)。

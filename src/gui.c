@@ -795,6 +795,8 @@ static bool san_can_type(const Gui *g)
     switch (g->mode) {
         case MODE_SINGLE: return g->board.side == g->human_color;
         case MODE_LOCAL:  return g->board.side == g->local_color;
+        case MODE_ONLINE: return g->online && !online_spectating(g->online) &&
+                                  g->board.side == g->human_color;
         case MODE_ANALYSIS:
         default:          return true;
     }
@@ -817,6 +819,8 @@ static void san_open_box(Gui *g)
 /* Select a piece (own side) at sq, computing legal target squares. */
 static void select_square(Gui *g, int sq)
 {
+    if (g->mode == MODE_ONLINE && g->online && online_spectating(g->online))
+        return;   /* spectators are read-only */
     clear_selection(g);
     Piece p = g->board.board[sq];
     if (p == EMPTY) return;
@@ -945,21 +949,35 @@ static void open_appearance(Gui *g, Scene return_to);
 static void open_settings_scene(Gui *g, Scene return_to);
 static void handle_settings_keydown(Gui *g, const SDL_KeyboardEvent *ke);
 static void handle_settings_mousedown(Gui *g);
+static void open_online(Gui *g, int matchmaking);
 
-#define MENU_COUNT 6
+/* Menu entry indices (the runtime list may prepend "Continue"). */
+#define MENU_SINGLE     0
+#define MENU_ANALYSIS   1
+#define MENU_LOCAL      2
+#define MENU_ONLINE     3
+#define MENU_MATCH      4
+#define MENU_APPEARANCE 5
+#define MENU_SETTINGS   6
+#define MENU_QUIT       7
+#define MENU_COUNT      8
+
 static const char *MENU_ITEMS[MENU_COUNT] = {
     "Singleplayer (vs AI)",
     "Analysis (both sides)",
     "Local Multiplayer",
+    "Online Multiplayer",
+    "Online Matchmaking",
     "Appearance (boards & pieces)",
     "Settings",
     "Quit",
 };
 
-/* Local Multiplayer is enabled only when SDL_net is compiled in. */
+/* Local Multiplayer needs SDL2_net; the online entries need libwebsockets. */
 static bool menu_enabled(int i)
 {
-    if (i == 2) return net_available();
+    if (i == MENU_LOCAL) return net_available();
+    if (i == MENU_ONLINE || i == MENU_MATCH) return net_ws_available();
     return i >= 0 && i < MENU_COUNT;
 }
 
@@ -1046,7 +1064,10 @@ static void start_analysis(Gui *g)
  * cannot be resumed (the peer is gone), so they clear the snapshot instead. */
 static void save_game(Gui *g)
 {
-    if (g->mode == MODE_LOCAL) { g->saved.valid = false; return; }
+    if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE) {
+        g->saved.valid = false;
+        return;
+    }
 
     SavedGame *s = &g->saved;
     s->mode        = g->mode;
@@ -1121,16 +1142,20 @@ static void go_to_menu(Gui *g)
     g->promo_from = g->promo_to = -1;
     g->fen_active = false;
     g->input.active = false;
+    g->chat_open = false;
+    g->chat_len = 0;
+    g->draw_offered = false;
     g->msg[0] = 0;
     if (g->ai_thinking) {
         ai_stop_search(g->ai);
         g->ai_thinking = false;
     }
     if (g->net) {
-        if (net_state(g->net) == NET_STATE_CONNECTED) net_send(g->net, "BYE");
-        net_close(g->net);
+        if (transport_state(g->net) == NET_STATE_CONNECTED) transport_send(g->net, "BYE");
+        transport_close(g->net);
         g->net = NULL;
     }
+    if (g->online) { online_destroy(g->online); g->online = NULL; }
     g->net_waiting = false;
     g->net_sent_ply = 0;
     eval_stop(g);
@@ -1202,17 +1227,17 @@ static void enter_local_game(Gui *g, Color side)
     g->net_sent_ply = 0;
     g->net_waiting = false;
 
-    if (g->net && net_state(g->net) == NET_STATE_CONNECTED) {
+    if (g->net && transport_state(g->net) == NET_STATE_CONNECTED) {
         char hello[32];
         snprintf(hello, sizeof hello, "HELLO CHESS1 %s",
                  side == WHITE ? "white" : "black");
-        net_send(g->net, hello);
+        transport_send(g->net, hello);
 
         char fen[FEN_MAX];
         fen_generate(&g->board, fen, sizeof fen);
         char fbuf[FEN_MAX + 8];
         snprintf(fbuf, sizeof fbuf, "FEN %s", fen);
-        net_send(g->net, fbuf);
+        transport_send(g->net, fbuf);
 
         set_msg(g, side == WHITE ? "Connected - you are White"
                                  : "Connected - you are Black", NULL);
@@ -1283,6 +1308,7 @@ void gui_load_config(Gui *g, const char *path)
     char vthreads[16] = "", vhash[16] = "", vmultipv[16] = "";
     char vtime[16] = "", vdepth[16] = "", varrows[8] = "";
     char vmaxfps[16] = "", vsound[8] = "";
+    char vonline[128] = "", vnick[32] = "";
     while (fgets(line, sizeof line, f)) {
         char *hash = strchr(line, '#');
         if (hash) *hash = 0;
@@ -1312,6 +1338,8 @@ void gui_load_config(Gui *g, const char *path)
         else if (strcmp(key, "engine_arrows") == 0) snprintf(varrows, sizeof varrows, "%s", val);
         else if (strcmp(key, "max_fps") == 0) snprintf(vmaxfps, sizeof vmaxfps, "%s", val);
         else if (strcmp(key, "sound") == 0) snprintf(vsound, sizeof vsound, "%s", val);
+        else if (strcmp(key, "online_server") == 0) snprintf(vonline, sizeof vonline, "%s", rawval);
+        else if (strcmp(key, "nick") == 0) snprintf(vnick, sizeof vnick, "%s", rawval);
     }
     fclose(f);
 
@@ -1341,6 +1369,8 @@ void gui_load_config(Gui *g, const char *path)
     if (varrows[0])  g->engine_arrows = (atoi(varrows) != 0);
     if (vmaxfps[0])  { int n = atoi(vmaxfps); if (n >= 0) g->max_fps = n; }
     if (vsound[0])   g->sound = (atoi(vsound) != 0);
+    if (vonline[0])  snprintf(g->online_url, sizeof g->online_url, "%s", vonline);
+    if (vnick[0])    snprintf(g->online_nick, sizeof g->online_nick, "%s", vnick);
 }
 
 /* Persist the current look to chess.conf (only when it changed). */
@@ -1369,6 +1399,8 @@ void gui_save_config(Gui *g)
     fprintf(f, "sound = %d\n", g->sound ? 1 : 0);
     fprintf(f, "max_fps = %d\n", g->max_fps);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
+    if (g->online_url[0]) fprintf(f, "online_server = %s\n", g->online_url);
+    if (g->online_nick[0]) fprintf(f, "nick = %s\n", g->online_nick);
     fclose(f);
 }
 
@@ -1462,6 +1494,8 @@ Gui *gui_create(void)
     snprintf(g->config_path, sizeof g->config_path, "%s", path_config());
     snprintf(g->net_addr, sizeof g->net_addr, "127.0.0.1");
     snprintf(g->net_port, sizeof g->net_port, "7777");
+    snprintf(g->online_url, sizeof g->online_url, "ws://127.0.0.1:7681/ws");
+    snprintf(g->online_nick, sizeof g->online_nick, "Player");
     const char *ep = ai_find_engine(NULL);
     if (ep) snprintf(g->engine_path, sizeof g->engine_path, "%s", ep);
     board_reset(&g->board);
@@ -1515,9 +1549,10 @@ void gui_destroy(Gui *g)
     if (g->ai) ai_stop(g->ai);
     if (g->eval_ai) ai_stop(g->eval_ai);
     if (g->net) {
-        if (net_state(g->net) == NET_STATE_CONNECTED) net_send(g->net, "BYE");
-        net_close(g->net);
+        if (transport_state(g->net) == NET_STATE_CONNECTED) transport_send(g->net, "BYE");
+        transport_close(g->net);
     }
+    if (g->online) online_destroy(g->online);
     destroy_piece_textures(g);
     if (g->tex_board) SDL_DestroyTexture(g->tex_board);
     destroy_thumbs(&g->board_thumbs, g->boards.count);
@@ -1590,13 +1625,13 @@ static void menu_activate(Gui *g)
     if (g->saved.valid && g->menu_index == 0) { resume_game(g); return; }
 
     switch (menu_base_index(g, g->menu_index)) {
-        case 0:
+        case MENU_SINGLE:
             g->setup_field = 0;
             g->menu_msg[0] = 0;
             g->scene = SCENE_SINGLE_SETUP;
             break;
-        case 1: start_analysis(g); break;
-        case 2:
+        case MENU_ANALYSIS: start_analysis(g); break;
+        case MENU_LOCAL:
             if (!net_available()) {
                 snprintf(g->menu_msg, sizeof g->menu_msg,
                          "Networking unavailable (install SDL2_net)");
@@ -1609,9 +1644,25 @@ static void menu_activate(Gui *g)
             if (!g->net_port[0]) snprintf(g->net_port, sizeof g->net_port, "7777");
             g->scene = SCENE_HOSTJOIN;
             break;
-        case 3: open_appearance(g, SCENE_MENU); break;
-        case 4: open_settings_scene(g, SCENE_MENU); break;
-        case 5: g->quit = true; break;
+        case MENU_ONLINE:
+            if (!net_ws_available()) {
+                snprintf(g->menu_msg, sizeof g->menu_msg,
+                         "Online play unavailable (install libwebsockets)");
+                break;
+            }
+            open_online(g, 0);
+            break;
+        case MENU_MATCH:
+            if (!net_ws_available()) {
+                snprintf(g->menu_msg, sizeof g->menu_msg,
+                         "Online play unavailable (install libwebsockets)");
+                break;
+            }
+            open_online(g, 1);
+            break;
+        case MENU_APPEARANCE: open_appearance(g, SCENE_MENU); break;
+        case MENU_SETTINGS: open_settings_scene(g, SCENE_MENU); break;
+        case MENU_QUIT: g->quit = true; break;
         default:
             snprintf(g->menu_msg, sizeof g->menu_msg,
                      "'%s' is not available yet", menu_label(g, g->menu_index));
@@ -1744,7 +1795,7 @@ static unsigned short hj_port(Gui *g)
 
 static void hj_begin_host(Gui *g)
 {
-    if (g->net) { net_close(g->net); g->net = NULL; }
+    if (g->net) { transport_close(g->net); g->net = NULL; }
     g->net = net_host(hj_port(g));
     if (!g->net) {
         snprintf(g->menu_msg, sizeof g->menu_msg,
@@ -1758,14 +1809,14 @@ static void hj_begin_host(Gui *g)
 
 static void hj_begin_join(Gui *g)
 {
-    if (g->net) { net_close(g->net); g->net = NULL; }
+    if (g->net) { transport_close(g->net); g->net = NULL; }
     g->net = net_join(g->net_addr, hj_port(g));
     if (!g->net) {
         snprintf(g->menu_msg, sizeof g->menu_msg,
                  "Could not connect to %s:%s", g->net_addr, g->net_port);
         return;
     }
-    enter_local_game(g, net_role(g->net) == NET_ROLE_JOIN ? BLACK : WHITE);
+    enter_local_game(g, transport_role(g->net) == NET_ROLE_JOIN ? BLACK : WHITE);
 }
 
 static void handle_hostjoin_keydown(Gui *g, const SDL_KeyboardEvent *ke)
@@ -1821,6 +1872,461 @@ static void handle_hostjoin_mousedown(Gui *g)
     if (pt_in(&host, p.x, p.y)) { g->hj_focus = 2; hj_begin_host(g); return; }
     if (pt_in(&join, p.x, p.y)) { g->hj_focus = 3; hj_begin_join(g); return; }
     if (pt_in(&back, p.x, p.y)) { g->hj_focus = 4; go_to_menu(g); return; }
+}
+
+/* ---- online lobby + game ---- */
+
+static void online_close(Gui *g)
+{
+    if (g->online) { online_destroy(g->online); g->online = NULL; }
+}
+
+static void open_online(Gui *g, int matchmaking)
+{
+    online_close(g);
+    g->online_ui = matchmaking ? 1 : 0;
+    g->online_focus = 0;
+    g->online_code_in[0] = 0;
+    g->menu_msg[0] = 0;
+    g->msg[0] = 0;
+    if (net_ws_available() && g->online_url[0])
+        g->online = online_create(g->online_url, g->online_nick, "");
+    g->scene = SCENE_ONLINE;
+}
+
+/* Connect if we have no live session; rebuild one if it closed. */
+static bool online_ensure(Gui *g)
+{
+    if (!net_ws_available()) return false;
+    if (g->online && online_state(g->online) != ONLINE_CLOSED) return true;
+    online_close(g);
+    if (!g->online_url[0]) return false;
+    g->online = online_create(g->online_url, g->online_nick, "");
+    return g->online != NULL;
+}
+
+typedef struct { const char *label; int time_ms; int inc_ms; } OnlineTime;
+static const OnlineTime ONLINE_TIMES[] = {
+    { "Unlimited",        0, 0 },
+    { "5+0",         5*60000, 0 },
+    { "10+0",       10*60000, 0 },
+    { "10+5",       10*60000, 5000 },
+    { "15+10",      15*60000, 10000 },
+};
+#define ONLINE_TIME_COUNT ((int)(sizeof ONLINE_TIMES / sizeof ONLINE_TIMES[0]))
+
+/* Focus layout: 0 = server, 1 = time, then code+buttons (room) or buttons. */
+static int online_focus_max(const Gui *g)
+{
+    return g->online_ui == 1 ? 4 : 6;   /* room adds a Spectate button */
+}
+
+static void online_cycle_time(Gui *g, int dir)
+{
+    g->online_time_idx = (g->online_time_idx + dir + ONLINE_TIME_COUNT) % ONLINE_TIME_COUNT;
+}
+
+static void online_time_control(const Gui *g, int *time_ms, int *inc_ms)
+{
+    int i = g->online_time_idx;
+    if (i < 0 || i >= ONLINE_TIME_COUNT) i = 0;
+    if (time_ms) *time_ms = ONLINE_TIMES[i].time_ms;
+    if (inc_ms)  *inc_ms  = ONLINE_TIMES[i].inc_ms;
+}
+
+static void online_primary(Gui *g)
+{
+    if (!online_ensure(g)) return;
+    int t, inc;
+    online_time_control(g, &t, &inc);
+    if (g->online_ui == 1) online_queue(g->online, t, inc);
+    else                   online_create_room(g->online, t, inc);
+}
+
+static void online_secondary(Gui *g)
+{
+    if (!online_ensure(g)) return;
+    if (g->online_ui == 1) {
+        online_cancel_queue(g->online);
+        return;
+    }
+    if (!g->online_code_in[0]) {
+        snprintf(g->menu_msg, sizeof g->menu_msg, "Enter a room code to join");
+        return;
+    }
+    online_join_room(g->online, g->online_code_in);
+}
+
+static void online_spectate_action(Gui *g)
+{
+    if (!online_ensure(g)) return;
+    if (!g->online_code_in[0]) {
+        snprintf(g->menu_msg, sizeof g->menu_msg, "Enter a room code to spectate");
+        return;
+    }
+    online_spectate(g->online, g->online_code_in);
+}
+
+static void online_back(Gui *g)
+{
+    online_close(g);
+    g->scene = SCENE_MENU;
+}
+
+/* Switch from the lobby into the game when the server says it started. */
+static void enter_online_game(Gui *g)
+{
+    g->scene = SCENE_GAME;
+    g->mode = MODE_ONLINE;
+    g->human_color = online_color(g->online);
+    g->auto_flip = true;
+    g->flipped = (g->human_color == BLACK);
+    const char *opp = online_opponent(g->online);
+    if (g->human_color == WHITE) {
+        snprintf(g->white_name, sizeof g->white_name, "You");
+        snprintf(g->black_name, sizeof g->black_name, "%s", opp);
+    } else {
+        snprintf(g->white_name, sizeof g->white_name, "%s", opp);
+        snprintf(g->black_name, sizeof g->black_name, "You");
+    }
+    g->menu_msg[0] = 0;
+    g->msg[0] = 0;
+    g->input.len = 0;
+    g->input.text[0] = 0;
+    g->input.active = false;
+    g->fen_active = false;
+    g->chat_open = false;
+    g->chat_len = 0;
+    if (online_spectating(g->online) && online_fen(g->online)[0]) {
+        load_fen(g, online_fen(g->online));
+        g->ply = online_ply(g->online);
+    } else {
+        board_reset(&g->board);
+        g->ply = 0;
+        reset_board_state(g);
+        fen_refresh(g);
+    }
+    g->net_sent_ply = g->ply;
+    g->online_over = false;
+    g->draw_offered = false;
+    g->saved.valid = false;
+}
+
+static void online_lobby_tick(Gui *g)
+{
+    if (!g->online) return;
+    online_poll(g->online);
+    char uci[8];
+    int ply;
+    OnlineEvent ev;
+    while ((ev = online_next_event(g->online, uci, sizeof uci, &ply)) != ONLINE_EV_NONE) {
+        if (ev == ONLINE_EV_START || ev == ONLINE_EV_SPECTATE) {
+            enter_online_game(g);
+            return;
+        }
+    }
+}
+
+/* In-game online pump: relay moves both ways and report peer/game events. */
+static void online_tick(Gui *g)
+{
+    if (!g->online) { go_to_menu(g); return; }
+    online_poll(g->online);
+
+    char uci[8];
+    int ply;
+    OnlineEvent ev;
+    while ((ev = online_next_event(g->online, uci, sizeof uci, &ply)) != ONLINE_EV_NONE) {
+        if (ev == ONLINE_EV_MOVE) {
+            /* The server echoes our own moves too; only apply the opponent's
+             * (the next ply we have not played) and never re-apply our own. */
+            if (ply == g->ply && g->state == NO_GAME_OVER) {
+                Move m;
+                if (ai_uci_to_move(&g->board, uci, &m)) push_move(g, m);
+                g->net_sent_ply = g->ply;
+            }
+        } else if (ev == ONLINE_EV_STATE) {
+            const char *fen = online_fen(g->online);
+            if (fen && *fen && load_fen(g, fen)) {
+                g->ply = online_ply(g->online);   /* stay in step with the server */
+                g->net_sent_ply = g->ply;
+                set_msg(g, "Position resynced", NULL);
+            }
+        } else if (ev == ONLINE_EV_START) {
+            /* Rematch (or the initial start): reset and swap as instructed. */
+            enter_online_game(g);
+        } else if (ev == ONLINE_EV_REJECT) {
+            set_msg(g, "Move rejected: %s", online_last_error(g->online));
+        } else if (ev == ONLINE_EV_GAMEOVER) {
+            const char *r = online_result(g->online);
+            g->online_over = true;
+            set_msg(g, "Game over: %s", r && *r ? r : "result");
+        } else if (ev == ONLINE_EV_OPPONENT_LEFT) {
+            set_msg(g, "Opponent disconnected - waiting for them to return", NULL);
+        } else if (ev == ONLINE_EV_OPPONENT_JOINED) {
+            set_msg(g, "Opponent reconnected", NULL);
+        } else if (ev == ONLINE_EV_REMATCH) {
+            set_msg(g, "Opponent wants a rematch - press Rematch", NULL);
+        } else if (ev == ONLINE_EV_DRAW_OFFER) {
+            g->draw_offered = true;
+            set_msg(g, "Opponent offers a draw: Ctrl+A accept, Ctrl+D decline", NULL);
+        } else if (ev == ONLINE_EV_DRAW_DECLINE) {
+            g->draw_offered = false;
+            set_msg(g, "Draw offer declined", NULL);
+        } else if (ev == ONLINE_EV_SPECTATE) {
+            enter_online_game(g);
+        }
+    }
+
+    /* Move any queued chat into the on-screen log. */
+    {
+        char from[40], text[160];
+        while (online_take_chat(g->online, from, sizeof from, text, sizeof text)) {
+            int n = (int)(sizeof g->chat_log / sizeof g->chat_log[0]);
+            char line[192];
+            snprintf(line, sizeof line, "%s: %s", from, text);
+            for (int i = 0; i < n - 1; i++)
+                memcpy(g->chat_log[i], g->chat_log[i + 1], sizeof g->chat_log[i]);
+            snprintf(g->chat_log[n - 1], sizeof g->chat_log[n - 1], "%s", line);
+            if (g->chat_log_n < n) g->chat_log_n++;
+        }
+    }
+
+    if (online_state(g->online) == ONLINE_CLOSED) {
+        if (online_reconnecting(g->online)) {
+            set_msg(g, "Reconnecting ...", NULL);
+        } else {
+            set_msg(g, "Disconnected", NULL);
+            go_to_menu(g);
+        }
+        return;
+    }
+    if (online_state(g->online) == ONLINE_CONNECTING &&
+        online_reconnecting(g->online)) {
+        set_msg(g, "Reconnecting ...", NULL);
+        return;
+    }
+
+    while (g->net_sent_ply < g->ply) {
+        char u[8];
+        move_to_uci(g->history[g->net_sent_ply], u);
+        online_send_move(g->online, u, g->net_sent_ply);
+        g->net_sent_ply++;
+    }
+}
+
+static void online_rects(const Gui *g, SDL_Rect *url, SDL_Rect *time_rc,
+                         SDL_Rect *code, SDL_Rect *prim, SDL_Rect *sec,
+                         SDL_Rect *spec, SDL_Rect *back)
+{
+    int w = 460;
+    int x = g->win_w / 2 - w / 2;
+    url->x = x; url->y = 220; url->w = w; url->h = 44;
+    time_rc->x = x; time_rc->y = 282; time_rc->w = w; time_rc->h = 40;
+    code->x = x; code->y = 344; code->w = w - 140; code->h = 44;
+    prim->x = g->win_w / 2 - 250; prim->y = 420; prim->w = 220; prim->h = 48;
+    sec->x  = g->win_w / 2 + 30;  sec->y  = 420; sec->w = 220; sec->h = 48;
+    spec->x = g->win_w / 2 - 110; spec->y = 492; spec->w = 220; spec->h = 44;
+    back->x = g->win_w / 2 - 75;  back->y = 560; back->w = 150; back->h = 44;
+}
+
+static void online_cycle_focus(Gui *g, int dir)
+{
+    int n = online_focus_max(g) + 1;
+    g->online_focus = (g->online_focus + dir + n) % n;
+}
+
+static void handle_online_keydown(Gui *g, const SDL_KeyboardEvent *ke)
+{
+    SDL_Keycode k = ke->keysym.sym;
+    bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
+
+    if (ctrl && k == SDLK_q) { g->quit = true; return; }
+    if (k == SDLK_ESCAPE) { online_back(g); return; }
+    if (k == SDLK_TAB || k == SDLK_DOWN) { online_cycle_focus(g, 1); return; }
+    if (k == SDLK_UP) { online_cycle_focus(g, -1); return; }
+
+    if (k == SDLK_LEFT) { online_cycle_time(g, -1); return; }
+    if (k == SDLK_RIGHT) { online_cycle_time(g, 1); return; }
+
+    if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+        char *dst = (g->online_focus == 0) ? g->online_url
+                  : (g->online_ui == 0 && g->online_focus == 2) ? g->online_code_in
+                  : NULL;
+        if (dst) { size_t n = strlen(dst); if (n) dst[n - 1] = '\0'; }
+        return;
+    }
+
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {
+        int f = g->online_focus;
+        if (f == 1) { online_cycle_time(g, 1); return; }
+        if (g->online_ui == 1) {
+            if (f == 2) online_primary(g);
+            else if (f == 3) online_secondary(g);
+            else if (f == 4) online_back(g);
+            else online_cycle_focus(g, 1);
+        } else {
+            if (f == 3) online_primary(g);
+            else if (f == 4) online_secondary(g);
+            else if (f == 5) online_spectate_action(g);
+            else if (f == 6) online_back(g);
+            else online_cycle_focus(g, 1);
+        }
+    }
+}
+
+static void handle_online_textinput(Gui *g, const SDL_TextInputEvent *te)
+{
+    char *dst = NULL;
+    size_t cap = 0;
+    int room_field = (g->online_ui == 0 && g->online_focus == 2);
+    if (g->online_focus == 0) { dst = g->online_url; cap = sizeof g->online_url; }
+    else if (room_field) { dst = g->online_code_in; cap = sizeof g->online_code_in; }
+    if (!dst) return;
+
+    size_t len = strlen(dst);
+    for (const char *p = te->text; *p; p++) {
+        if (len + 1 >= cap) break;
+        char c = *p;
+        bool ok = room_field
+                ? (isalnum((unsigned char)c) != 0)
+                : (c >= 0x21 && c < 0x7f);
+        if (room_field) c = (char)toupper((unsigned char)c);
+        if (ok) dst[len++] = c;
+    }
+    dst[len] = '\0';
+}
+
+static void handle_online_mousedown(Gui *g)
+{
+    SDL_Rect url, time_rc, code, prim, sec, spec, back;
+    online_rects(g, &url, &time_rc, &code, &prim, &sec, &spec, &back);
+    SDL_Point p = g->mouse;
+
+    if (pt_in(&url, p.x, p.y)) { g->online_focus = 0; return; }
+    if (pt_in(&time_rc, p.x, p.y)) { g->online_focus = 1; online_cycle_time(g, 1); return; }
+    if (g->online_ui == 0) {
+        if (pt_in(&code, p.x, p.y)) { g->online_focus = 2; return; }
+        if (pt_in(&prim, p.x, p.y)) { g->online_focus = 3; online_primary(g); return; }
+        if (pt_in(&sec, p.x, p.y)) { g->online_focus = 4; online_secondary(g); return; }
+        if (pt_in(&spec, p.x, p.y)) { g->online_focus = 5; online_spectate_action(g); return; }
+        if (pt_in(&back, p.x, p.y)) { g->online_focus = 6; online_back(g); return; }
+    } else {
+        if (pt_in(&prim, p.x, p.y)) { g->online_focus = 2; online_primary(g); return; }
+        if (pt_in(&sec, p.x, p.y)) { g->online_focus = 3; online_secondary(g); return; }
+        if (pt_in(&back, p.x, p.y)) { g->online_focus = 4; online_back(g); return; }
+    }
+}
+
+static void online_status_text(const Gui *g, char *buf, size_t n)
+{
+    if (!g->online) { snprintf(buf, n, "Not connected"); return; }
+    switch (online_state(g->online)) {
+    case ONLINE_CONNECTING: snprintf(buf, n, "Connecting to %s ...", g->online_url); break;
+    case ONLINE_IDLE:
+        snprintf(buf, n, g->online_ui == 1 ? "Connected - ready to find a game"
+                                           : "Connected - create or join a room");
+        break;
+    case ONLINE_HOSTING:
+        snprintf(buf, n, "Room code: %s  (share it, waiting for opponent)",
+                 online_room_code(g->online));
+        break;
+    case ONLINE_QUEUED: snprintf(buf, n, "Searching for an opponent ..."); break;
+    case ONLINE_PLAYING: snprintf(buf, n, "Game starting ..."); break;
+    case ONLINE_CLOSED:
+        snprintf(buf, n, "Connection failed: %s", online_last_error(g->online));
+        break;
+    default: buf[0] = '\0'; break;
+    }
+
+    if (online_has_clocks(g->online) && online_state(g->online) != ONLINE_CLOSED) {
+        int w, b;
+        online_clocks(g->online, &w, &b);
+        char extra[48];
+        snprintf(extra, sizeof extra, "    W %d:%02d  B %d:%02d",
+                 w / 60000, (w / 1000) % 60, b / 60000, (b / 1000) % 60);
+        size_t len = strlen(buf);
+        if (len + strlen(extra) < n) strcat(buf, extra);
+    }
+}
+
+static void render_online(Gui *g, SDL_Renderer *ren)
+{
+    set_render_color(ren, 22, 26, 34);
+    SDL_RenderClear(ren);
+
+    render_text_centered(g, g->font_ui,
+                         g->online_ui == 1 ? "Online Matchmaking" : "Online Multiplayer",
+                         g->win_w / 2, 140, (SDL_Color){ 235, 225, 200, 255 });
+
+    SDL_Rect url, time_rc, code, prim, sec, spec, back;
+    online_rects(g, &url, &time_rc, &code, &prim, &sec, &spec, &back);
+
+    render_text(g, g->font_small, "Server", url.x, url.y - 20,
+                (SDL_Color){ 180, 180, 190, 255 });
+    draw_rect(ren, &url, 30, 30, 32, true);
+    draw_rect(ren, &url, g->online_focus == 0 ? 90 : 60,
+              g->online_focus == 0 ? 140 : 60, g->online_focus == 0 ? 200 : 70, false);
+    render_text(g, g->font_small, g->online_url, url.x + 8, url.y + 12,
+                (SDL_Color){ 225, 225, 230, 255 });
+
+    char time_label[64];
+    snprintf(time_label, sizeof time_label, "Time control: %s    (click / arrows)",
+             ONLINE_TIMES[g->online_time_idx].label);
+    draw_rect(ren, &time_rc, 30, 30, 32, true);
+    draw_rect(ren, &time_rc, g->online_focus == 1 ? 90 : 60,
+              g->online_focus == 1 ? 140 : 60, g->online_focus == 1 ? 200 : 70, false);
+    render_text(g, g->font_small, time_label, time_rc.x + 10, time_rc.y + 11,
+                (SDL_Color){ 220, 220, 225, 255 });
+
+    if (g->online_ui == 0) {
+        render_text(g, g->font_small, "Room code (to join)", code.x, code.y - 20,
+                    (SDL_Color){ 180, 180, 190, 255 });
+        draw_rect(ren, &code, 30, 30, 32, true);
+        draw_rect(ren, &code, g->online_focus == 2 ? 90 : 60,
+                  g->online_focus == 2 ? 140 : 60, g->online_focus == 2 ? 200 : 70, false);
+        render_text(g, g->font_ui, g->online_code_in[0] ? g->online_code_in : "-",
+                    code.x + 10, code.y + 8, (SDL_Color){ 235, 235, 235, 255 });
+    }
+
+    const char *pl = g->online_ui == 1 ? "Find opponent" : "Create room";
+    const char *sl = g->online_ui == 1 ? "Cancel" : "Join room";
+    draw_rect(ren, &prim, 55, 90, 60, true);
+    draw_rect(ren, &prim, 120, 120, 130, false);
+    render_text_centered(g, g->font_ui, pl, prim.x + prim.w / 2, prim.y + 10,
+                         (SDL_Color){ 235, 235, 235, 255 });
+    draw_rect(ren, &sec, 50, 55, 65, true);
+    draw_rect(ren, &sec, 120, 120, 130, false);
+    render_text_centered(g, g->font_ui, sl, sec.x + sec.w / 2, sec.y + 10,
+                         (SDL_Color){ 235, 235, 235, 255 });
+
+    if (g->online_ui == 0) {
+        draw_rect(ren, &spec, 50, 55, 65, true);
+        draw_rect(ren, &spec, g->online_focus == 5 ? 120 : 100,
+                  g->online_focus == 5 ? 120 : 100,
+                  g->online_focus == 5 ? 130 : 110, false);
+        render_text_centered(g, g->font_ui, "Spectate",
+                             spec.x + spec.w / 2, spec.y + 8,
+                             (SDL_Color){ 235, 235, 235, 255 });
+    }
+
+    draw_rect(ren, &back, 45, 45, 50, true);
+    draw_rect(ren, &back, 120, 120, 130, false);
+    render_text_centered(g, g->font_ui, "Back", back.x + back.w / 2, back.y + 8,
+                         (SDL_Color){ 235, 235, 235, 255 });
+
+    char status[192];
+    online_status_text(g, status, sizeof status);
+    render_text_centered(g, g->font_small, status, g->win_w / 2, 612,
+                         (SDL_Color){ 150, 210, 230, 255 });
+    if (g->menu_msg[0])
+        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 630,
+                             (SDL_Color){ 255, 170, 120, 255 });
+
+    render_text_centered(g, g->font_small,
+                         "Tab/Up/Down field    Enter choose    Esc back",
+                         g->win_w / 2, g->win_h - 80,
+                         (SDL_Color){ 110, 120, 130, 255 });
 }
 
 /* ---- appearance picker ---- */
@@ -2238,6 +2744,46 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         return;
     }
 
+    if (g->chat_open) {
+        if (k == SDLK_ESCAPE) { g->chat_open = false; g->chat_len = 0; }
+        else if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
+            if (g->chat_len > 0) g->chat_text[--g->chat_len] = '\0';
+        } else if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+            g->chat_text[g->chat_len] = '\0';
+            if (g->chat_len > 0 && g->online) online_send_chat(g->online, g->chat_text);
+            g->chat_open = false;
+            g->chat_len = 0;
+        }
+        return;
+    }
+
+    /* T opens the online chat line. */
+    if (g->mode == MODE_ONLINE && !ctrl && k == SDLK_t) {
+        g->chat_open = true;
+        g->chat_len = 0;
+        g->chat_text[0] = '\0';
+        san_close_box(g);
+        return;
+    }
+
+    if (g->mode == MODE_ONLINE && ctrl && k == SDLK_a) {
+        if (g->draw_offered && g->online) {
+            online_draw_accept(g->online);
+            g->draw_offered = false;
+        }
+        return;
+    }
+    if (g->mode == MODE_ONLINE && ctrl && k == SDLK_d) {
+        if (g->draw_offered && g->online) {
+            online_draw_decline(g->online);
+            g->draw_offered = false;
+        } else if (g->online && !online_spectating(g->online) && !g->online_over) {
+            online_draw_offer(g->online);
+            set_msg(g, "Draw offered", NULL);
+        }
+        return;
+    }
+
     if (k == SDLK_ESCAPE) {
         if (g->fen_active) { g->fen_active = false; fen_refresh(g); return; }
         if (g->san_open) { san_close_box(g); return; }
@@ -2248,13 +2794,20 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     }
 
     if (ctrl && k == SDLK_u) {
-        if (g->mode == MODE_LOCAL) set_msg(g, "Undo disabled in multiplayer", NULL);
+        if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE)
+            set_msg(g, "Undo disabled in multiplayer", NULL);
         else do_undo(g);
         return;
     }
     if (ctrl && k == SDLK_r) {
-        if (g->mode == MODE_LOCAL) set_msg(g, "Restart disabled in multiplayer", NULL);
-        else do_restart(g);
+        if (g->mode == MODE_ONLINE) {
+            if (g->online && g->online_over) online_rematch(g->online);
+            else set_msg(g, "Restart disabled online", NULL);
+        } else if (g->mode == MODE_LOCAL) {
+            set_msg(g, "Restart disabled in multiplayer", NULL);
+        } else {
+            do_restart(g);
+        }
         return;
     }
     if (ctrl && k == SDLK_b) { gui_cycle_board(g); return; }
@@ -2318,6 +2871,15 @@ static void handle_game_textinput(Gui *g, const SDL_TextInputEvent *te)
         return;
     }
 
+    if (g->chat_open) {
+        for (const char *p = te->text; *p; p++) {
+            if (g->chat_len >= (int)sizeof g->chat_text - 1) break;
+            if (*p >= 0x20 && *p < 0x7f) g->chat_text[g->chat_len++] = *p;
+        }
+        g->chat_text[g->chat_len] = '\0';
+        return;
+    }
+
     if (g->fen_active) {
         for (const char *p = te->text; *p; p++) {
             if (g->fen_len >= FEN_MAX - 1) break;
@@ -2374,13 +2936,22 @@ static void handle_game_mousedown(Gui *g)
     pgn_btn_rect(g, &pgn);
     menu_btn_rect(g, &menu);
     if (pt_in(&undo, p.x, p.y)) {
-        if (g->mode == MODE_LOCAL) set_msg(g, "Undo disabled in multiplayer", NULL);
+        if (g->mode == MODE_LOCAL || g->mode == MODE_ONLINE)
+            set_msg(g, "Undo disabled in multiplayer", NULL);
         else do_undo(g);
         return;
     }
     if (pt_in(&restart, p.x, p.y)) {
-        if (g->mode == MODE_LOCAL) set_msg(g, "Restart disabled in multiplayer", NULL);
-        else do_restart(g);
+        if (g->mode == MODE_ONLINE) {
+            if (g->online && !online_spectating(g->online)) {
+                if (g->online_over) online_rematch(g->online);
+                else                online_resign(g->online);
+            }
+        } else if (g->mode == MODE_LOCAL) {
+            set_msg(g, "Restart disabled in multiplayer", NULL);
+        } else {
+            do_restart(g);
+        }
         return;
     }
     if (pt_in(&styles, p.x, p.y)) { open_appearance(g, SCENE_GAME); return; }
@@ -2646,6 +3217,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             if (g->scene == SCENE_MENU) handle_menu_mousedown(g);
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_mousedown(g);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_mousedown(g);
+            else if (g->scene == SCENE_ONLINE) handle_online_mousedown(g);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_mousedown(g);
             else if (g->scene == SCENE_SETTINGS) handle_settings_mousedown(g);
             else handle_game_mousedown(g);
@@ -2700,6 +3272,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             if (g->scene == SCENE_MENU) handle_menu_keydown(g, &e->key);
             else if (g->scene == SCENE_SINGLE_SETUP) handle_setup_keydown(g, &e->key);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_keydown(g, &e->key);
+            else if (g->scene == SCENE_ONLINE) handle_online_keydown(g, &e->key);
             else if (g->scene == SCENE_APPEARANCE) handle_appearance_keydown(g, &e->key);
             else if (g->scene == SCENE_SETTINGS) handle_settings_keydown(g, &e->key);
             else handle_game_keydown(g, &e->key);
@@ -2707,6 +3280,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
         case SDL_TEXTINPUT:
             if (g->scene == SCENE_GAME) handle_game_textinput(g, &e->text);
             else if (g->scene == SCENE_HOSTJOIN) handle_hostjoin_textinput(g, &e->text);
+            else if (g->scene == SCENE_ONLINE) handle_online_textinput(g, &e->text);
             else if (g->scene == SCENE_SETTINGS) handle_engine_textinput(g, &e->text);
             return;
         default:
@@ -2746,7 +3320,7 @@ static void local_tick(Gui *g)
 
     char line[256];
     int r;
-    while ((r = net_poll(g->net, line, sizeof line)) == 1) {
+    while ((r = transport_poll(g->net, line, sizeof line)) == 1) {
         if (strncmp(line, "MOVE ", 5) == 0) {
             Move m;
             if (g->board.side != g->local_color &&
@@ -2763,7 +3337,7 @@ static void local_tick(Gui *g)
 
     if (r < 0) {
         set_msg(g, "Opponent disconnected", NULL);
-        net_close(g->net);
+        transport_close(g->net);
         g->net = NULL;
         go_to_menu(g);
         return;
@@ -2775,7 +3349,7 @@ static void local_tick(Gui *g)
         move_to_uci(g->history[g->net_sent_ply], uci);
         char msg[32];
         snprintf(msg, sizeof msg, "MOVE %s", uci);
-        net_send(g->net, msg);
+        transport_send(g->net, msg);
         g->net_sent_ply++;
     }
 }
@@ -2786,18 +3360,18 @@ static void hostjoin_tick(Gui *g)
 
     char line[256];
     int r;
-    while ((r = net_poll(g->net, line, sizeof line)) == 1) {
+    while ((r = transport_poll(g->net, line, sizeof line)) == 1) {
         /* ignore the peer's HELLO/FEN; sides are derived from host/join role */
     }
     if (r < 0) {
-        net_close(g->net);
+        transport_close(g->net);
         g->net = NULL;
         g->net_waiting = false;
         snprintf(g->menu_msg, sizeof g->menu_msg, "Connection closed");
         return;
     }
-    if (net_state(g->net) == NET_STATE_CONNECTED) {
-        Color side = (net_role(g->net) == NET_ROLE_HOST) ? WHITE : BLACK;
+    if (transport_state(g->net) == NET_STATE_CONNECTED) {
+        Color side = (transport_role(g->net) == NET_ROLE_HOST) ? WHITE : BLACK;
         enter_local_game(g, side);
     }
 }
@@ -2808,12 +3382,18 @@ void gui_tick(Gui *g, Uint32 now)
         hostjoin_tick(g);
         return;
     }
+    if (g->scene == SCENE_ONLINE) {
+        online_lobby_tick(g);
+        return;
+    }
     if (g->scene != SCENE_GAME) return;
 
     if (g->mode == MODE_SINGLE) {
         single_tick(g, now);
     } else if (g->mode == MODE_LOCAL) {
         local_tick(g);
+    } else if (g->mode == MODE_ONLINE) {
+        online_tick(g);
     } else if (g->eval_ai) {
         /* live analysis: drain info lines and refresh the evaluation */
         char uci[8];
@@ -3253,13 +3833,34 @@ static void render_status(Gui *g)
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 150, 210, 230, 255 });
     } else if (g->mode == MODE_LOCAL) {
-        bool ok = g->net && net_state(g->net) == NET_STATE_CONNECTED;
+        bool ok = g->net && transport_state(g->net) == NET_STATE_CONNECTED;
         char info[96];
         snprintf(info, sizeof info, "You: %s    %s",
                  g->local_color == WHITE ? "White" : "Black",
                  ok ? "opponent connected" : "opponent disconnected");
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 150, 210, 230, 255 });
+    } else if (g->mode == MODE_ONLINE) {
+        char info[160];
+        const char *opp = g->online ? online_opponent(g->online) : "Opponent";
+        bool spec = g->online && online_spectating(g->online);
+        const char *role = spec ? "Spectating"
+                                : (g->human_color == WHITE ? "You: White" : "You: Black");
+        if (g->online && online_has_clocks(g->online)) {
+            int w, b;
+            online_clocks(g->online, &w, &b);
+            snprintf(info, sizeof info, "%s  vs %s   W %d:%02d  B %d:%02d",
+                     role, spec ? online_room_code(g->online) : opp,
+                     w / 60000, (w / 1000) % 60, b / 60000, (b / 1000) % 60);
+        } else {
+            snprintf(info, sizeof info, "%s  vs %s",
+                     role, spec ? online_room_code(g->online) : opp);
+        }
+        render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
+                    (SDL_Color){ 150, 210, 230, 255 });
+        if (g->draw_offered)
+            render_text(g, g->font_small, "Draw offered: Ctrl+A accept, Ctrl+D decline",
+                        g->panel_x, g->board_y + 50, (SDL_Color){ 240, 200, 120, 255 });
     } else if (g->mode == MODE_ANALYSIS) {
         char info[96];
         if (!g->eval_ai)
@@ -3528,12 +4129,22 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     styles_btn_rect(g, &styles);
     pgn_btn_rect(g, &pgn);
     menu_btn_rect(g, &menu);
+    bool online_spec = g->mode == MODE_ONLINE && g->online &&
+                       online_spectating(g->online);
     render_text_centered_rect(g, ren, &undo, "Undo");
-    render_text_centered_rect(g, ren, &restart, "Restart");
+    const char *restart_label;
+    if (g->mode == MODE_ONLINE)
+        restart_label = online_spec ? "" : (g->online_over ? "Rematch" : "Resign");
+    else
+        restart_label = "Restart";
+    render_text_centered_rect(g, ren, &restart, restart_label);
     render_text_centered_rect(g, ren, &styles, "Styles");
     render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
-    render_text(g, g->font_tiny, "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip",
+    const char *legend = (g->mode == MODE_ONLINE)
+        ? "T chat  Ctrl+D draw  Ctrl+U undo  Ctrl+S save PGN  Ctrl+F flip"
+        : "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip";
+    render_text(g, g->font_tiny, legend,
                 g->panel_x, undo.y + 48, (SDL_Color){ 130, 130, 130, 255 });
 }
 
@@ -4247,6 +4858,27 @@ static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
                          (SDL_Color){ 150, 160, 175, 255 });
 }
 
+/* Online chat: recent lines above the HUD, and the entry line when active. */
+static void render_chat(Gui *g, SDL_Renderer *ren)
+{
+    if (g->mode != MODE_ONLINE) return;
+    int n = g->chat_log_n;
+    for (int i = 0; i < n; i++) {
+        render_text(g, g->font_small, g->chat_log[i], g->panel_x,
+                    g->win_h - 340 + i * 18, (SDL_Color){ 170, 190, 205, 255 });
+    }
+    if (!g->chat_open) return;
+
+    SDL_Rect ib;
+    input_rect(g, &ib);
+    draw_rect(ren, &ib, 30, 30, 32, true);
+    draw_rect(ren, &ib, 90, 140, 200, false);
+    char line[180];
+    snprintf(line, sizeof line, "Chat: %s", g->chat_text);
+    render_text(g, g->font_small, line, ib.x + 8, ib.y + 12,
+                (SDL_Color){ 235, 235, 235, 255 });
+}
+
 static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 {
     set_render_color(ren, 30, 30, 34);
@@ -4307,8 +4939,11 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     render_move_list(g);
     if (g->mode == MODE_ANALYSIS) render_fen_box(g, ren);
     render_hud(g);
-    if (g->san_open) render_input_box(g, ren);
-    else             render_san_hint(g);
+    render_chat(g, ren);
+    if (!g->chat_open) {
+        if (g->san_open) render_input_box(g, ren);
+        else             render_san_hint(g);
+    }
     render_buttons(g, ren);
 
     if (g->msg[0] && SDL_GetTicks() < g->msg_until) {
@@ -4402,6 +5037,8 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         render_setup(g, ren);
     else if (g->scene == SCENE_HOSTJOIN)
         render_hostjoin(g, ren);
+    else if (g->scene == SCENE_ONLINE)
+        render_online(g, ren);
     else if (g->scene == SCENE_APPEARANCE)
         render_appearance(g, ren);
     else if (g->scene == SCENE_SETTINGS)

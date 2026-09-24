@@ -504,7 +504,7 @@ int main(void)
 
     /* ---- appearance picker: renders thumbnails and applies choices ---- */
     g->scene = SCENE_MENU;
-    g->menu_index = 3;          /* the Appearance entry */
+    g->menu_index = 5;          /* the Appearance entry */
     SDL_Event ape = {0};
     ape.type = SDL_KEYDOWN;
     ape.key.keysym.sym = SDLK_RETURN;
@@ -718,6 +718,33 @@ int main(void)
             return 1;
         }
         g->config_dirty = false;
+    }
+
+    /* ---- online lobby scenes render (private room + matchmaking) ---- */
+    {
+        g->scene = SCENE_ONLINE;
+        g->online = NULL;           /* no live session; render the idle state */
+        g->online_ui = 0;
+        g->online_focus = 0;
+        snprintf(g->online_code_in, sizeof g->online_code_in, "ABCDEF");
+        gui_render(g, ren);
+        g->online_ui = 1;
+        gui_render(g, ren);
+        g->online_ui = 0;
+
+        /* typing edits the focused field only (focus 2 = room code) */
+        g->online_focus = 2;
+        SDL_Event te = {0};
+        te.type = SDL_TEXTINPUT;
+        te.text.text[0] = 'z'; te.text.text[1] = '\0';
+        g->online_code_in[0] = '\0';
+        gui_handle_event(g, &te);
+        if (g->online_code_in[0] != 'Z') {
+            fprintf(stderr, "online room code input not captured/uppercased\n");
+            return 1;
+        }
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
     }
 
     /* ---- input must invert the installed transform exactly ---- */
