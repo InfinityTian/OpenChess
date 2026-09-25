@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Good</title>
+  <defs>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2.2" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <circle cx="64" cy="64" r="48" fill="#95BB4A" filter="url(#shadow)"/>
+  <path d="M38 66 L56 84 L92 44" fill="none" stroke="#FFFFFF"
+        stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

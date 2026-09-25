@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Cross</title>
+  <defs>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2.2" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <circle cx="64" cy="64" r="48" fill="#FF7769" filter="url(#shadow)"/>
+      <path d="M45 45 L83 83 M83 45 L45 83"
+            stroke="#FFFFFF" stroke-width="10.5" stroke-linecap="square"/>
+    
+</svg>

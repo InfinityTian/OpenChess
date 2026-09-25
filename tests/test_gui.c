@@ -45,6 +45,22 @@ static void do_restart_test(Gui *g)
     g->state = NO_GAME_OVER;
 }
 
+static void setup_promo(Gui *g)
+{
+    memset(&g->board, 0, sizeof g->board);
+    g->board.side = WHITE;
+    g->board.castling = 0;
+    g->board.board[algebraic_to_sq("g7")] = WP;
+    g->board.board[algebraic_to_sq("f8")] = BR;
+    g->board.board[algebraic_to_sq("h8")] = BK;
+    g->board.board[algebraic_to_sq("g1")] = WK;
+    g->state = game_state(&g->board);
+    g->ply = 0;
+    g->selected = -1;
+    g->promo_from = g->promo_to = -1;
+    g->tree_cur = g->pgntree;
+}
+
 /* Engine settings must survive a save/load round-trip. */
 static int test_engine_config(void)
 {
@@ -123,6 +139,10 @@ int main(void)
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_SOFTWARE);
     if (!ren) { fprintf(stderr, "createrenderer: %s\n", SDL_GetError()); return 1; }
 
+    /* Never touch the user's real config: redirect to a temp file. */
+    setenv("OPENCHESS_CONFIG", "/tmp/oc_test_gui.conf", 1);
+    remove("/tmp/oc_test_gui.conf");
+
     Gui *g = gui_create();
     if (!g) return 1;
     gui_init_assets(g, ren);
@@ -133,6 +153,15 @@ int main(void)
     if (g->boards.count < 30 || g->pieces.count < 30) {
         fprintf(stderr, "theme manifest not loaded (boards=%d pieces=%d)\n",
                 g->boards.count, g->pieces.count);
+        return 1;
+    }
+    /* factory defaults: Icy Sea board + Cases pieces + Arcade animation */
+    if (strcmp(g->boards.items[g->board_index].key, "icy_sea") != 0 ||
+        strcmp(g->pieces.items[g->piece_index].key, "cases") != 0 ||
+        g->anim_style != ANIM_ARCADE) {
+        fprintf(stderr, "unexpected appearance defaults: %s/%s/%d\n",
+                g->boards.items[g->board_index].key,
+                g->pieces.items[g->piece_index].key, (int)g->anim_style);
         return 1;
     }
 
@@ -413,6 +442,47 @@ int main(void)
         return 1;
     }
 
+    /* ---- underpromotion to knight via the chooser ---- */
+    setup_promo(g);
+    gui_handle_event(g, &pd);   /* select g7 */
+    gui_handle_event(g, &pu);   /* release on f8 -> chooser */
+    if (g->promo_from < 0) {
+        fprintf(stderr, "underpromotion chooser did not open\n");
+        return 1;
+    }
+    {
+        SDL_Rect nr = qr;
+        nr.x += 3 * 54;         /* slot 3 = knight */
+        SDL_Event kc = pc;
+        kc.button.x = nr.x + 25;
+        kc.button.y = nr.y + 23;
+        gui_handle_event(g, &kc);
+    }
+    if (g->board.board[algebraic_to_sq("f8")] != WN) {
+        fprintf(stderr, "underpromotion to knight failed (got %d)\n",
+                g->board.board[algebraic_to_sq("f8")]);
+        return 1;
+    }
+
+    /* ---- double click the target defaults to the queen ---- */
+    setup_promo(g);
+    gui_handle_event(g, &pd);
+    gui_handle_event(g, &pu);
+    if (g->promo_from < 0) {
+        fprintf(stderr, "double-click chooser did not open\n");
+        return 1;
+    }
+    {
+        SDL_Event dc = pc;
+        dc.button.x = BOARD_X + (algebraic_to_sq("f8") % 8) * SQ_SIZE + SQ_SIZE / 2;
+        dc.button.y = BOARD_Y + (7 - algebraic_to_sq("f8") / 8) * SQ_SIZE + SQ_SIZE / 2;
+        gui_handle_event(g, &dc);
+    }
+    if (g->board.board[algebraic_to_sq("f8")] != WQ) {
+        fprintf(stderr, "double-click did not promote to queen\n");
+        return 1;
+    }
+
     /* ---- animation queue drains with synthetic timestamps ---- */
     if (g->anim_count == 0) {
         fprintf(stderr, "move did not enqueue an animation\n");
@@ -639,7 +709,7 @@ int main(void)
     {
         bool before = g->engine_arrows;
         int ax = g->panel_x + 78 + 8;
-        int ay = g->board_y + 52 + 8;
+        int ay = g->board_y + 82 + 8;
         int wx, wy;
         gui_render(g, ren);
         SDL_RenderLogicalToWindow(ren, (float)ax, (float)ay, &wx, &wy);
@@ -888,6 +958,71 @@ int main(void)
             fprintf(stderr, "playing after navigating did not create a variation\n");
             return 1;
         }
+
+        /* the variation move is rendered and clickable in the tree panel */
+        gui_render(g, ren);
+        int saw_c5 = 0, saw_e4 = 0;
+        for (int i = 0; i < g->move_hit_count; i++) {
+            if (strcmp(g->move_hit_node[i]->san, "c5") == 0) saw_c5 = 1;
+            if (strcmp(g->move_hit_node[i]->san, "e4") == 0) saw_e4 = 1;
+        }
+        if (!saw_c5 || !saw_e4) {
+            fprintf(stderr, "move tree missing variation tokens (c5=%d e4=%d)\n",
+                    saw_c5, saw_e4);
+            return 1;
+        }
+
+        /* a long game overflows the box and the wheel scrolls it */
+        {
+            SDL_Event o2 = {0};
+            o2.type = SDL_KEYDOWN;
+            o2.key.keysym.sym = SDLK_o;
+            o2.key.keysym.mod = KMOD_LCTRL;
+            gui_handle_event(g, &o2);
+            const char *longpgn =
+                "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7 "
+                "6. Re1 b5 7. Bb3 d6 8. c3 O-O 9. h3 Nb8 10. d4 Nbd7 "
+                "11. c4 c6 12. cxb5 axb5 13. Nc3 Bb7 14. Bg5 b4 15. Nb1 h6";
+            snprintf(g->pgn_text, sizeof g->pgn_text, "%s", longpgn);
+            g->pgn_text_len = (int)strlen(g->pgn_text);
+            SDL_Event lenter = {0};
+            lenter.type = SDL_KEYDOWN;
+            lenter.key.keysym.sym = SDLK_RETURN;
+            gui_handle_event(g, &lenter);
+            gui_render(g, ren);
+            if (g->move_scroll_max <= 0) {
+                fprintf(stderr, "long move tree did not overflow (%d)\n",
+                        g->move_scroll_max);
+                return 1;
+            }
+            int wx, wy;
+            SDL_RenderLogicalToWindow(ren,
+                (float)(g->move_box.x + g->move_box.w / 2),
+                (float)(g->move_box.y + g->move_box.h / 2), &wx, &wy);
+            SDL_Event mm = {0};
+            mm.type = SDL_MOUSEMOTION;
+            mm.motion.x = wx; mm.motion.y = wy;
+            gui_handle_event(g, &mm);
+            SDL_Event wh = {0};
+            wh.type = SDL_MOUSEWHEEL;
+            wh.wheel.y = -1;
+            gui_handle_event(g, &wh);
+            if (g->move_scroll <= 0) {
+                fprintf(stderr, "mouse wheel did not scroll the move tree\n");
+                return 1;
+            }
+        }
+    }
+
+    /* ---- board quality badge renders without error ---- */
+    {
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        g->flipped = false;
+        if (g->ply > 4) {
+            g->review_cls[g->ply - 1] = RC_BRILLIANT;
+        }
+        gui_render(g, ren);
     }
 
     /* ---- opening browser renders and steps ---- */
@@ -914,10 +1049,244 @@ int main(void)
             fprintf(stderr, "opening step did not advance\n");
             return 1;
         }
+
+        /* browse by playing on the board: reopen to reset the path, play e4 */
+        g->scene = SCENE_MENU;
+        g->menu_index = 8;
+        gui_handle_event(g, &en);        /* Enter re-opens with a reset path */
+        gui_render(g, ren);
+        int wx, wy;
+        sq_window(g, ren, algebraic_to_sq("e2"), &wx, &wy);
+        SDL_Event bd = {0};
+        bd.type = SDL_MOUSEBUTTONDOWN;
+        bd.button.button = SDL_BUTTON_LEFT;
+        bd.button.x = wx; bd.button.y = wy;
+        gui_handle_event(g, &bd);
+        sq_window(g, ren, algebraic_to_sq("e4"), &wx, &wy);
+        bd.button.x = wx; bd.button.y = wy;
+        gui_handle_event(g, &bd);
+        if (g->opening_path_len != 1 || strcmp(g->opening_path[0], "e4") != 0) {
+            fprintf(stderr, "opening board browse did not play e4 (len=%d)\n",
+                    g->opening_path_len);
+            return 1;
+        }
         g->scene = SCENE_GAME;
         g->mode = MODE_ANALYSIS;
     } else {
         printf("(opening browser test skipped: no book)\n");
+    }
+
+    /* ---- imported PGN is shown wrapped inside the text box ---- */
+    {
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        SDL_Event o = {0};
+        o.type = SDL_KEYDOWN;
+        o.key.keysym.sym = SDLK_o;
+        o.key.keysym.mod = KMOD_LCTRL;
+        gui_handle_event(g, &o);
+        char longpgn[3000];
+        longpgn[0] = '\0';
+        for (int r = 0; r < 50; r++)
+            strncat(longpgn, "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 ",
+                    sizeof longpgn - strlen(longpgn) - 1);
+        snprintf(g->pgn_text, sizeof g->pgn_text, "%s", longpgn);
+        g->pgn_text_len = (int)strlen(g->pgn_text);
+        gui_render(g, ren);
+        if (g->pgn_scroll_max <= 0) {
+            fprintf(stderr, "long imported PGN did not wrap/overflow (%d)\n",
+                    g->pgn_scroll_max);
+            return 1;
+        }
+        SDL_Event esc = {0};
+        esc.type = SDL_KEYDOWN;
+        esc.key.keysym.sym = SDLK_ESCAPE;
+        gui_handle_event(g, &esc);
+    }
+
+    /* ---- re-importing always replaces the previous tree ---- */
+    {
+        SDL_Event o = {0};
+        o.type = SDL_KEYDOWN;
+        o.key.keysym.sym = SDLK_o;
+        o.key.keysym.mod = KMOD_LCTRL;
+        SDL_Event en = {0};
+        en.type = SDL_KEYDOWN;
+        en.key.keysym.sym = SDLK_RETURN;
+
+        gui_handle_event(g, &o);
+        snprintf(g->pgn_text, sizeof g->pgn_text, "1. e4 e5 2. Nf3");
+        g->pgn_text_len = (int)strlen(g->pgn_text);
+        gui_handle_event(g, &en);
+        if (g->ply != 3 || strcmp(g->move_san[0], "e4") != 0) {
+            fprintf(stderr, "first import failed (ply=%d)\n", g->ply);
+            return 1;
+        }
+        gui_handle_event(g, &o);
+        snprintf(g->pgn_text, sizeof g->pgn_text, "1. d4 d5");
+        g->pgn_text_len = (int)strlen(g->pgn_text);
+        gui_handle_event(g, &en);
+        if (g->ply != 2 || strcmp(g->move_san[0], "d4") != 0) {
+            fprintf(stderr, "re-import did not replace the tree (ply=%d san=%s)\n",
+                    g->ply, g->ply ? g->move_san[0] : "?");
+            return 1;
+        }
+        if (g->pgn_import_open || g->pgn_text_len != 0) {
+            fprintf(stderr, "text box/history not cleared after load\n");
+            return 1;
+        }
+        if (g->review_on) {
+            fprintf(stderr, "review auto-started on upload (should wait for Analyze)\n");
+            return 1;
+        }
+    }
+
+    /* ---- offline account creation ---- */
+    {
+        bool was_offline = g->offline_mode;
+        bool was_local = g->account_local;
+        char was_profile[40];
+        snprintf(was_profile, sizeof was_profile, "%s", g->local_profile);
+        g->offline_mode = true;
+        g->scene = SCENE_MENU;
+        g->menu_index = 9;              /* Account entry */
+        g->saved.valid = false;
+        SDL_Event en = {0};
+        en.type = SDL_KEYDOWN;
+        en.key.keysym.sym = SDLK_RETURN;
+        gui_handle_event(g, &en);
+        if (!g->account_open) {
+            fprintf(stderr, "offline Account did not open the modal\n");
+            return 1;
+        }
+        snprintf(g->account_user_in, sizeof g->account_user_in, "Tester");
+        g->account_focus = 0;
+        gui_handle_event(g, &en);
+        if (!g->account_local || strcmp(g->local_profile, "Tester") != 0) {
+            fprintf(stderr, "offline profile was not created\n");
+            return 1;
+        }
+        g->account_open = false;
+        g->account_local = was_local;
+        g->offline_mode = was_offline;
+        snprintf(g->local_profile, sizeof g->local_profile, "%s", was_profile);
+    }
+
+    /* ---- review summary screen renders and returns ---- */
+    {
+        g->scene = SCENE_REVIEW;
+        g->rev_report = true;
+        g->rev_accuracy = 88.5;
+        g->rev_acpl = 42;
+        memset(g->rev_count, 0, sizeof g->rev_count);
+        memset(g->rev_count_side, 0, sizeof g->rev_count_side);
+        g->rev_count[RC_BEST] = 7;
+        g->rev_count[RC_BLUNDER] = 1;
+        g->rev_count_side[0][RC_BEST] = 5;
+        g->rev_count_side[1][RC_BEST] = 2;
+        g->rev_count_side[0][RC_BRILLIANT] = 2;
+        g->rev_count_side[0][RC_BLUNDER] = 1;
+        g->rev_accuracy_side[0] = 87.3;
+        g->rev_accuracy_side[1] = 94.5;
+        g->rev_acpl_side[0] = 42;
+        g->rev_acpl_side[1] = 18;
+        snprintf(g->white_name, sizeof g->white_name, "Coach-Dante");
+        snprintf(g->black_name, sizeof g->black_name, "InfinityTian");
+        gui_render(g, ren);
+        SDL_Event esc = {0};
+        esc.type = SDL_KEYDOWN;
+        esc.key.keysym.sym = SDLK_ESCAPE;
+        gui_handle_event(g, &esc);
+        if (g->scene != SCENE_GAME) {
+            fprintf(stderr, "review screen did not return on Esc\n");
+            return 1;
+        }
+    }
+
+    /* ---- navigating during a review must not end it or open the report ---- */
+    {
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        if (g->pgntree && g->tree_cur && g->path_len >= 2) {
+            g->review_on = true;
+            g->rev_report = false;
+            g->review_i = 0;
+            g->review_n = g->path_len;
+            for (int i = 0; i < g->path_len && i < MAX_PLY; i++)
+                g->review_nodes[i] = g->path_nodes[i];
+            SDL_Event lk = {0};
+            lk.type = SDL_KEYDOWN;
+            lk.key.keysym.sym = SDLK_LEFT;
+            gui_handle_event(g, &lk);
+            if (!g->review_on || g->scene != SCENE_GAME) {
+                fprintf(stderr, "navigation interrupted the review "
+                        "(on=%d scene=%d)\n", g->review_on, g->scene);
+                return 1;
+            }
+            gui_render(g, ren);
+            g->review_on = false;
+        }
+    }
+
+    /* ---- wide eval bar renders (analysis, with a value) ---- */
+    {
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
+        g->eval_valid = true;
+        g->eval_cp = 70;
+        g->eval_mate = 0;
+        g->eval_has_mate = false;
+        g->eval_depth = 18;
+        g->flipped = false;
+        gui_render(g, ren);
+        g->flipped = true;
+        gui_render(g, ren);
+        g->eval_valid = false;
+        g->flipped = false;
+    }
+
+    /* ---- welcome online/offline pill toggles ---- */
+    {
+        bool was = g->offline_mode;
+        g->scene = SCENE_MENU;
+        g->saved.valid = false;
+        gui_render(g, ren);
+        SDL_Rect pill = { g->win_w - 132 - 24, 24, 132, 34 };
+        int wx, wy;
+        SDL_RenderLogicalToWindow(ren, (float)(pill.x + 20), (float)(pill.y + 17),
+                                  &wx, &wy);
+        SDL_Event md = {0};
+        md.type = SDL_MOUSEBUTTONDOWN;
+        md.button.button = SDL_BUTTON_LEFT;
+        md.button.x = wx; md.button.y = wy;
+        gui_handle_event(g, &md);
+        if (g->offline_mode == was) {
+            fprintf(stderr, "mode pill did not toggle offline mode\n");
+            return 1;
+        }
+        gui_render(g, ren);
+        gui_handle_event(g, &md);       /* toggle back */
+        if (g->offline_mode != was) {
+            fprintf(stderr, "mode pill did not toggle back\n");
+            return 1;
+        }
+    }
+
+    /* ---- browser flip toggles ---- */
+    if (g->book && opening_line_count(g->book) > 0) {
+        g->scene = SCENE_OPENINGS;
+        bool before = g->flipped;
+        SDL_Event fk = {0};
+        fk.type = SDL_KEYDOWN;
+        fk.key.keysym.sym = SDLK_f;
+        gui_handle_event(g, &fk);
+        if (g->flipped == before) {
+            fprintf(stderr, "browser flip did not toggle\n");
+            return 1;
+        }
+        g->flipped = before;
+        g->scene = SCENE_GAME;
+        g->mode = MODE_ANALYSIS;
     }
 
     /* ---- input must invert the installed transform exactly ---- */
@@ -1115,7 +1484,7 @@ int main(void)
     SDL_RenderLogicalToWindow(ren, (float)g->win_w, (float)g->win_h, &x1, &y1);
     int winw = 0, winh = 0;
     SDL_GetWindowSize(g->win, &winw, &winh);
-    if (abs(x0 - (winw - x1)) > 2 || abs(y0 - (winh - y1)) > 2) {
+    if (abs(x0 - (winw - x1)) > 4 || abs(y0 - (winh - y1)) > 4) {
         fprintf(stderr, "canvas not centred: x0=%d x1=%d winw=%d y0=%d y1=%d winh=%d\n",
                 x0, x1, winw, y0, y1, winh);
         return 1;

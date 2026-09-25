@@ -4,6 +4,101 @@ All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Vector move-quality badges.** The badges are SVG-shaped (from the provided
+  `chess_badges_svg` set plus Best/Excellent/Good) and loaded through SDL_image's
+  SVG support, so they stay crisp at any size. The glyph outlines are generated
+  with `scripts/gen_badge_glyphs.py` (nanosvg ignores `<text>`, which previously
+  dropped `?!`, `??`, `?`, `!`, `!!`). Applied to the board, move list, coach line
+  and review report. Excellent now uses a thumbs-up and Good a check.
+- **Game report screen.** After a review a dedicated report shows **White vs
+  Black** columns: player names, per-side **accuracy** and **average centipawn
+  loss**, a per-class table (`count | badge | count`), and a Game Rating row.
+  Open it with **V** or the **Report** button once a review exists.
+- **Coach lines.** The analysis panel shows the **last move and its grade**
+  (e.g. `Nd7 is best`, `Bd2 is a mistake`) above the engine's current best move.
+- **Position-based opening explorer.** The Openings browser matches the **board
+  position**, so different move orders that transpose count as the same opening.
+  You can **play moves on the board** to walk the book, **flip** with **F**, and
+  moves are animated.
+- **Opening code.** Openings are shown as `ECO · Name` (e.g.
+  `A00 · Amar Opening`) in Analysis and the browser.
+- **Online/Offline switch.** A clickable pill on the welcome screen (and
+  Settings → Gameplay → Mode) toggles offline mode, which disables the online
+  menu entries and lets you create a **local profile** (name + ratings) from the
+  Account screen without a server.
+- The evaluation bar is **wider** with the numeric score drawn inside it, and it
+  flips with the board.
+- **Arcade animation rework.** Moves slide straight (no z-hop or magnify) with a
+  tapered **comet trail** — blue for White, red for Black. A **check** shows a
+  white corner-bracket halo around the king, and a **capture** shows a red ring
+  plus a shrink/fade burst. Dragging hangs the piece below the cursor with a
+  gentle size pulse and drops it with a fast slide; arrow-key tree navigation is
+  animated (forward and reverse).
+- Chess.com-style move indicators: a soft dot for quiet targets, a thick red
+  ring for captures, and a radial glow behind the selected piece.
+- The app icon has rounded corners (`scripts/round_icon.py`).
+
+### Changed
+- Importing a PGN now always **clears the previous analysis tree/board and the
+  text box** before loading (no more merging into the old tree), and the
+  uploaded PGN is shown **word-wrapped** in the import box. Review **no longer
+  starts automatically** on upload — click **Analyze** / press **V**.
+- The arcade **trail** is now a **thin, uniform-width** band with a fade and a
+  **dynamic length** (grows from the start, holds about three squares, shrinks to
+  nothing); blue for White, red for Black.
+- The **capture indicator** is a true **ring** (no filled centre) with a
+  **subtle glow**; the selection glow is likewise toned down.
+- The factory appearance is **Icy Sea board + Cases pieces + Arcade animation**.
+- The **check animation** now shows a near-opaque light mask, an expanding inner
+  rectangle and corner brackets growing from the king to the square edges, then
+  fading (matched to `check.mov`).
+- **Review is decoupled from navigation**: clicking/arrowing through moves no
+  longer interrupts a running review, and it no longer auto-opens the report.
+  The button reads **Analyze** while reviewing and **Report** only when done.
+- **Brilliant** is now checked before **Great**, and a sacrifice is recognised
+  when the destination can be won (a cheaper attacker or net material loss), so
+  moves like `21...Ng4` and `31...Rxf5` classify as `!!`.
+- The welcome title reads **OpenChess**.
+
+### Fixed
+- Dragging a piece now keeps it centred on the cursor (no downward bias) with a
+  clearer size pulse, plus a soft blue **halo** and a cyan highlight on the
+  square under the cursor.
+- The capture indicator is now a **high-resolution, anti-aliased ring** (built
+  once into a texture) instead of a low-res raster ring.
+- The GUI test suite no longer writes the user's real config
+  (`OPENCHESS_CONFIG` is redirected to a temp file), which had been corrupting
+  the saved board/piece selection; the default stays **Icy Sea + Cases + Arcade**.
+
+### Added (earlier in this release)
+- **Board move-quality badges.** In Analysis the played move's destination square
+  is tinted and a colored circle badge is drawn on it: green star (best), blue
+  `!` (great), teal `!!` (brilliant), amber `?!`, orange `?`, red `??`/`X`, and
+  brown book.
+- **Chess.com-style move tree panel.** The move list is now a scrollable table
+  (move number, White, Black) with badges to the left of each move and variations
+  inline on indented lines with a guide bar (e.g. `1. e4 e5 ( 1...c5 )`). The
+  current move is highlighted and the panel auto-scrolls to follow play; the
+  mouse wheel and click-drag scroll it.
+- **Engine panel restyle.** A coach line shows the score chip plus
+  `<best move> is best` (with a star) and the search depth; engine lines use
+  score chips, and the opening name is shown for the current position.
+- The vertical evaluation bar shows the numeric score and now flips with the
+  board.
+
+### Changed
+- `!` is reserved for **Great** moves; **Best** no longer shows `"!"` (it uses a
+  green star badge on the board instead).
+- **Brilliant (`!!`)** now requires a genuine sacrifice: material is given up and
+  the piece can actually be captured on its destination square, and the position
+  stays good.
+- **Promotion** shows the Q/R/B/N chooser on both drag and click moves, with the
+  queen marked as the default; **double-clicking** the target square promotes to
+  a queen directly.
+
 ## [2.0.0] - 2026-09-24
 
 ### Added

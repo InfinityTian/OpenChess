@@ -25,6 +25,16 @@ downloaded from
 (see `scripts/import_sounds.sh`). The sounds are the property of Chess.com and are
 bundled here for personal and educational use only.
 
+### Move-quality badges
+
+The badges under `assets/badges/` are derived from the `chess_badges_svg` set
+provided for this project (book, `??`, `?`, `?!`, `!?`, `!`, `!!`, X); the Best,
+Excellent and Good badges were authored to match the same style. The `?` and `!`
+glyph outlines were generated from **Arial Bold** with
+`scripts/gen_badge_glyphs.py` (fontTools) so they render under nanosvg, which
+ignores SVG `<text>`. They are bundled for use in the Analysis board, move list
+and game report.
+
 ### Openings data
 
 `assets/openings.tsv` is derived from the **lichess-org/chess-openings** dataset
@@ -67,6 +77,12 @@ Source code is licensed under the MIT License — see [`LICENSE`](LICENSE).
 `https://images.chesscomfiles.com/chess-themes/sounds/_MP3_/default.zip`
 （见 `scripts/import_sounds.sh`）。音效版权归 Chess.com 所有，此处仅为个人学习
 与教育用途打包。
+
+### 走法质量徽章
+
+`assets/badges/` 下的徽章来自为本项目提供的 `chess_badges_svg` 素材集（book、
+`??`、`?`、`?!`、`!?`、`!`、`!!`、X）；Best、Excellent、Good 三个徽章为匹配同一
+风格自行绘制。用于分析棋盘、着法列表与对局报告。
 
 ### 开局数据
 

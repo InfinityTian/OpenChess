@@ -1,5 +1,6 @@
 #include "review.h"
 #include <math.h>
+#include <stddef.h>
 
 const char *review_glyph(ReviewClass c)
 {
@@ -8,7 +9,7 @@ const char *review_glyph(ReviewClass c)
         case RC_FORCED:     return "=";
         case RC_BRILLIANT:  return "!!";
         case RC_GREAT:      return "!";
-        case RC_BEST:       return "!";
+        case RC_BEST:       return "";
         case RC_EXCELLENT:  return "";
         case RC_GOOD:       return "";
         case RC_INACCURACY: return "?!";
@@ -17,6 +18,14 @@ const char *review_glyph(ReviewClass c)
         case RC_MISS:       return "X";
         default:            return "";
     }
+}
+
+const char *review_badge_glyph(ReviewClass c)
+{
+    if (c == RC_BEST) return "\xE2\x98\x85";   /* U+2605 BLACK STAR */
+    if (c == RC_BOOK) return "B";
+    const char *s = review_glyph(c);
+    return *s ? s : NULL;
 }
 
 const char *review_name(ReviewClass c)
@@ -44,6 +53,14 @@ double review_win_pct(int cp)
     if (w < 0.0) w = 0.0;
     if (w > 100.0) w = 100.0;
     return w;
+}
+
+double review_move_accuracy(double win_before, double win_after)
+{
+    double acc = 103.1668 * exp(-0.04354 * (win_before - win_after)) - 3.1669;
+    if (acc < 0.0) acc = 0.0;
+    if (acc > 100.0) acc = 100.0;
+    return acc;
 }
 
 static double win_before(int cp, bool mate)
@@ -74,14 +91,14 @@ ReviewClass review_classify(int eval_before, bool mate_before,
     /* Best move? (small loss) */
     bool best = (loss <= 1.0);
 
+    /* Brilliant: a sound sacrifice that is the best move. */
+    if (best && sacrifice && wa >= 45.0) return RC_BRILLIANT;
+
     /* Great: the only move that keeps the evaluation. */
     if (best && !mate_before) {
         double w2 = win_after(second_best, second_mate);
         if (wb - w2 >= 15.0 && wb >= 45.0) return RC_GREAT;
     }
-
-    /* Brilliant: a sound sacrifice that is still best/good. */
-    if (best && sacrifice && wa >= 45.0) return RC_BRILLIANT;
 
     /* Miss: a winning chance was available but not taken. */
     if (!best) {

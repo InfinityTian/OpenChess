@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Best</title>
+  <defs>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2.2" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+  <circle cx="64" cy="64" r="48" fill="#81B64C" filter="url(#shadow)"/>
+  <path fill="#FFFFFF" d="M64 34 L71.05 54.29 L92.53 54.73 L75.41 67.71 L81.63 88.27 L64 76 L46.37 88.27 L52.59 67.71 L35.47 54.73 L56.95 54.29 Z"/>
+</svg>

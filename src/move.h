@@ -39,6 +39,12 @@ int    find_king(const Board *b, Color side);
 void   make_move_plumb(Board *b, Move m);       /* apply without legality check */
 bool   square_attacked(const Board *b, int sq, Color by_side);
 
+/* Centipawn value of a piece (0 for EMPTY). */
+int    piece_value(Piece p);
+
+/* Value of the cheapest `by_side` piece attacking `sq` (100000 if none). */
+int    min_attacker_value(const Board *b, int sq, Color by_side);
+
 /* Resolve a UCI string ("e2e4", "e7e8q") against the legal moves of `b`.
  * Writes the matching Move to *out; false if there is no such legal move. */
 bool   uci_to_move(const Board *b, const char *uci, Move *out);

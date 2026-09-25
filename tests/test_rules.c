@@ -165,6 +165,24 @@ static void test_promotion()
     printf("default promotion to Q  ok\n");
 }
 
+static void test_attacker_value()
+{
+    Board b;
+    memset(&b, 0, sizeof b);
+    b.side = WHITE;
+    b.board[algebraic_to_sq("g1")] = WK;
+    b.board[algebraic_to_sq("g8")] = BK;
+    b.board[algebraic_to_sq("f5")] = WR;   /* rook on f5 */
+    b.board[algebraic_to_sq("g6")] = BP;   /* pawn attacks f5 */
+    CHECK(square_attacked(&b, algebraic_to_sq("f5"), BLACK));
+    CHECK(min_attacker_value(&b, algebraic_to_sq("f5"), BLACK) == 100);
+    CHECK(piece_value(WR) == 500);
+    CHECK(piece_value(WP) == 100);
+    CHECK(piece_value(EMPTY) == 0);
+    CHECK(min_attacker_value(&b, algebraic_to_sq("d4"), BLACK) == 100000);
+    printf("attacker value  ok\n");
+}
+
 static void test_illegal_self_check()
 {
     Board b;
@@ -231,6 +249,7 @@ int main(void)
     test_en_passant();
     test_castling();
     test_promotion();
+    test_attacker_value();
     test_illegal_self_check();
     test_san_roundtrip();
     test_move_to_san_ascii();

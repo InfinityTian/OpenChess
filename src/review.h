@@ -26,8 +26,16 @@ typedef enum {
 const char *review_glyph(ReviewClass c);   /* "!!", "!", "?!", "?", "??", "X", ... */
 const char *review_name(ReviewClass c);    /* "Brilliant", "Blunder", ... */
 
+/* Board badge glyph: like review_glyph but "best" shows a star instead of
+ * nothing. Returns NULL when the class has no badge. */
+const char *review_badge_glyph(ReviewClass c);
+
 /* Win percentage (0..100) for a side-to-move centipawn score. */
 double review_win_pct(int cp);
+
+/* Per-move accuracy (0..100) from the win% before/after the move (mover's
+ * point of view), using the Lichess formula. */
+double review_move_accuracy(double win_before, double win_after);
 
 /*
  * Classify a move. `eval_before`/`second_best` are the best and second-best

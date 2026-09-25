@@ -19,11 +19,12 @@
 /* Default layout (also used by main.c and the tests). The live values are the
  * Gui fields board_x/board_y/sq/panel_x/win_w/win_h, which change on resize. */
 #define SQ_SIZE     88
-#define BOARD_X     16
+#define EVAL_BAR_W  46
+#define BOARD_X     (EVAL_BAR_W + 20)
 #define BOARD_Y     28
 #define PANEL_X     (BOARD_X + 8 * SQ_SIZE + 24)
 #define PANEL_W     436
-#define WIN_W       1180
+#define WIN_W       (PANEL_X + PANEL_W)
 #define WIN_H       760
 
 #define MIN_SQ      44
@@ -66,6 +67,7 @@ typedef enum {
     SCENE_OPENINGS,       /* opening book browser */
     SCENE_APPEARANCE,     /* board/piece/animation picker */
     SCENE_SETTINGS,       /* settings: engine + gameplay + audio/video */
+    SCENE_REVIEW,         /* post-game review summary report */
     SCENE_GAME,
 } Scene;
 
@@ -116,6 +118,8 @@ typedef struct {
     Uint32 start;
     Uint32 dur;
     bool   started;
+    bool   fast;            /* drag drop: short slide */
+    bool   reverse;         /* used when stepping back through the game */
 } AnimStep;
 
 typedef struct {
@@ -157,6 +161,8 @@ typedef struct {
     int    eval_depth;
     bool   eval_has_mate;
     bool   eval_valid;
+    char   eval_best_uci[8];    /* engine's best move for the current position */
+    bool   move_was_best[MAX_PLY]; /* last move matched the pre-move engine best */
 
     /* engine analysis settings (persisted) */
     int    eng_multipv;     /* 0 = engine off, 1..AI_MAX_LINES */
@@ -192,6 +198,15 @@ typedef struct {
     char   opening_name[96];
     char   opening_moves[256];
     int    opening_nmoves;
+    /* opening explorer: moves played on the board */
+    char   opening_path[64][8];
+    int    opening_path_len;
+    /* cached recognition of the current analysis path */
+    char   opening_eco_cur[8];
+    char   opening_name_cur[96];
+    bool   opening_cur_valid;
+    int    opening_cur_ply;
+    MoveNode *opening_cur_node;
 
     /* local multiplayer */
     Transport *net;
@@ -228,6 +243,10 @@ typedef struct {
     int    account_focus;       /* 0 user, 1 pass */
     char   account_user_in[32];
     char   account_pass_in[32];
+    bool   offline_mode;        /* online services disabled */
+    bool   account_local;       /* a local (offline) profile is active */
+    char   local_profile[40];   /* local profile display name */
+    int    local_rating;        /* local (offline) rating */
 
     /* puzzles */
     Puzzles *puzzles;           /* loaded puzzle subset, or NULL */
@@ -255,10 +274,28 @@ typedef struct {
     int    review_i;            /* ply currently being reviewed */
     int    review_stage;        /* 0 = evaluate before, 1 = evaluate after */
     int    review_cls[MAX_PLY];
+    int    review_cpl[MAX_PLY];     /* centipawn loss per move */
+    double review_acc[MAX_PLY];     /* per-move accuracy 0..100 */
     int    rb_cp, rb_mate;  bool rb_hm;   /* best eval before the move */
     int    r2_cp, r2_mate;  bool r2_hm;   /* second-best eval before */
     int    ra_cp, ra_mate;  bool ra_hm;   /* eval after the move (mover view) */
     bool   r_issued;            /* engine search issued for the current stage */
+
+    /* review target snapshot (so navigating does not interrupt the review) */
+    MoveNode *review_nodes[MAX_PLY];
+    int    review_n;
+
+    /* review report summary */
+    bool   rev_report;          /* a completed report is available */
+    double rev_accuracy;        /* whole-game accuracy 0..100 */
+    int    rev_acpl;            /* average centipawn loss */
+    int    rev_count[12];       /* per ReviewClass counts */
+    int    rev_moves;           /* moves counted */
+    /* per side: [0]=White, [1]=Black */
+    int    rev_count_side[2][12];
+    double rev_accuracy_side[2];
+    int    rev_acpl_side[2];
+    int    rev_moves_side[2];
 
     /* PGN import + analysis move tree */
     MoveNode   *pgntree;
@@ -268,11 +305,23 @@ typedef struct {
     SDL_Rect    move_hit_rect[MAX_PLY + 64];
     MoveNode   *move_hit_node[MAX_PLY + 64];
     int         move_hit_count;
+
+    /* scrollable move-tree panel */
+    int         move_scroll;        /* pixels scrolled from the top */
+    int         move_scroll_max;    /* clamp for move_scroll */
+    SDL_Rect    move_box;           /* last computed viewport */
+    bool        move_drag;          /* dragging the scrollbar/content */
+    int         move_drag_y0;
+    int         move_drag_scroll0;
+    bool        move_follow;        /* auto-scroll to tree_cur */
+    MoveNode   *move_last_cur;
     PgnHeaders  pgn_hdr;
     bool   pgn_import_open;
     char   pgn_text[4096];
     int    pgn_text_len;
     int    pgn_focus;           /* 0 text, 1 load, 2 cancel */
+    int    pgn_scroll;          /* import text box scroll (pixels) */
+    int    pgn_scroll_max;      /* clamp for pgn_scroll */
 
     SavedGame saved;            /* last game, resumable from the menu */
     InputBox input;
@@ -285,6 +334,7 @@ typedef struct {
 
     /* promotion chooser state */
     int    promo_from, promo_to;/* -1 when inactive */
+    Uint32 promo_open_ms;       /* for double-click = queen */
     char   msg[160];
     Uint32 msg_until;
 
@@ -369,6 +419,9 @@ typedef struct {
     /* move animation queue (front = currently animating) */
     AnimStep anim_queue[ANIM_QUEUE_MAX];
     int      anim_count;
+    bool     anim_fast;         /* next enqueued move is a fast (drag) slide */
+    Uint32   check_anim;        /* when a check animation started (0 = none) */
+    int      check_anim_sq;     /* king square for the check halo */
 
     TTF_Font *font_piece[2];    /* [0] filled glyph, [1] outline via same */
     TTF_Font *font_ui;
@@ -376,6 +429,8 @@ typedef struct {
     TTF_Font *font_tiny;
     SDL_Texture *tex_board;     /* active board image, or NULL for procedural */
     SDL_Texture *tex_piece[16]; /* piece textures (indexed by Piece) */
+    SDL_Texture *badge_tex[12]; /* move-quality badge textures (indexed by ReviewClass) */
+    SDL_Texture *capture_ring;  /* high-res anti-aliased capture ring */
     bool   quit;
 } Gui;
 

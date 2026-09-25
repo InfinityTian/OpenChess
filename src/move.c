@@ -73,6 +73,89 @@ bool square_attacked(const Board *b, int sq, Color by_side)
     return false;
 }
 
+int piece_value(Piece p)
+{
+    switch (p) {
+        case WP: case BP: return 100;
+        case WN: case BN: return 320;
+        case WB: case BB: return 330;
+        case WR: case BR: return 500;
+        case WQ: case BQ: return 900;
+        case WK: case BK: return 10000;
+        default: return 0;
+    }
+}
+
+int min_attacker_value(const Board *b, int sq, Color by_side)
+{
+    int best = 100000;
+    int f = p_file(sq), r = p_rank(sq);
+
+    Piece pawn = (by_side == WHITE) ? WP : BP;
+    int pdir = (by_side == WHITE) ? 1 : -1;
+    for (int df = -1; df <= 1; df += 2) {
+        int nf = f + df, nr = r - pdir;
+        if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8 &&
+            b->board[nr * 8 + nf] == pawn) {
+            int v = piece_value(pawn);
+            if (v < best) best = v;
+        }
+    }
+
+    Piece knight = (by_side == WHITE) ? WN : BN;
+    for (int i = 0; i < 8; i++) {
+        int nf = f + dirs_knight[i][0], nr = r + dirs_knight[i][1];
+        if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8 &&
+            b->board[nr * 8 + nf] == knight) {
+            int v = piece_value(knight);
+            if (v < best) best = v;
+        }
+    }
+
+    Piece king = (by_side == WHITE) ? WK : BK;
+    for (int i = 0; i < 8; i++) {
+        int nf = f + dirs_king[i][0], nr = r + dirs_king[i][1];
+        if (nf >= 0 && nf < 8 && nr >= 0 && nr < 8 &&
+            b->board[nr * 8 + nf] == king) {
+            int v = piece_value(king);
+            if (v < best) best = v;
+        }
+    }
+
+    Piece rook = (by_side == WHITE) ? WR : BR;
+    Piece bishop = (by_side == WHITE) ? WB : BB;
+    Piece queen = (by_side == WHITE) ? WQ : BQ;
+    for (int i = 0; i < 4; i++) {
+        int nf = f, nr = r;
+        while (1) {
+            nf += dirs_rook[i][0]; nr += dirs_rook[i][1];
+            if (nf < 0 || nf >= 8 || nr < 0 || nr >= 8) break;
+            Piece p = b->board[nr * 8 + nf];
+            if (p == EMPTY) continue;
+            if (p == rook || p == queen) {
+                int v = piece_value(p);
+                if (v < best) best = v;
+            }
+            break;
+        }
+    }
+    for (int i = 0; i < 4; i++) {
+        int nf = f, nr = r;
+        while (1) {
+            nf += dirs_bishop[i][0]; nr += dirs_bishop[i][1];
+            if (nf < 0 || nf >= 8 || nr < 0 || nr >= 8) break;
+            Piece p = b->board[nr * 8 + nf];
+            if (p == EMPTY) continue;
+            if (p == bishop || p == queen) {
+                int v = piece_value(p);
+                if (v < best) best = v;
+            }
+            break;
+        }
+    }
+    return best;
+}
+
 bool in_check(const Board *b, Color side)
 {
     int k = find_king(b, side);
