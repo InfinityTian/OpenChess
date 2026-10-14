@@ -83,5 +83,6 @@ jobs:
       - name: Bundle, verify and upload portable Windows ZIP
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_SOURCE_REF: ${{ inputs.source_ref || inputs.release_tag }}
           GH_TOKEN: ${{ github.token }}
         run: python ../scripts/package_windows.py . "$(cygpath -m /ucrt64/bin)" "$RELEASE_TAG"

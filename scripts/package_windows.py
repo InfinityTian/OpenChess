@@ -83,8 +83,7 @@ for package in sorted(packages):
     "MSYS2 UCRT64 runtime packages (sources and recipes: https://github.com/msys2/MINGW-packages):\n"
     + "\n".join(manifest) + "\n", encoding="utf-8")
 (stage / "BUILD.txt").write_text(
-    "Source commit: " + subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=source, text=True).strip() + "\n",
+    "Source ref: " + os.environ["RELEASE_SOURCE_REF"] + "\n",
     encoding="utf-8")
 (stage / "OpenChess.bat").write_bytes(
     b'@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\nset "PATH=%~dp0;%PATH%"\r\nstart "" "%~dp0openchess.exe"\r\n')
