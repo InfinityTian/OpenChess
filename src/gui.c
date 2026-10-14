@@ -47,6 +47,9 @@ static const char *ANIM_KEYS[ANIM_STYLE_COUNT]   = { "arcade", "slide", "fade", 
 static const char *ANIM_LABELS[ANIM_STYLE_COUNT] = { "Arcade", "Slide", "Fade", "None" };
 /* One cadence for click moves, playback, previews and reverse moves. */
 static const Uint32 ANIM_DURS[ANIM_STYLE_COUNT]  = { 320, 320, 320, 0 };
+#define PICK_GLOW_SIZE 256
+#define PICK_GLOW_FRAMES 24
+#define PICK_GLOW_COLS 6
 
 static ThemeEntry *cur_board(Gui *g)
 {
@@ -1053,6 +1056,7 @@ static void select_square(Gui *g, int sq)
     g->selected = sq;
     g->pick_started = SDL_GetTicks() + 1;
     g->pick_released = 0;
+    g->pick_position = g->mouse;
     MoveList legal;
     gen_legal(&g->board, &legal);
     for (int i = 0; i < legal.count; i++) {
@@ -1933,25 +1937,38 @@ static SDL_Texture *make_ring_texture(SDL_Renderer *ren, int size,
     return t;
 }
 
-/* A single smooth radial disc reproduces the filled bloom in Pick.mov.
- * Cache at high resolution so its contracting edge stays soft under zoom. */
+/* Cache a filled bloom whose inner tail progressively clears. The advancing
+ * outer edge is scaled independently; no frame ever contracts the wave. */
 static SDL_Texture *make_pick_glow(SDL_Renderer *ren)
 {
-    const int size = 512;
-    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32,
+    const int size = PICK_GLOW_SIZE;
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, size * PICK_GLOW_COLS,
+                                                   size * (PICK_GLOW_FRAMES / PICK_GLOW_COLS), 32,
                                                    SDL_PIXELFORMAT_RGBA32);
     if (!s) return NULL;
     SDL_LockSurface(s);
-    for (int y = 0; y < size; y++) {
-        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + y * s->pitch);
-        for (int x = 0; x < size; x++) {
-            float dx = (x + 0.5f - size / 2) / (size / 2);
-            float dy = (y + 0.5f - size / 2) / (size / 2);
-            float edge = (sqrtf(dx * dx + dy * dy) - 0.62f) / 0.38f;
-            if (edge < 0) edge = 0;
-            if (edge > 1) edge = 1;
-            float alpha = 1.0f - edge * edge * (3.0f - 2.0f * edge);
-            row[x] = SDL_MapRGBA(s->format, 60, 220, 245, (Uint8)(255 * alpha));
+    for (int frame = 0; frame < PICK_GLOW_FRAMES; frame++) {
+        float tail = 0.90f * frame / (PICK_GLOW_FRAMES - 1);
+        for (int y = 0; y < size; y++) {
+            int row_y = y + (frame / PICK_GLOW_COLS) * size;
+            Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + row_y * s->pitch);
+            for (int x = 0; x < size; x++) {
+                float dx = (x + 0.5f - size / 2) / (size / 2);
+                float dy = (y + 0.5f - size / 2) / (size / 2);
+                float radius = sqrtf(dx * dx + dy * dy);
+                float edge = (radius - 0.62f) / 0.38f;
+                if (edge < 0) edge = 0;
+                if (edge > 1) edge = 1;
+                float alpha = 1.0f - edge * edge * (3.0f - 2.0f * edge);
+                if (frame > 0) {
+                    float clear = (radius - tail + 0.16f) / 0.16f;
+                    if (clear < 0) clear = 0;
+                    if (clear > 1) clear = 1;
+                    alpha *= clear * clear * (3.0f - 2.0f * clear);
+                }
+                row[x + (frame % PICK_GLOW_COLS) * size] =
+                    SDL_MapRGBA(s->format, 60, 220, 245, (Uint8)(255 * alpha));
+            }
         }
     }
     SDL_UnlockSurface(s);
@@ -4542,7 +4559,10 @@ static void handle_game_mouseup(Gui *g)
     SDL_Point p = g->mouse;
     bool was_drag = g->dragging;
     g->dragging = false;
-    if (g->selected >= 0) g->pick_released = SDL_GetTicks() + 1;
+    if (g->selected >= 0) {
+        g->pick_released = SDL_GetTicks() + 1;
+        g->pick_position = g->mouse;
+    }
 
     if (g->resizing_board) {
         g->resizing_board = false;
@@ -4787,8 +4807,10 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                 return;
             }
             if (g->scene == SCENE_GAME) handle_game_mouseup(g);
-            else if (g->scene == SCENE_OPENINGS && g->selected >= 0)
+            else if (g->scene == SCENE_OPENINGS && g->selected >= 0) {
                 g->pick_released = SDL_GetTicks() + 1;
+                g->pick_position = g->mouse;
+            }
             return;
         case SDL_MOUSEWHEEL:
             if (g->scene == SCENE_GAME && g->pgn_import_open) {
@@ -5269,12 +5291,18 @@ static void draw_check_overlay(Gui *g, SDL_Renderer *ren, int sq, float p)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+static float click_release_progress(const Gui *g, Uint32 now)
+{
+    if (!g->pick_released) return 0.0f;
+    Sint32 elapsed = (Sint32)(now - g->pick_released);
+    return smoothstepf(0, 180, elapsed > 0 ? (float)elapsed : 0.0f);
+}
+
 static float click_pick_strength(const Gui *g, Uint32 now)
 {
     if (!g->pick_started || g->anim_style == ANIM_NONE) return 0.0f;
     if (g->pick_released) {
-        Sint32 elapsed = (Sint32)(now - g->pick_released);
-        return 1.0f - smoothstepf(0, 180, elapsed > 0 ? (float)elapsed : 0.0f);
+        return 1.0f - click_release_progress(g, now);
     }
     Sint32 elapsed = (Sint32)(now - g->pick_started);
     return smoothstepf(0, 16, elapsed > 0 ? (float)elapsed : 0.0f);
@@ -5309,6 +5337,14 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
             if (p == EMPTY) continue;
             float cx, cy;
             piece_center(g, sq, &cx, &cy);
+            if (sq == g->selected && g->pick_started && g->anim_style != ANIM_NONE) {
+                /* A click anywhere in the square picks up at the pointer.
+                 * Release interpolates that exact point back to the centre. */
+                float back = click_release_progress(g, now);
+                SDL_Point cursor = g->pick_released ? g->pick_position : g->mouse;
+                cx = cursor.x + (cx - cursor.x) * back;
+                cy = cursor.y + (cy - cursor.y) * back;
+            }
             float lift = sq == g->selected ? pick_scale(g, now, false) : 1.0f;
             render_piece_box(g, ren, p, cx, cy, g->sq * lift, 1.0f);
         }
@@ -5517,17 +5553,23 @@ static void draw_selection_glow(Gui *g, SDL_Renderer *ren, int sq, Uint32 now)
 {
     SDL_Rect rc;
     window_sq(g, sq, &rc);
-    int cx = rc.x + rc.w / 2, cy = rc.y + rc.h / 2;
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
     float strength = g->dragging ? 1.0f : click_pick_strength(g, now);
     if (!g->dragging && g->pick_glow && strength > 0.0f) {
-        /* Frame-by-frame reference: a filled cyan bloom while pressed;
-         * after release its radius and opacity diminish together. */
-        float size = g->sq * 2.0f * (0.40f + 0.25f * strength);
-        SDL_Rect dst = { (int)lroundf(cx - size / 2), (int)lroundf(cy - size / 2),
+        float progress = click_release_progress(g, now);
+        Uint32 growth_at = g->pick_released ? g->pick_released : now;
+        Sint32 elapsed = (Sint32)(growth_at - g->pick_started);
+        float held_radius = 0.35f + 0.30f * smoothstepf(0, 80, elapsed > 0 ? elapsed : 0);
+        float size = g->sq * 2.0f * (held_radius + 0.25f * progress);
+        SDL_Point cursor = g->pick_released ? g->pick_position : g->mouse;
+        int frame = (int)(progress * (PICK_GLOW_FRAMES - 1));
+        SDL_Rect src = { (frame % PICK_GLOW_COLS) * PICK_GLOW_SIZE,
+                         (frame / PICK_GLOW_COLS) * PICK_GLOW_SIZE,
+                         PICK_GLOW_SIZE, PICK_GLOW_SIZE };
+        SDL_Rect dst = { (int)lroundf(cursor.x - size / 2), (int)lroundf(cursor.y - size / 2),
                          (int)lroundf(size), (int)lroundf(size) };
         SDL_SetTextureAlphaMod(g->pick_glow, (Uint8)(150 * strength));
-        SDL_RenderCopy(ren, g->pick_glow, NULL, &dst);
+        SDL_RenderCopy(ren, g->pick_glow, &src, &dst);
         SDL_SetTextureAlphaMod(g->pick_glow, 255);
     }
     SDL_SetRenderDrawColor(ren, 80, 220, 245, g->dragging ? 26 : 60);
@@ -7934,6 +7976,7 @@ static void handle_openings_mousedown(Gui *g)
         g->selected = sq;
         g->pick_started = SDL_GetTicks() + 1;
         g->pick_released = 0;
+        g->pick_position = g->mouse;
         g->targets.count = 0;
         for (int i = 0; i < all.count; i++)
             if (MOVE_FROM(all.moves[i]) == sq && g->targets.count < MAX_MOVES)

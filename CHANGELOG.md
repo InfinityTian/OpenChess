@@ -6,10 +6,13 @@ All notable changes to OpenChess. The format follows
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-10-14
+
 ### Changed
 - Clicking now follows the press/release sequence in the first half of
-  `Pick.mov`: a filled cyan bloom and frame on press, contracting and fading
-  over 180ms after release, then only the selected-square tint remains.
+  `Pick.mov`: the piece picks up at the actual cursor position and returns to
+  the square centre over 180ms after release. The cyan bloom only expands;
+  its inner tail clears outward and fades, leaving the selected-square tint.
   Clicking the same piece retriggers the effect instead of deselecting it.
 - Clicking a piece now shows a finite filled cyan bloom; held pieces pulse
   between normal size and 16% larger throughout a drag, including while still.

@@ -62,6 +62,24 @@ static uint64_t region_hash(SDL_Renderer *ren, SDL_Rect rect)
     return hash;
 }
 
+static float black_piece_x(SDL_Renderer *ren, SDL_Rect rect)
+{
+    size_t bytes = (size_t)rect.w * rect.h * 4;
+    Uint8 *pixels = malloc(bytes);
+    if (!pixels) return -1;
+    if (SDL_RenderReadPixels(ren, &rect, SDL_PIXELFORMAT_RGBA32,
+                             pixels, rect.w * 4) != 0) { free(pixels); return -1; }
+    int count = 0;
+    double sum = 0;
+    for (int y = 0; y < rect.h; y++)
+        for (int x = 0; x < rect.w; x++) {
+            Uint8 *p = pixels + 4 * (y * rect.w + x);
+            if (p[0] < 8 && p[1] < 8 && p[2] < 8) { sum += rect.x + x; count++; }
+        }
+    free(pixels);
+    return count ? (float)(sum / count) : -1;
+}
+
 static void do_restart_test(Gui *g)
 {
     board_reset(&g->board);
@@ -357,21 +375,39 @@ static int test_position_effects(SDL_Renderer *ren)
     click.type = SDL_MOUSEBUTTONDOWN;
     click.button.button = SDL_BUTTON_LEFT;
     sq_window(g, ren, algebraic_to_sq("e2"), &click.button.x, &click.button.y);
+    click.button.x += 30;
+    click.button.y -= 22;
     gui_handle_event(g, &click);
+    SDL_Rect piece_area = { g->board_x + 4 * g->sq - 16,
+                            g->board_y + 5 * g->sq + 24, 120, 130 };
     SDL_Rect ripple = { g->board_x + 3 * g->sq, g->board_y + 5 * g->sq,
                         2 * g->sq, 2 * g->sq };
     g->pick_started = SDL_GetTicks() - 100;
     gui_render(g, ren);
+    float cursor_x = black_piece_x(ren, piece_area);
+    if (fabsf(cursor_x - g->mouse.x) > 2) {
+        fprintf(stderr, "off-centre pickup did not place the piece at the cursor\n");
+        return 1;
+    }
     uint64_t pressed = region_hash(ren, ripple);
     click.type = SDL_MOUSEBUTTONUP;
     gui_handle_event(g, &click);
     if (!g->pick_released || g->selected != algebraic_to_sq("e2")) return 1;
     g->pick_released = SDL_GetTicks() - 80;
+    g->pick_started = g->pick_released - 100;
     gui_render(g, ren);
     uint64_t fading = region_hash(ren, ripple);
+    float returning_x = black_piece_x(ren, piece_area);
     g->pick_released = SDL_GetTicks() - 400;
     gui_render(g, ren);
     uint64_t settled = region_hash(ren, ripple);
+    float centre_x = black_piece_x(ren, piece_area);
+    float expected_x = g->board_x + 4.5f * g->sq;
+    if (fabsf(centre_x - expected_x) > 2 ||
+        returning_x <= centre_x + 2 || returning_x >= cursor_x - 2) {
+        fprintf(stderr, "picked piece did not smoothly return to its square centre\n");
+        return 1;
+    }
     if (!pressed || pressed == fading || fading == settled) {
         fprintf(stderr, "click bloom did not decay after release\n");
         return 1;

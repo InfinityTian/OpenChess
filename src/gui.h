@@ -268,6 +268,7 @@ typedef struct {
     Uint32 pick_started;        /* phase origin for selection ripples/drag pulse */
     Uint32 pick_released;       /* finite click halo fades after mouse-up */
     SDL_Point pick_mouse;       /* drag threshold origin in board coordinates */
+    SDL_Point pick_position;    /* released cursor position for click return */
     MoveList targets;           /* legal targets when a piece is selected */
 
     char   move_san[MAX_PLY][8];/* SAN per ply for the move list */
@@ -439,7 +440,7 @@ typedef struct {
     SDL_Texture *tex_piece[16]; /* piece textures (indexed by Piece) */
     SDL_Texture *badge_tex[12]; /* move-quality badge textures (indexed by ReviewClass) */
     SDL_Texture *capture_ring;  /* high-res anti-aliased capture ring */
-    SDL_Texture *pick_glow;     /* smooth filled disc, not concentric rings */
+    SDL_Texture *pick_glow;     /* cached bloom frames with a clearing inner tail */
     SDL_Texture *end_tex[3];    /* vector winner, checkmate and draw symbols */
     bool   quit;
 } Gui;
