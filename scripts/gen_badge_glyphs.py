@@ -77,7 +77,7 @@ BADGES = {
     "badge_mistake.svg":    ("#FFA459", "?",  69, 88, 0),
     "badge_blunder.svg":    ("#FA412D", "??", 61, 84, -7),
     "badge_interesting.svg":("#7775A4", "!?", 57, 84, -4),
-    "badge_great.svg":      ("#7499BF", "!",  69, 88, 0),
+    "badge_great.svg":      ("#749BBF", "!",  69, 88, 0),
     "badge_brilliant.svg":  ("#27C2A3", "!!", 57, 84, -4),
 }
 

@@ -7,6 +7,19 @@ All notable changes to OpenChess. The format follows
 ## [Unreleased]
 
 ### Changed
+- Added the vector Forced arrow badge from `18.png`; badges rasterize at 512px
+  and use the reference palette throughout board, list and reports.
+- The move list follows `19.png`: bold grade-coloured SAN, alternating rows,
+  white active moves, variation guides and split rows at White alternatives.
+  Its evaluation graph shows grade dots and supports click-to-position.
+- The Analysis sidebar tab shows the `13.png` per-side counts, including Forced,
+  plus accuracy when a review is complete.
+- Checkmate and draw effects follow `Checkmate.mov` and `Draw.mov`: labelled
+  symbols over the king squares shrink into persistent vector corner badges.
+  Navigation clears old effects; Animation None shows the settled badges.
+- Click moves, reverse moves and previews share a 320ms cadence. Selection uses
+  a brief lift and cyan framing from `Pick.mov`; dragging has a movement threshold
+  and settles from the release position instead of replaying from its origin.
 - Move-quality badges use larger centred glyphs and the reference palette;
   board badges sit over the square's upper-right corner and appear on arrival.
   Mainline and variation moves share the same circular icons.

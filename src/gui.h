@@ -118,7 +118,8 @@ typedef struct {
     Uint32 start;
     Uint32 dur;
     bool   started;
-    bool   fast;            /* drag drop: short slide */
+    bool   fast;            /* drag drop: settle from the release position */
+    float  cursor_x, cursor_y;
     bool   reverse;         /* used when stepping back through the game */
 } AnimStep;
 
@@ -263,6 +264,8 @@ typedef struct {
     int    puzzle_rating;       /* local puzzle Elo */
 
     int    selected;            /* from-square, or -1 */
+    Uint32 pick_started;        /* one lift pulse on selection/drag start */
+    SDL_Point pick_mouse;       /* drag threshold origin in board coordinates */
     MoveList targets;           /* legal targets when a piece is selected */
 
     char   move_san[MAX_PLY][8];/* SAN per ply for the move list */
@@ -287,6 +290,7 @@ typedef struct {
 
     /* review report summary */
     bool   rev_report;          /* a completed report is available */
+    bool   analysis_summary;    /* sidebar: move list or per-side grade counts */
     double rev_accuracy;        /* whole-game accuracy 0..100 */
     int    rev_acpl;            /* average centipawn loss */
     int    rev_count[12];       /* per ReviewClass counts */
@@ -421,16 +425,19 @@ typedef struct {
     int      anim_count;
     bool     anim_fast;         /* next enqueued move is a fast (drag) slide */
     Uint32   check_anim;        /* when a check animation started (0 = none) */
+    Uint32   end_anim;          /* checkmate/draw effect, after the move lands */
     int      check_anim_sq;     /* king square for the check halo */
 
     TTF_Font *font_piece[2];    /* [0] filled glyph, [1] outline via same */
     TTF_Font *font_ui;
     TTF_Font *font_small;
     TTF_Font *font_tiny;
+    TTF_Font *font_move;        /* bold move list and summary typography */
     SDL_Texture *tex_board;     /* active board image, or NULL for procedural */
     SDL_Texture *tex_piece[16]; /* piece textures (indexed by Piece) */
     SDL_Texture *badge_tex[12]; /* move-quality badge textures (indexed by ReviewClass) */
     SDL_Texture *capture_ring;  /* high-res anti-aliased capture ring */
+    SDL_Texture *end_tex[3];    /* vector winner, checkmate and draw symbols */
     bool   quit;
 } Gui;
 

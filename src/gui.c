@@ -44,7 +44,8 @@ static int  mv_width(Gui *g, const char *s);
 
 static const char *ANIM_KEYS[ANIM_STYLE_COUNT]   = { "arcade", "slide", "fade", "none" };
 static const char *ANIM_LABELS[ANIM_STYLE_COUNT] = { "Arcade", "Slide", "Fade", "None" };
-static const Uint32 ANIM_DURS[ANIM_STYLE_COUNT]  = { 260, 180, 170, 0 };
+/* One cadence for click moves, playback, previews and reverse moves. */
+static const Uint32 ANIM_DURS[ANIM_STYLE_COUNT]  = { 320, 320, 320, 0 };
 
 static ThemeEntry *cur_board(Gui *g)
 {
@@ -527,8 +528,10 @@ static void rebuild_fonts(Gui *g)
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
     if (g->font_tiny) TTF_CloseFont(g->font_tiny);
+    if (g->font_move) TTF_CloseFont(g->font_move);
     g->font_piece[0] = g->font_piece[1] = NULL;
     g->font_ui = g->font_small = g->font_tiny = NULL;
+    g->font_move = NULL;
 
     const char *fpath = find_font();
     if (fpath) {
@@ -538,8 +541,10 @@ static void rebuild_fonts(Gui *g)
         g->font_ui      = TTF_OpenFont(fpath, (int)lroundf(22 * sc));
         g->font_small   = TTF_OpenFont(fpath, (int)lroundf(15 * sc));
         g->font_tiny    = TTF_OpenFont(fpath, (int)lroundf(12 * sc));
+        g->font_move    = TTF_OpenFont(fpath, (int)lroundf(17 * sc));
+        if (g->font_move) TTF_SetFontStyle(g->font_move, TTF_STYLE_BOLD);
         if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui ||
-            !g->font_small || !g->font_tiny)
+            !g->font_small || !g->font_tiny || !g->font_move)
             fprintf(stderr, "TTF_OpenFont: %s\n", TTF_GetError());
     }
 
@@ -571,6 +576,7 @@ static void load_board_style(Gui *g)
 static void clear_selection(Gui *g)
 {
     g->selected = -1;
+    g->pick_started = 0;
     g->targets.count = 0;
 }
 
@@ -637,6 +643,30 @@ static void sync_from_tree(Gui *g)
 static void clear_anims(Gui *g)
 {
     g->anim_count = 0;
+    g->check_anim = 0;
+    g->end_anim = 0;
+}
+
+/* Schedule position effects after the moving piece arrives. Direct jumps
+ * keep the settled end badges, while forward playback celebrates again. */
+static bool position_is_draw(const Gui *g)
+{
+    return g->state == STALEMATE || g->state == INSUFFICIENT_MATERIAL ||
+           g->state == THREEFOLD_REPETITION || g->state == FIFTY_MOVE_RULE ||
+           (g->mode == MODE_ONLINE && g->online_over &&
+            strcmp(g->override_result, "1/2-1/2") == 0);
+}
+
+static void start_position_effects(Gui *g)
+{
+    Uint32 delay = g->anim_count ? g->anim_queue[g->anim_count - 1].dur : 0;
+    if (g->state == CHECKMATE || position_is_draw(g)) {
+        g->check_anim = 0;
+        g->end_anim = g->anim_style == ANIM_NONE ? 0 : SDL_GetTicks() + delay + 1;
+    } else if (g->state == NO_GAME_OVER && in_check(&g->board, g->board.side)) {
+        g->check_anim = SDL_GetTicks() + 1;
+        g->check_anim_sq = find_king(&g->board, g->board.side);
+    }
 }
 
 /* Keep the FEN field in sync with the board unless the user is editing it. */
@@ -666,6 +696,16 @@ static void reset_board_state(Gui *g)
     recompute_state(g);
 }
 
+/* Discard a report before replacing its tree and its evaluation snapshots. */
+static void clear_review_results(Gui *g)
+{
+    if (g->review_ai) ai_stop_search(g->review_ai);
+    g->review_on = false;
+    g->rev_report = false;
+    g->review_n = 0;
+    memset(g->review_cls, 0, sizeof g->review_cls);
+}
+
 /* Replace the position from a FEN string. Returns false on parse failure. */
 static bool load_fen(Gui *g, const char *fen)
 {
@@ -675,6 +715,7 @@ static bool load_fen(Gui *g, const char *fen)
     g->ply = 0;
     reset_board_state(g);
     if (g->mode == MODE_ANALYSIS) {
+        clear_review_results(g);
         if (g->pgntree) mt_free(g->pgntree);
         g->pgntree = mt_new_root(&g->board);
         g->tree_cur = g->pgntree;
@@ -689,7 +730,7 @@ static bool load_fen(Gui *g, const char *fen)
  * by the caller; `pre` is the position before the move. */
 static void enqueue_move_anim(Gui *g, const Board *pre, Move m)
 {
-    if (g->anim_style == ANIM_NONE) return;
+    if (g->anim_style == ANIM_NONE) { g->anim_fast = false; return; }
     if (g->anim_count >= ANIM_QUEUE_MAX) return;
 
     AnimStep s;
@@ -722,8 +763,9 @@ static void enqueue_move_anim(Gui *g, const Board *pre, Move m)
     }
 
     s.fast    = g->anim_fast;
-    s.dur     = g->anim_fast ? (ANIM_DURS[g->anim_style] * 45 / 100)
-                             : ANIM_DURS[g->anim_style];
+    s.cursor_x = g->mouse.x;
+    s.cursor_y = g->mouse.y;
+    s.dur     = g->anim_fast ? 90 : ANIM_DURS[g->anim_style];
     s.started = false;
     s.start   = 0;
     g->anim_fast = false;
@@ -810,10 +852,7 @@ static void push_move(Gui *g, Move m)
     g->promo_from = g->promo_to = -1;
     san_close_box(g);
     recompute_state(g);
-    if (g->state == NO_GAME_OVER && in_check(&g->board, g->board.side)) {
-        g->check_anim = SDL_GetTicks();
-        g->check_anim_sq = find_king(&g->board, g->board.side);
-    }
+    start_position_effects(g);
     play_move_sound(g, &pre, m);
     fen_refresh(g);
     if (g->mode == MODE_ANALYSIS && g->pgntree && g->tree_cur &&
@@ -846,6 +885,7 @@ static void tree_go_forward(Gui *g)
     enqueue_move_anim(g, &g->tree_cur->board, child->move);
     g->tree_cur = child;
     sync_from_tree(g);
+    start_position_effects(g);
     analysis_refresh(g);
 }
 
@@ -924,6 +964,7 @@ static void do_restart(Gui *g)
     fen_refresh(g);
     if (g->mode == MODE_SINGLE && g->ai) ai_new_game(g->ai);
     if (g->mode == MODE_ANALYSIS) {
+        clear_review_results(g);
         if (g->pgntree) mt_free(g->pgntree);
         g->pgntree = mt_new_root(&g->board);
         g->tree_cur = g->pgntree;
@@ -988,6 +1029,7 @@ static void san_open_box(Gui *g)
         return;
     }
     g->san_open = true;
+    if (g->mode == MODE_ANALYSIS) g->analysis_summary = false;
     g->input.active = true;
     g->input.len = 0;
     g->input.text[0] = '\0';
@@ -1006,6 +1048,7 @@ static void select_square(Gui *g, int sq)
     if (g->state != NO_GAME_OVER) return;
 
     g->selected = sq;
+    g->pick_started = SDL_GetTicks() + 1;
     MoveList legal;
     gen_legal(&g->board, &legal);
     for (int i = 0; i < legal.count; i++) {
@@ -1032,6 +1075,7 @@ static void try_move_to(Gui *g, int to)
         return;
     }
     if (MOVE_FLAGS(*m) & FLAG_PROMO) {
+        g->anim_fast = false; /* The chooser is a separate click, not a drag. */
         g->promo_from = MOVE_FROM(*m);
         g->promo_to = MOVE_TO(*m);
         g->promo_open_ms = SDL_GetTicks();
@@ -1112,7 +1156,8 @@ static void pgn_btn_rect(const Gui *g, SDL_Rect *out)
 
 static void input_rect(const Gui *g, SDL_Rect *out)
 {
-    out->x = g->panel_x; out->y = g->win_h - 200; out->w = 320; out->h = 40;
+    out->x = g->panel_x; out->y = g->win_h - (g->mode == MODE_ANALYSIS ? 192 : 200);
+    out->w = 320; out->h = 40;
 }
 
 static void menu_btn_rect(const Gui *g, SDL_Rect *out)
@@ -1123,7 +1168,7 @@ static void menu_btn_rect(const Gui *g, SDL_Rect *out)
 /* FEN load/copy controls sit between the move list and the HUD. */
 static void fen_rects(const Gui *g, SDL_Rect *field, SDL_Rect *load, SDL_Rect *copy)
 {
-    field->x = g->panel_x;       field->y = g->board_y + 420; field->w = 252; field->h = 34;
+    field->x = g->panel_x;       field->y = g->board_y + 480; field->w = 252; field->h = 34;
     load->x  = g->panel_x + 260; load->y  = field->y;       load->w  = 54;  load->h  = 34;
     copy->x  = g->panel_x + 320; copy->y  = field->y;       copy->w  = 54;  copy->h  = 34;
 }
@@ -1273,6 +1318,8 @@ static void start_analysis(Gui *g)
     board_reset(&g->board);
     g->ply = 0;
     g->review_on = false;
+    g->rev_report = false;
+    g->analysis_summary = false;
     for (int i = 0; i < MAX_PLY; i++) g->review_cls[i] = RC_NONE;
     if (g->pgntree) mt_free(g->pgntree);
     reset_board_state(g);
@@ -1773,6 +1820,7 @@ Gui *gui_create(void)
 static const char *badge_file(int cls)
 {
     switch (cls) {
+        case RC_FORCED:     return "badge_forced.svg";
         case RC_BOOK:       return "badge_book.svg";
         case RC_BRILLIANT:  return "badge_brilliant.svg";
         case RC_GREAT:      return "badge_great.svg";
@@ -1794,7 +1842,7 @@ static void load_badges(Gui *g)
         if (g->badge_tex[i]) { SDL_DestroyTexture(g->badge_tex[i]); g->badge_tex[i] = NULL; }
     if (!g->ren) return;
 
-    const int SZ = 256;
+    const int SZ = 512;
     for (int i = 0; i < 12; i++) {
         const char *fn = badge_file(i);
         if (!fn) continue;
@@ -1818,6 +1866,20 @@ static void load_badges(Gui *g)
             SDL_SetTextureBlendMode(g->badge_tex[i], SDL_BLENDMODE_BLEND);
 #if SDL_VERSION_ATLEAST(2, 0, 12)
             SDL_SetTextureScaleMode(g->badge_tex[i], SDL_ScaleModeLinear);
+#endif
+        }
+    }
+    static const char *end_names[] = { "winner", "checkmate", "draw" };
+    for (int i = 0; i < 3; i++) {
+        if (g->end_tex[i]) SDL_DestroyTexture(g->end_tex[i]);
+        char path[1200];
+        snprintf(path, sizeof path, "%s/badges/end_%s.svg", path_assets(),
+                 end_names[i]);
+        g->end_tex[i] = IMG_LoadTexture(g->ren, path);
+        if (g->end_tex[i]) {
+            SDL_SetTextureBlendMode(g->end_tex[i], SDL_BLENDMODE_BLEND);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+            SDL_SetTextureScaleMode(g->end_tex[i], SDL_ScaleModeLinear);
 #endif
         }
     }
@@ -1927,6 +1989,8 @@ void gui_destroy(Gui *g)
     for (int i = 0; i < 12; i++)
         if (g->badge_tex[i]) SDL_DestroyTexture(g->badge_tex[i]);
     if (g->capture_ring) SDL_DestroyTexture(g->capture_ring);
+    for (int i = 0; i < 3; i++)
+        if (g->end_tex[i]) SDL_DestroyTexture(g->end_tex[i]);
     if (g->tex_board) SDL_DestroyTexture(g->tex_board);
     destroy_thumbs(&g->board_thumbs, g->boards.count);
     destroy_thumbs(&g->piece_thumbs, g->pieces.count);
@@ -1937,6 +2001,7 @@ void gui_destroy(Gui *g)
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
     if (g->font_tiny) TTF_CloseFont(g->font_tiny);
+    if (g->font_move) TTF_CloseFont(g->font_move);
     free(g);
 }
 
@@ -2766,6 +2831,7 @@ static void online_tick(Gui *g)
             const char *r = online_result(g->online);
             g->online_over = true;
             if (r && *r) snprintf(g->override_result, sizeof g->override_result, "%s", r);
+            if (position_is_draw(g)) start_position_effects(g);
             set_msg(g, "Game over: %s", r && *r ? r : "result");
         } else if (ev == ONLINE_EV_OPPONENT_LEFT) {
             set_msg(g, "Opponent disconnected - waiting for them to return", NULL);
@@ -4179,7 +4245,19 @@ static void handle_game_textinput(Gui *g, const SDL_TextInputEvent *te)
 static void analysis_nav_rect(const Gui *g, int index, SDL_Rect *r)
 {
     *r = (SDL_Rect){ g->panel_x + index * (PANEL_W / 2 + 2),
-                    g->board_y + 384, PANEL_W / 2 - 2, 28 };
+                    g->board_y + (g->analysis_summary ? 582 : 384),
+                    PANEL_W / 2 - 2, 28 };
+}
+
+static void analysis_tab_rect(const Gui *g, int index, SDL_Rect *r)
+{
+    *r = (SDL_Rect){ g->panel_x + index * (PANEL_W / 2 + 2),
+                    g->board_y + 194, PANEL_W / 2 - 2, 22 };
+}
+
+static void analysis_graph_rect(const Gui *g, SDL_Rect *r)
+{
+    *r = (SDL_Rect){ g->panel_x, g->board_y + 414, PANEL_W, 42 };
 }
 
 static void handle_game_mousedown(Gui *g)
@@ -4190,7 +4268,33 @@ static void handle_game_mousedown(Gui *g)
     if (g->pgn_prompt) return;   /* modal: keyboard only */
 
     /* Click a previous move (or a variation) to jump to that position. */
-    if (g->mode == MODE_ANALYSIS) {
+    if (g->mode == MODE_ANALYSIS && !g->pgn_import_open) {
+        for (int i = 0; i < 2; i++) {
+            SDL_Rect r;
+            analysis_tab_rect(g, i, &r);
+            if (pt_in(&r, p.x, p.y)) {
+                g->analysis_summary = i != 0;
+                g->fen_active = false;
+                g->move_drag = false;
+                g->move_hit_count = 0;
+                san_close_box(g);
+                return;
+            }
+        }
+        SDL_Rect graph;
+        analysis_graph_rect(g, &graph);
+        if (!g->analysis_summary && g->pgntree && pt_in(&graph, p.x, p.y)) {
+            int count = 0;
+            for (MoveNode *n = g->pgntree->first; n && count < MAX_PLY; n = n->first) count++;
+            int step = (int)lroundf((p.x - graph.x) * (float)count / (graph.w - 1));
+            MoveNode *n = g->pgntree;
+            while (step-- > 0 && n->first) n = n->first;
+            clear_anims(g);
+            g->tree_cur = n;
+            sync_from_tree(g);
+            analysis_refresh(g);
+            return;
+        }
         for (int i = 0; i < 2; i++) {
             SDL_Rect r;
             analysis_nav_rect(g, i, &r);
@@ -4200,7 +4304,7 @@ static void handle_game_mousedown(Gui *g)
                 return;
             }
         }
-        for (int i = 0; i < g->move_hit_count; i++) {
+        for (int i = 0; !g->analysis_summary && i < g->move_hit_count; i++) {
             if (pt_in(&g->move_hit_rect[i], p.x, p.y)) {
                 clear_anims(g);
                 g->check_anim = 0;
@@ -4227,7 +4331,8 @@ static void handle_game_mousedown(Gui *g)
     }
 
     /* Drag the move list to scroll it. */
-    if (pt_in(&g->move_box, p.x, p.y)) {
+    if (!(g->mode == MODE_ANALYSIS && g->analysis_summary) &&
+        pt_in(&g->move_box, p.x, p.y)) {
         g->move_drag = true;
         g->move_drag_y0 = p.y;
         g->move_drag_scroll0 = g->move_scroll;
@@ -4315,6 +4420,9 @@ static void handle_game_mousedown(Gui *g)
     }
 
     /* FEN controls are analysis-only. */
+    if (g->mode == MODE_ANALYSIS && g->analysis_summary &&
+        p.x >= g->panel_x && p.y >= g->board_y + 218 &&
+        p.y < g->board_y + 582) return;
     if (g->mode == MODE_ANALYSIS) {
         SDL_Rect field, load, copy;
         fen_rects(g, &field, &load, &copy);
@@ -4416,6 +4524,7 @@ static void handle_game_mouseup(Gui *g)
     if (g->selected >= 0) {
         g->anim_fast = was_drag;   /* a drag drop snaps with a fast slide */
         try_move_to(g, sq);
+        g->anim_fast = false;
     }
 }
 
@@ -4553,7 +4662,12 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                 return;
             }
             if (e->motion.state & SDL_BUTTON_LMASK) {
-                if (g->selected >= 0 || g->promo_from >= 0) g->dragging = true;
+                int dx = g->mouse.x - g->pick_mouse.x;
+                int dy = g->mouse.y - g->pick_mouse.y;
+                if (!g->dragging && g->selected >= 0 && dx * dx + dy * dy >= 16) {
+                    g->dragging = true;
+                    g->pick_started = SDL_GetTicks() + 1;
+                }
             }
             return;
         case SDL_MOUSEBUTTONDOWN:
@@ -4571,6 +4685,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
             }
             if (e->button.button != SDL_BUTTON_LEFT) return;
             set_mouse(g, e->button.x, e->button.y);
+            g->pick_mouse = g->mouse;
             debug_ui_log(g, e->button.x, e->button.y);
             if (g->account_open) { handle_account_mousedown(g); return; }
             if (g->scene == SCENE_MENU) handle_menu_mousedown(g);
@@ -4647,6 +4762,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                 return;
             }
             if (g->scene == SCENE_GAME &&
+                !(g->mode == MODE_ANALYSIS && g->analysis_summary) &&
                 pt_in(&g->move_box, g->mouse.x, g->mouse.y)) {
                 g->move_scroll -= e->wheel.y * 40;
                 if (g->move_scroll < 0) g->move_scroll = 0;
@@ -4801,6 +4917,12 @@ void gui_tick(Gui *g, Uint32 now)
                 g->eval_mate = mate;
                 g->eval_depth = depth;
                 g->eval_has_mate = ai_eval_has_mate(g->eval_ai);
+                if (tree_synced(g)) {
+                    g->tree_cur->has_eval = true;
+                    g->tree_cur->eval_cp = g->state == CHECKMATE ? -30000
+                        : g->board.side == WHITE ? cp : -cp;
+                    g->tree_cur->eval_mate = g->board.side == WHITE ? mate : -mate;
+                }
                 g->eval_valid = true;
             }
             g->eng_line_count = ai_get_lines(g->eval_ai, g->eng_lines, AI_MAX_LINES);
@@ -4879,10 +5001,15 @@ static void render_piece_box(Gui *g, SDL_Renderer *ren, Piece p,
     if (w <= 0 || h <= 0) return;
     int m = w > h ? w : h;
     float s = size / (float)m;
+    SDL_SetTextureAlphaMod(t, (Uint8)(alpha * 255.0f));
+#if SDL_VERSION_ATLEAST(2, 0, 10)
+    SDL_FRect rc = { cx - w * 0.5f * s, cy - h * 0.5f * s, w * s, h * s };
+    SDL_RenderCopyF(ren, t, NULL, &rc);
+#else
     SDL_Rect rc = { (int)(cx - w * 0.5f * s), (int)(cy - h * 0.5f * s),
                     (int)(w * s), (int)(h * s) };
-    SDL_SetTextureAlphaMod(t, (Uint8)(alpha * 255.0f));
     SDL_RenderCopy(ren, t, NULL, &rc);
+#endif
     SDL_SetTextureAlphaMod(t, 255);
 }
 
@@ -5101,6 +5228,16 @@ static void draw_check_overlay(Gui *g, SDL_Renderer *ren, int sq, float p)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+static float pick_scale(const Gui *g, Uint32 now, bool dragging)
+{
+    if (!g->pick_started || g->anim_style == ANIM_NONE) return 1.0f;
+    Sint32 elapsed = (Sint32)(now - g->pick_started);
+    if (elapsed < 0) elapsed = 0;
+    if (dragging) return 1.0f + 0.10f * smoothstepf(0, 160, (float)elapsed);
+    if (elapsed >= 280) return 1.0f;
+    return 1.0f + 0.08f * sinf((float)elapsed * 3.14159265f / 280.0f);
+}
+
 static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
 {
     /* static pieces (minus animated squares) */
@@ -5115,7 +5252,8 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
             if (p == EMPTY) continue;
             float cx, cy;
             piece_center(g, sq, &cx, &cy);
-            render_piece_box(g, ren, p, cx, cy, g->sq, 1.0f);
+            float lift = sq == g->selected ? pick_scale(g, now, false) : 1.0f;
+            render_piece_box(g, ren, p, cx, cy, g->sq * lift, 1.0f);
         }
 
     /* queued-but-pending moves: draw the position before those moves */
@@ -5153,9 +5291,10 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
         float fx, fy, tx, ty, x, y, sc, al;
         piece_center(g, s->from, &fx, &fy);
         piece_center(g, s->to, &tx, &ty);
+        if (s->fast) { fx = s->cursor_x; fy = s->cursor_y; }
 
         /* Comet trail behind the sliding piece. */
-        if (g->anim_style == ANIM_ARCADE)
+        if (g->anim_style == ANIM_ARCADE && !s->fast)
             draw_move_trail(g, ren, s->piece, fx, fy, tx, ty, t);
 
         anim_piece_transform(g, g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
@@ -5167,6 +5306,67 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
             anim_piece_transform(g, g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
             render_piece_box(g, ren, s->rook, x, y, g->sq * sc, al);
         }
+    }
+}
+
+/* End effects from Checkmate.mov / Draw.mov: wash the king squares, show
+ * labelled vector symbols, then shrink them into permanent corner badges. */
+static void draw_end_overlay(Gui *g, SDL_Renderer *ren, Uint32 now)
+{
+    bool draw = position_is_draw(g);
+    if ((!draw && g->state != CHECKMATE) || g->anim_count) return;
+    if (g->end_anim && (Sint32)(now - g->end_anim) < 0) return;
+    float p = g->end_anim ? (float)(now - g->end_anim) / 1400.0f : 1.0f;
+    float settle = smoothstepf(0.50f, 1.0f, p);
+    float show = smoothstepf(0.0f, 0.12f, p);
+    for (int side = WHITE; side <= BLACK; side++) {
+        int sq = find_king(&g->board, (Color)side);
+        if (sq < 0) continue;
+        bool winner = !draw && side != (int)g->board.side;
+        int icon = draw ? 2 : winner ? 0 : 1;
+        SDL_Color c = draw ? (SDL_Color){112, 110, 106, 255}
+                          : winner ? (SDL_Color){130, 182, 77, 255}
+                                   : (SDL_Color){210, 39, 48, 255};
+        SDL_Rect rc;
+        window_sq(g, sq, &rc);
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(ren, c.r, c.g, c.b,
+                              (Uint8)(185 * show * (1.0f - settle)));
+        SDL_RenderFillRect(ren, &rc);
+        float cx = rc.x + rc.w * 0.5f + rc.w * 0.43f * settle;
+        float cy = rc.y + rc.h * 0.5f - rc.h * 0.43f * settle;
+        float rad = g->sq * (0.38f - 0.19f * settle);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, (Uint8)(45 * settle));
+        fill_circle(ren, (int)cx, (int)cy + 1, (int)rad + 1);
+        SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, (Uint8)(255 * settle));
+        fill_circle(ren, (int)cx, (int)cy, (int)rad);
+        if (g->end_tex[icon]) {
+            int size = (int)(rad * 2.1f);
+            SDL_Rect dst = { (int)cx - size / 2, (int)cy - size / 2, size, size };
+            SDL_SetTextureAlphaMod(g->end_tex[icon], (Uint8)(255 * show));
+            SDL_RenderCopy(ren, g->end_tex[icon], NULL, &dst);
+            SDL_SetTextureAlphaMod(g->end_tex[icon], 255);
+        }
+        float label_alpha = show * (1.0f - smoothstepf(0.45f, 0.75f, p));
+        if (label_alpha > 0.01f) {
+            const char *label = draw ? "Draw" : winner ? "Winner" : "Checkmate";
+            int tw = 0, th = 0;
+            TTF_SizeUTF8(g->font_move, label, &tw, &th);
+            int w = (int)lroundf(tw / eff_scale(g)) + 16;
+            int h = text_height(g, g->font_move) + 8;
+            int x = clampi(rc.x + rc.w / 2 - w / 2, g->board_x,
+                           g->board_x + 8 * g->sq - w);
+            int y = rc.y - h / 2;
+            if (y < g->board_y + 2) y = g->board_y + 2;
+            SDL_SetRenderDrawColor(ren, 255, 255, 255, (Uint8)(255 * label_alpha));
+            SDL_Rect pill = { x + h / 2, y, w - h, h };
+            SDL_RenderFillRect(ren, &pill);
+            fill_circle(ren, x + h / 2, y + h / 2, h / 2);
+            fill_circle(ren, x + w - h / 2, y + h / 2, h / 2);
+            c.a = (Uint8)(255 * label_alpha);
+            render_text_centered(g, g->font_move, label, x + w / 2, y + 4, c);
+        }
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
     }
 }
 
@@ -5260,13 +5460,21 @@ static void draw_selection_glow(Gui *g, SDL_Renderer *ren, int sq)
     SDL_Rect rc;
     window_sq(g, sq, &rc);
     int cx = rc.x + rc.w / 2, cy = rc.y + rc.h / 2;
-    int maxr = (int)(g->sq * 0.52f);
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    for (int rr = maxr; rr > 0; rr -= 2) {
-        int a = 4 + (maxr - rr);          /* brighter toward the centre */
-        if (a > 34) a = 34;
-        SDL_SetRenderDrawColor(ren, 90, 165, 235, (Uint8)a);
-        fill_circle(ren, cx, cy, rr);
+    if (!g->dragging) {
+        SDL_SetRenderDrawColor(ren, 60, 210, 242, 24);
+        fill_circle(ren, cx, cy, (int)(g->sq * 0.78f));
+        SDL_SetRenderDrawColor(ren, 60, 210, 242, 32);
+        fill_circle(ren, cx, cy, (int)(g->sq * 0.56f));
+    }
+    SDL_SetRenderDrawColor(ren, 80, 220, 245, g->dragging ? 26 : 60);
+    SDL_RenderFillRect(ren, &rc);
+    SDL_SetRenderDrawColor(ren, 95, 232, 255, 240);
+    int thick = g->sq * 4 / 100;
+    if (thick < 2) thick = 2;
+    for (int i = 0; i < thick; i++) {
+        SDL_Rect border = { rc.x + i, rc.y + i, rc.w - 2 * i, rc.h - 2 * i };
+        SDL_RenderDrawRect(ren, &border);
     }
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
@@ -5730,6 +5938,15 @@ static void review_finish_ply(Gui *g, MoveNode *node)
     if (cpl < 0) cpl = 0;
     g->review_cpl[g->review_i] = cpl;
 
+    node->parent->has_eval = true;
+    node->parent->eval_cp = g->rb_cp;
+    node->parent->eval_mate = g->rb_mate;
+    node->has_eval = true;
+    node->eval_cp = -g->ra_cp;
+    node->eval_mate = -g->ra_mate;
+    if (g->ra_hm && g->ra_mate == 0 && game_state(&node->board) == CHECKMATE)
+        node->eval_cp = -30000;
+
     g->review_i++;
     g->review_stage = 0;
 }
@@ -6062,15 +6279,26 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
 
 /* ---- move quality badges ---- */
 
+static const struct { ReviewClass cls; const char *label; } REVIEW_ITEMS[] = {
+    { RC_BRILLIANT, "Brilliant" }, { RC_GREAT, "Great" },
+    { RC_BOOK, "Book" }, { RC_BEST, "Best" },
+    { RC_EXCELLENT, "Excellent" }, { RC_GOOD, "Good" },
+    { RC_INACCURACY, "Inaccuracy" }, { RC_MISTAKE, "Mistake" },
+    { RC_MISS, "Miss" }, { RC_BLUNDER, "Blunder" }, { RC_FORCED, "Forced" },
+};
+
+#define REVIEW_ITEM_COUNT ((int)(sizeof REVIEW_ITEMS / sizeof REVIEW_ITEMS[0]))
+
 static bool review_badge_color(ReviewClass c, Uint8 *r, Uint8 *g, Uint8 *b)
 {
     switch (c) {
+        case RC_FORCED:     *r = 150; *g = 175; *b = 139; return true;
         case RC_BRILLIANT:  *r = 39;  *g = 194; *b = 163; return true;  /* teal */
-        case RC_GREAT:      *r = 116; *g = 153; *b = 191; return true;  /* blue */
+        case RC_GREAT:      *r = 116; *g = 155; *b = 191; return true;  /* blue */
         case RC_BEST:       *r = 129; *g = 182; *b = 76;  return true;  /* green */
         case RC_EXCELLENT:  *r = 129; *g = 182; *b = 76;  return true;  /* green */
-        case RC_GOOD:       *r = 150; *g = 182; *b = 117; return true;  /* sage */
-        case RC_BOOK:       *r = 213; *g = 164; *b = 124; return true;  /* brown */
+        case RC_GOOD:       *r = 149; *g = 183; *b = 118; return true;  /* sage */
+        case RC_BOOK:       *r = 214; *g = 164; *b = 126; return true;  /* brown */
         case RC_INACCURACY: *r = 247; *g = 198; *b = 49;  return true;  /* amber */
         case RC_MISTAKE:    *r = 255; *g = 164; *b = 89;  return true;  /* orange */
         case RC_BLUNDER:    *r = 250; *g = 65;  *b = 45;  return true;  /* red */
@@ -6174,6 +6402,13 @@ static int mv_width(Gui *g, const char *s)
     return (int)lroundf((float)w / sc);
 }
 
+static int move_width(Gui *g, const char *s)
+{
+    int w = 0, h = 0;
+    if (TTF_SizeUTF8(g->font_move, s, &w, &h) != 0) return 0;
+    return (int)lroundf(w / eff_scale(g));
+}
+
 static void mv_push(MvLayout *L, MoveNode *node, ReviewClass cls, const char *text,
                     int x, int y, bool mainline)
 {
@@ -6192,8 +6427,8 @@ static void mv_emit_flow(Gui *g, MvLayout *L, MoveNode *node, ReviewClass cls,
                          const char *text)
 {
     if (L->n >= MVTOK_MAX) return;
-    int badge_w = node && cls != RC_NONE ? 20 : 0;
-    int w = mv_width(g, text) + badge_w;
+    int badge_w = node && cls != RC_NONE ? 24 : 0;
+    int w = move_width(g, text) + badge_w;
     if (L->x > L->x0 && L->x + w > L->right) {
         L->x = L->x0;
         L->y += L->row_h;
@@ -6259,8 +6494,7 @@ static void render_move_list(Gui *g)
     g->move_box = box;
     g->move_hit_count = 0;
 
-    draw_rect(ren, &box, 24, 26, 32, true);
-    draw_rect(ren, &box, 60, 64, 72, false);
+    draw_rect(ren, &box, 38, 37, 34, true);
 
     SDL_Rect inner = { box.x + 1, box.y + 1, box.w - 2, box.h - 2 };
     SDL_RenderSetClipRect(ren, &inner);
@@ -6273,7 +6507,7 @@ static void render_move_list(Gui *g)
             main[mcount++] = n;
 
     mv.n = 0;
-    mv.row_h = 20;
+    mv.row_h = 30;
     mv.block_n = 0;
 
     int num_x = box.x + 6;
@@ -6286,6 +6520,7 @@ static void render_move_list(Gui *g)
 
     for (int mvi = 0; mvi < nrows; mvi++) {
         int wi = mvi * 2, bi = wi + 1;
+        bool split = g->pgntree && wi < mcount && main[wi]->next && bi < mcount;
 
         char num[16];
         snprintf(num, sizeof num, "%d.", mvi + 1);
@@ -6294,6 +6529,10 @@ static void render_move_list(Gui *g)
         for (int k = 0; k < 2; k++) {
             int idx = (k == 0) ? wi : bi;
             int cx = (k == 0) ? wcell : bcell;
+            if (k == 1 && split) {
+                mv_push(&mv, NULL, RC_NONE, "...", cx + 24, y, true);
+                continue;
+            }
             MoveNode *node = NULL;
             ReviewClass cls = RC_NONE;
             char text[28] = "";
@@ -6311,8 +6550,8 @@ static void render_move_list(Gui *g)
                 have = true;
             }
             if (have) {
-                mv_push(&mv, node, cls, text, cx + 20, y, true);
-                mv.toks[mv.n - 1].w = mv_width(g, text) + 24;
+                mv_push(&mv, node, cls, text, cx + 24, y, true);
+                mv.toks[mv.n - 1].w = move_width(g, text) + 28;
                 mv.toks[mv.n - 1].x = cx;   /* rect starts at the badge slot */
             }
         }
@@ -6322,6 +6561,15 @@ static void render_move_list(Gui *g)
             for (int k = 0; k < 2; k++) {
                 int idx = (k == 0) ? wi : bi;
                 if (idx >= mcount) continue;
+                if (k == 1 && split) {
+                    mv_push(&mv, NULL, RC_NONE, num, num_x, y, true);
+                    mv_push(&mv, NULL, RC_NONE, "...", wcell + 24, y, true);
+                    MoveNode *black = main[bi];
+                    mv_push(&mv, black, (ReviewClass)black->cls, black->san,
+                            bcell, y, true);
+                    mv.toks[mv.n - 1].w = move_width(g, black->san) + 28;
+                    y += mv.row_h;
+                }
                 MoveNode *node = main[idx];
                 if (!node->next) continue;
                 mv.x0 = box.x + 18;
@@ -6361,6 +6609,19 @@ static void render_move_list(Gui *g)
         }
     }
 
+    /* Alternating mainline rows, as in 19.png. Tokens sharing y are one row. */
+    int last_row = -1, row = 0;
+    for (int i = 0; i < mv.n; i++) {
+        MvTok *t = &mv.toks[i];
+        if (!t->mainline || t->y == last_row) continue;
+        last_row = t->y;
+        if ((row++ % 2) == 0) {
+            SDL_Rect stripe = { box.x, box.y + t->y - g->move_scroll - 3,
+                                box.w, mv.row_h };
+            draw_rect(ren, &stripe, 42, 41, 38, true);
+        }
+    }
+
     /* variation guide bars */
     set_render_color(ren, 90, 95, 105);
     for (int i = 0; i < mv.block_n; i++) {
@@ -6370,37 +6631,38 @@ static void render_move_list(Gui *g)
     }
 
     /* tokens */
-    SDL_Color mv_c = { 230, 225, 215, 255 };
     for (int i = 0; i < mv.n; i++) {
         MvTok *t = &mv.toks[i];
         int ty = box.y + t->y - g->move_scroll;
         if (ty + mv.row_h < box.y || ty > box.y + box.h) continue;
 
+        Uint8 r = 195, gg = 194, b = 193;
+        review_badge_color(t->cls, &r, &gg, &b);
+        SDL_Color mv_c = { r, gg, b, 255 };
         if (t->node && t->node == g->tree_cur) {
             SDL_Rect hl = { t->x - 3, ty - 2, t->w + 6, mv.row_h };
-            SDL_SetRenderDrawColor(ren, 74, 80, 94, 255);
+            SDL_SetRenderDrawColor(ren, 69, 68, 65, 255);
             SDL_RenderFillRect(ren, &hl);
-            SDL_SetRenderDrawColor(ren, 110, 118, 134, 255);
-            SDL_RenderDrawRect(ren, &hl);
+            mv_c = (SDL_Color){255, 255, 255, 255};
         }
 
         if (t->mainline) {
             if (t->cls != RC_NONE)
-                draw_badge_circle(g, ren, t->x + 9, ty + mv.row_h / 2, 8,
+                draw_badge_circle(g, ren, t->x + 10, ty + 10, 9,
                                   (ReviewClass)t->cls);
-            render_text(g, g->font_small, t->text,
-                        t->x + (t->w > 0 ? 20 : 0), ty, mv_c);
+            if (!t->node && t->w == 0) mv_c = (SDL_Color){147, 146, 145, 255};
+            render_text(g, g->font_move, t->text,
+                        t->x + (t->w > 0 ? 24 : 0), ty, mv_c);
             if (t->node && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x, ty - 2, t->w, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
                 g->move_hit_node[g->move_hit_count++] = t->node;
             }
         } else {
-            int badge_w = t->node && t->cls != RC_NONE ? 20 : 0;
+            int badge_w = t->node && t->cls != RC_NONE ? 24 : 0;
             if (badge_w)
-                draw_badge_circle(g, ren, t->x + 9, ty + mv.row_h / 2, 8, t->cls);
-            render_text(g, g->font_small, t->text, t->x + badge_w, ty,
-                        (SDL_Color){ 190, 205, 215, 255 });
+                draw_badge_circle(g, ren, t->x + 10, ty + 10, 9, t->cls);
+            render_text(g, g->font_move, t->text, t->x + badge_w, ty, mv_c);
             if (t->node && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x - 2, ty - 2, t->w + 4, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
@@ -6421,6 +6683,122 @@ static void render_move_list(Gui *g)
         set_render_color(ren, 120, 125, 135);
         SDL_RenderFillRect(ren, &sb);
     }
+}
+
+static void render_analysis_summary(Gui *g, SDL_Renderer *ren)
+{
+    int x = g->panel_x, y = g->board_y;
+    SDL_Rect box = { x, y + 218, PANEL_W, 358 };
+    draw_rect(ren, &box, 38, 37, 34, true);
+    int counts[2][12] = {{0}};
+    if (g->rev_report) {
+        memcpy(counts, g->rev_count_side, sizeof counts);
+    } else if (g->pgntree) {
+        int guard = 0;
+        for (MoveNode *n = g->pgntree->first; n && guard++ < MAX_PLY; n = n->first) {
+            if (n->cls > RC_NONE && n->cls <= RC_MISS)
+                counts[n->parent->board.side][n->cls]++;
+        }
+    }
+    int white_x = x + 236, badge_x = x + 310, black_x = x + 390;
+    char name[24];
+    snprintf(name, sizeof name, "%.13s", g->white_name);
+    render_text_centered(g, g->font_small, name, white_x, y + 224,
+                         (SDL_Color){235, 235, 235, 255});
+    snprintf(name, sizeof name, "%.13s", g->black_name);
+    render_text_centered(g, g->font_small, name, black_x, y + 224,
+                         (SDL_Color){235, 235, 235, 255});
+    render_text(g, g->font_move, "Accuracy", x + 14, y + 250,
+                (SDL_Color){255, 255, 255, 255});
+    for (int side = 0; side < 2; side++) {
+        char value[20];
+        if (g->rev_report) snprintf(value, sizeof value, "%.1f", g->rev_accuracy_side[side]);
+        else snprintf(value, sizeof value, "--");
+        draw_chip(g, ren, (side == 0 ? white_x : black_x) - 32, y + 248, 64, 24, value);
+    }
+    set_render_color(ren, 64, 61, 56);
+    SDL_RenderDrawLine(ren, x + 12, y + 278, x + PANEL_W - 12, y + 278);
+    for (int i = 0; i < REVIEW_ITEM_COUNT; i++) {
+        ReviewClass c = REVIEW_ITEMS[i].cls;
+        Uint8 r, gg, b;
+        review_badge_color(c, &r, &gg, &b);
+        int row_y = y + 284 + 26 * i;
+        render_text(g, g->font_move, REVIEW_ITEMS[i].label, x + 14, row_y,
+                    (SDL_Color){255, 255, 255, 255});
+        draw_badge_circle(g, ren, badge_x, row_y + 10, 11, c);
+        for (int side = 0; side < 2; side++) {
+            char value[16];
+            snprintf(value, sizeof value, "%d", counts[side][c]);
+            render_text_centered(g, g->font_move, value,
+                                 side == 0 ? white_x : black_x, row_y,
+                                 (SDL_Color){r, gg, b, 255});
+        }
+    }
+    g->move_hit_count = 0;
+    g->move_box = (SDL_Rect){0, 0, 0, 0};
+}
+
+/* White's evaluation curve, with grade-coloured dots and a position marker.
+ * Missing evaluations stay blank; they are never presented as equal scores. */
+static void render_analysis_graph(Gui *g, SDL_Renderer *ren)
+{
+    SDL_Rect box;
+    analysis_graph_rect(g, &box);
+    draw_rect(ren, &box, 64, 61, 56, true);
+    MoveNode *nodes[MAX_PLY + 1];
+    int n = 0;
+    if (g->pgntree) {
+        nodes[n++] = g->pgntree;
+        for (MoveNode *m = g->pgntree->first; m && n <= MAX_PLY; m = m->first)
+            nodes[n++] = m;
+    }
+    bool have_eval = false;
+    int prev_x = 0, prev_y = 0;
+    bool prev_valid = false;
+    SDL_RenderSetClipRect(ren, &box);
+    for (int i = 0; i < n; i++) {
+        MoveNode *m = nodes[i];
+        int x = box.x + (n > 1 ? i * (box.w - 1) / (n - 1) : 0);
+        if (!m->has_eval) { prev_valid = false; continue; }
+        have_eval = true;
+        int cp = m->board.side == WHITE ? m->eval_cp : -m->eval_cp;
+        int mate = m->board.side == WHITE ? m->eval_mate : -m->eval_mate;
+        double pct = mate ? (mate > 0 ? 100.0 : 0.0) : review_win_pct(cp);
+        int yy = box.y + 2 + (int)((100.0 - pct) * (box.h - 5) / 100.0);
+        set_render_color(ren, 255, 255, 255);
+        if (prev_valid && x > prev_x) {
+            for (int px = prev_x; px <= x; px++) {
+                int py = prev_y + (yy - prev_y) * (px - prev_x) / (x - prev_x);
+                SDL_RenderDrawLine(ren, px, py, px, box.y + box.h - 1);
+            }
+        }
+        prev_x = x; prev_y = yy; prev_valid = true;
+    }
+    set_render_color(ren, 130, 128, 124);
+    SDL_RenderDrawLine(ren, box.x, box.y + box.h / 2, box.x + box.w, box.y + box.h / 2);
+    for (int i = 0; i < n; i++) {
+        MoveNode *m = nodes[i];
+        int x = box.x + (n > 1 ? i * (box.w - 1) / (n - 1) : 0);
+        if (m == g->tree_cur) {
+            set_render_color(ren, 130, 182, 77);
+            SDL_RenderDrawLine(ren, x, box.y, x, box.y + box.h);
+        }
+        if (!m->has_eval) continue;
+        int cp = m->board.side == WHITE ? m->eval_cp : -m->eval_cp;
+        int mate = m->board.side == WHITE ? m->eval_mate : -m->eval_mate;
+        double pct = mate ? (mate > 0 ? 100.0 : 0.0) : review_win_pct(cp);
+        int yy = box.y + 2 + (int)((100.0 - pct) * (box.h - 5) / 100.0);
+        Uint8 r, gg, b;
+        if (review_badge_color((ReviewClass)m->cls, &r, &gg, &b)) {
+            set_render_color(ren, r, gg, b);
+            fill_circle(ren, x, yy, m == g->tree_cur ? 4 : 3);
+        }
+    }
+    if (!have_eval)
+        render_text_centered(g, g->font_tiny, "Analyze to see the evaluation graph",
+                             box.x + box.w / 2, box.y + 14,
+                             (SDL_Color){195, 194, 193, 255});
+    SDL_RenderSetClipRect(ren, NULL);
 }
 
 static void render_san_hint(Gui *g)
@@ -7584,25 +7962,13 @@ static void render_review_report(Gui *g, SDL_Renderer *ren)
     render_text_centered(g, g->font_ui, buf, cx + 150, 166,
                          (SDL_Color){ 200, 210, 220, 255 });
 
-    static const struct { int cls; const char *label; } items[] = {
-        { RC_BRILLIANT,  "Brilliant"  },
-        { RC_GREAT,      "Great"      },
-        { RC_BOOK,       "Book"       },
-        { RC_BEST,       "Best"       },
-        { RC_EXCELLENT,  "Excellent"  },
-        { RC_GOOD,       "Good"       },
-        { RC_INACCURACY, "Inaccuracy" },
-        { RC_MISTAKE,    "Mistake"    },
-        { RC_MISS,       "Miss"       },
-        { RC_BLUNDER,    "Blunder"    },
-    };
-    int n = (int)(sizeof items / sizeof items[0]);
+    int n = REVIEW_ITEM_COUNT;
     int y = 214;
     for (int i = 0; i < n; i++) {
-        ReviewClass c = (ReviewClass)items[i].cls;
+        ReviewClass c = (ReviewClass)REVIEW_ITEMS[i].cls;
         Uint8 r = 200, gg = 205, b = 215;
         review_badge_color(c, &r, &gg, &b);
-        render_text(g, g->font_ui, items[i].label, label_x, y,
+        render_text(g, g->font_ui, REVIEW_ITEMS[i].label, label_x, y,
                     (SDL_Color){ 220, 225, 232, 255 });
 
         char cnt[16];
@@ -7613,7 +7979,7 @@ static void render_review_report(Gui *g, SDL_Renderer *ren)
         snprintf(cnt, sizeof cnt, "%d", g->rev_count_side[1][c]);
         render_text_centered(g, g->font_ui, cnt, bcol, y,
                              (SDL_Color){ r, gg, b, 255 });
-        y += 42;
+        y += 38;
     }
 
     /* Game rating (when known). */
@@ -7863,7 +8229,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
         if (k >= 0) draw_square_highlight(g, ren, k, 220, 70, 70);
     }
 
-    if (g->selected >= 0 && !g->dragging)
+    if (g->selected >= 0)
         draw_selection_glow(g, ren, g->selected);
 
     if (g->selected >= 0)
@@ -7883,6 +8249,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     if (last_to >= 0 && last_cls != RC_NONE && g->anim_count == 0)
         draw_quality_badge(g, ren, last_to, last_cls);
+    draw_end_overlay(g, ren, now);
     draw_engine_arrows(g, ren);
     draw_annotations(g, ren);
 
@@ -7902,8 +8269,8 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     if (g->promo_from >= 0) draw_promo_chooser(g, ren);
 
-    /* Dragged piece sits under the cursor with a soft blue halo (and a tint on
-     * the square under the cursor) and pulses between normal and larger. */
+    /* One lift settles at a constant drag size, with a cyan disc and square
+     * frame under the pointer (Pick.mov). */
     if (g->dragging && g->selected >= 0) {
         int cx = g->mouse.x, cy = g->mouse.y;
 
@@ -7935,18 +8302,28 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
             SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
         }
 
-        float pulse = 1.0f + 0.16f * (0.5f + 0.5f * sinf((float)now * 0.007f));
         render_piece_box(g, ren, g->board.board[g->selected],
                          (float)g->mouse.x, (float)g->mouse.y,
-                         g->sq * pulse, 1.0f);
+                         g->sq * pick_scale(g, now, true), 1.0f);
     }
 
     render_status(g);
     render_engine_panel(g, ren);
     render_review_bar(g, ren);
-    render_move_list(g);
+    if (g->mode == MODE_ANALYSIS && g->analysis_summary)
+        render_analysis_summary(g, ren);
+    else
+        render_move_list(g);
     if (g->mode == MODE_ANALYSIS) {
         for (int i = 0; i < 2; i++) {
+            SDL_Rect tab;
+            analysis_tab_rect(g, i, &tab);
+            bool selected = g->analysis_summary == (i != 0);
+            draw_rect(ren, &tab, selected ? 69 : 42, selected ? 68 : 41,
+                      selected ? 65 : 38, true);
+            render_text_centered(g, g->font_small, i == 0 ? "Moves" : "Analysis",
+                                 tab.x + tab.w / 2, tab.y + 2,
+                                 (SDL_Color){235, 235, 235, 255});
             SDL_Rect r;
             analysis_nav_rect(g, i, &r);
             bool enabled = g->tree_cur && (i == 0 ? g->tree_cur->parent != NULL
@@ -7959,16 +8336,21 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
                                          : (SDL_Color){100, 108, 120, 255});
         }
     }
-    if (g->mode == MODE_ANALYSIS) render_fen_box(g, ren);
-    render_hud(g);
+    if (g->mode == MODE_ANALYSIS) {
+        if (!g->analysis_summary) {
+            render_analysis_graph(g, ren);
+            render_fen_box(g, ren);
+        }
+    } else render_hud(g);
     render_chat(g, ren);
-    if (!g->chat_open) {
+    if (!g->chat_open && !(g->mode == MODE_ANALYSIS && g->analysis_summary)) {
         if (g->san_open) render_input_box(g, ren);
         else             render_san_hint(g);
     }
     render_buttons(g, ren);
 
-    if (g->msg[0] && SDL_GetTicks() < g->msg_until) {
+    if (g->msg[0] && SDL_GetTicks() < g->msg_until &&
+        !(g->mode == MODE_ANALYSIS && g->analysis_summary)) {
         render_text(g, g->font_small, g->msg, g->panel_x, g->win_h - 150,
                     (SDL_Color){ 255, 160, 120, 255 });
     }

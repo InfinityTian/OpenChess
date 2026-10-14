@@ -55,6 +55,17 @@ SDL2_net).
 
 ### Analysis mode
 
+- **Moves / Analysis** switches the sidebar between the move list and a per-side
+  table of move grades (including Forced). **Analyze** grades the game; completed
+  reviews also supply accuracy. Each grade has a vector badge and matching SAN
+  colour; the active move is white.
+- The graph beneath the move list plots available evaluations. Click it to jump
+  to a position. **Previous / Next** and Left/Right interrupt unfinished animations
+  so repeated navigation stays responsive.
+- Checkmate and draws briefly label the kings, then retain small result badges.
+  Navigating away clears the effect. **Animation: None** shows the final badges
+  without the transition.
+
 - Control White and Black with full legality; use it to try lines or set up
   positions.
 - **FEN** (right panel): click the field and type/paste a FEN, then press
@@ -71,7 +82,7 @@ SDL2_net).
   variations.
 - **Analyze (Analyze button):** runs Stockfish over the game and grades each move
   (best / good / inaccuracy / mistake / blunder); a summary and per-move glyphs
-  appear in the panel. Imported games are analysed automatically.
+  appear in the panel. Click **Analyze** or press **V** to grade imported games.
 
 ### Singleplayer
 

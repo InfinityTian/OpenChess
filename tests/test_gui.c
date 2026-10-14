@@ -34,6 +34,20 @@ static int count_non_bg(SDL_Renderer *ren, int x0, int y0, int w, int h, Uint32 
     return n;
 }
 
+static int count_rgb(SDL_Renderer *ren, SDL_Rect rect, Uint8 r, Uint8 g, Uint8 b)
+{
+    Uint8 *pixels = malloc((size_t)rect.w * rect.h * 4);
+    if (!pixels) return -1;
+    if (SDL_RenderReadPixels(ren, &rect, SDL_PIXELFORMAT_RGBA32,
+                             pixels, rect.w * 4) != 0) { free(pixels); return -1; }
+    int count = 0;
+    for (int i = 0; i < rect.w * rect.h; i++)
+        if (pixels[4 * i] == r && pixels[4 * i + 1] == g && pixels[4 * i + 2] == b)
+            count++;
+    free(pixels);
+    return count;
+}
+
 static void do_restart_test(Gui *g)
 {
     board_reset(&g->board);
@@ -123,7 +137,7 @@ static int test_analysis_navigation(SDL_Renderer *ren)
     g->eng_multipv = 0;
     gui_init_assets(g, ren);
     for (int c = RC_BOOK; c <= RC_MISS; c++) {
-        if (c != RC_FORCED && !g->badge_tex[c]) {
+        if (!g->badge_tex[c]) {
             fprintf(stderr, "quality badge %d did not load\n", c);
             return 1;
         }
@@ -141,6 +155,11 @@ static int test_analysis_navigation(SDL_Renderer *ren)
         nodes[i + 1]->cls = RC_BRILLIANT + i;
     }
     gui_render(g, ren);
+    SDL_Rect san_area = { g->panel_x + 68, g->board_y + 226, 60, 21 };
+    if (count_rgb(ren, san_area, 39, 194, 163) < 3) {
+        fprintf(stderr, "SAN text did not use its Brilliant grade colour\n");
+        return 1;
+    }
     SDL_Event click = {0};
     click.type = SDL_MOUSEBUTTONDOWN;
     click.button.button = SDL_BUTTON_LEFT;
@@ -199,6 +218,151 @@ static int test_analysis_navigation(SDL_Renderer *ren)
     g->anim_style = ANIM_NONE;
     gui_handle_event(g, &key);
     if (g->anim_count || g->tree_cur != nodes[3]) return 1;
+
+    /* Switching sidebar tabs must not activate hidden move or FEN controls. */
+    tf_window(g, g->panel_x + PANEL_W * 3 / 4, g->board_y + 205,
+              &click.button.x, &click.button.y);
+    gui_handle_event(g, &click);
+    gui_render(g, ren);
+    if (!g->analysis_summary || g->move_hit_count || g->fen_active) return 1;
+    tf_window(g, g->panel_x + 40, g->board_y + 490,
+              &click.button.x, &click.button.y);
+    gui_handle_event(g, &click);
+    if (g->fen_active || g->san_open || g->tree_cur != nodes[3]) return 1;
+    tf_window(g, g->panel_x + PANEL_W / 4, g->board_y + 205,
+              &click.button.x, &click.button.y);
+    gui_handle_event(g, &click);
+    gui_render(g, ren);
+    if (g->analysis_summary || !g->move_hit_count) return 1;
+    tf_window(g, g->panel_x + (PANEL_W - 1) * 2 / 7, g->board_y + 430,
+              &click.button.x, &click.button.y);
+    gui_handle_event(g, &click);
+    if (g->tree_cur != nodes[2] || g->anim_count) {
+        fprintf(stderr, "evaluation graph did not navigate to its move\n");
+        return 1;
+    }
+    if (g->engine_path[0]) {
+        key.key.keysym.sym = SDLK_v;
+        gui_handle_event(g, &key);
+        for (int i = 0; g->review_on && i < 400; i++) {
+            gui_tick(g, SDL_GetTicks());
+            SDL_Delay(10);
+        }
+        if (!g->rev_report || !nodes[0]->has_eval || !nodes[1]->has_eval ||
+            !nodes[2]->has_eval || nodes[2]->eval_cp != -g->ra_cp ||
+            nodes[1]->eval_cp != g->rb_cp) {
+            fprintf(stderr, "review did not retain side-to-move evaluations for the graph\n");
+            return 1;
+        }
+    }
+    gui_destroy(g);
+    return 0;
+}
+
+static void test_load_position(Gui *g, const char *fen)
+{
+    snprintf(g->fen_text, sizeof g->fen_text, "%s", fen);
+    g->fen_len = (int)strlen(g->fen_text);
+    g->fen_active = true;
+    SDL_Event key = {0};
+    key.type = SDL_KEYDOWN;
+    key.key.keysym.sym = SDLK_RETURN;
+    gui_handle_event(g, &key);
+}
+
+static void test_play_san(Gui *g, const char *san)
+{
+    SDL_Event key = {0};
+    key.type = SDL_KEYDOWN;
+    key.key.keysym.sym = SDLK_RETURN;
+    gui_handle_event(g, &key);
+    SDL_Event text = {0};
+    text.type = SDL_TEXTINPUT;
+    snprintf(text.text.text, sizeof text.text.text, "%s", san);
+    gui_handle_event(g, &text);
+    gui_handle_event(g, &key);
+}
+
+static int test_position_effects(SDL_Renderer *ren)
+{
+    Gui *g = gui_create();
+    if (!g) return 1;
+    g->eng_multipv = 0;
+    gui_init_assets(g, ren);
+    g->scene = SCENE_GAME;
+    g->mode = MODE_ANALYSIS;
+    for (int i = 0; i < 3; i++) if (!g->end_tex[i]) return 1;
+
+    test_load_position(g, "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1");
+    test_play_san(g, "Qg7#");
+    if (g->state != CHECKMATE || !g->end_anim || g->check_anim) {
+        fprintf(stderr, "mate did not start its own end effect\n");
+        return 1;
+    }
+    g->anim_count = 0;
+    g->end_anim = SDL_GetTicks() - 400;
+    Board mate = g->board;
+    gui_render(g, ren);
+    if (memcmp(&mate, &g->board, sizeof mate) != 0) return 1;
+    SDL_Event key = {0};
+    key.type = SDL_KEYDOWN;
+    key.key.keysym.sym = SDLK_LEFT;
+    gui_handle_event(g, &key);
+    if (g->end_anim || g->state != NO_GAME_OVER) return 1;
+    key.key.keysym.sym = SDLK_RIGHT;
+    gui_handle_event(g, &key);
+    if (!g->end_anim || g->state != CHECKMATE) return 1;
+    g->anim_style = ANIM_NONE;
+    key.key.keysym.sym = SDLK_LEFT;
+    gui_handle_event(g, &key);
+    key.key.keysym.sym = SDLK_RIGHT;
+    gui_handle_event(g, &key);
+    if (g->end_anim || g->anim_count || g->state != CHECKMATE) return 1;
+    gui_render(g, ren);
+    g->anim_style = ANIM_ARCADE;
+
+    test_load_position(g, "7k/5Q2/6K1/8/8/8/8/8 w - - 0 1");
+    test_play_san(g, "Qe6");
+    if (g->state != STALEMATE || !g->end_anim || g->check_anim) {
+        fprintf(stderr, "stalemate did not start the draw effect\n");
+        return 1;
+    }
+    g->anim_count = 0;
+    g->end_anim = SDL_GetTicks() - 400;
+    Board draw = g->board;
+    gui_render(g, ren);
+    if (memcmp(&draw, &g->board, sizeof draw) != 0) return 1;
+
+    test_load_position(g, "7k/8/6K1/8/8/8/8/8 w - - 0 1");
+    if (g->state != INSUFFICIENT_MATERIAL || g->end_anim) return 1;
+    gui_render(g, ren); /* direct FEN jumps show settled draw badges */
+
+    test_load_position(g, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+    gui_render(g, ren);
+    SDL_Event click = {0};
+    click.type = SDL_MOUSEBUTTONDOWN;
+    click.button.button = SDL_BUTTON_LEFT;
+    sq_window(g, ren, algebraic_to_sq("e2"), &click.button.x, &click.button.y);
+    gui_handle_event(g, &click);
+    SDL_Event motion = {0};
+    motion.type = SDL_MOUSEMOTION;
+    motion.motion.state = SDL_BUTTON_LMASK;
+    motion.motion.x = click.button.x + 1; motion.motion.y = click.button.y;
+    gui_handle_event(g, &motion);
+    if (g->dragging) { fprintf(stderr, "click jitter started a drag\n"); return 1; }
+    sq_window(g, ren, algebraic_to_sq("e4"), &motion.motion.x, &motion.motion.y);
+    motion.motion.x += 12;
+    gui_handle_event(g, &motion);
+    if (!g->dragging) return 1;
+    gui_render(g, ren);
+    click.type = SDL_MOUSEBUTTONUP;
+    click.button.x = motion.motion.x; click.button.y = motion.motion.y;
+    gui_handle_event(g, &click);
+    if (g->ply != 1 || g->anim_count != 1 || !g->anim_queue[0].fast ||
+        fabsf(g->anim_queue[0].cursor_x - g->mouse.x) > 1) {
+        fprintf(stderr, "drop did not settle from the pointer position\n");
+        return 1;
+    }
     gui_destroy(g);
     return 0;
 }
@@ -258,6 +422,7 @@ int main(void)
 
     if (test_engine_config() != 0) return 1;
     if (test_analysis_navigation(ren) != 0) return 1;
+    if (test_position_effects(ren) != 0) return 1;
 
     /* ---- welcome menu renders (title + mode list) ---- */
     g->scene = SCENE_MENU;

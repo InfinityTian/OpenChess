@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <title>Book</title>
-  <circle cx="64" cy="64" r="48" fill="#D5A47C"/>
+  <circle cx="64" cy="64" r="48" fill="#D6A47E"/>
   <g fill="#FFFFFF">
     <path d="M31 38.5c9.3-.2 17.3 1.7 25 6.4v45.2c-7.4-4.4-15.8-6.3-25-5.9V38.5Z"/>
     <path d="M97 38.5c-9.3-.2-17.3 1.7-25 6.4v45.2c7.4-4.4 15.8-6.3 25-5.9V38.5Z"/>

@@ -24,6 +24,7 @@ const char *review_badge_glyph(ReviewClass c)
 {
     if (c == RC_BEST) return "\xE2\x98\x85";   /* U+2605 BLACK STAR */
     if (c == RC_BOOK) return "B";
+    if (c == RC_FORCED) return "\xE2\x86\x92"; /* right arrow */
     const char *s = review_glyph(c);
     return *s ? s : NULL;
 }

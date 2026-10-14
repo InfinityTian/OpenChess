@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Forced</title>
+  <circle cx="64" cy="64" r="48" fill="#96AF8B"/>
+  <path fill="#FFFFFF" d="M33 52 H60 V34 L94 64 L60 94 V76 H33 Z"/>
+</svg>
