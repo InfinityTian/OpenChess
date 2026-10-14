@@ -4,6 +4,7 @@
 #include "board.h"
 #include "move.h"
 #include "ai.h"
+#include "engine_install.h"
 #include "net.h"
 #include "online.h"
 #include "puzzle.h"
@@ -185,6 +186,8 @@ typedef struct {
     bool   engine_custom_focus;
     char   engine_custom[512];
     char   engine_status[128];
+    EngineInstall *engine_install;
+    char   engine_install_status[128];
     Scene  engine_return_scene;
     int    settings_tab;        /* 0 = Engine, 1 = Gameplay, 2 = Audio/Video */
     int    settings_row;        /* focused row within the gameplay/AV tabs */
@@ -450,6 +453,8 @@ void gui_init_assets(Gui *g, SDL_Renderer *ren);
 void gui_load_config(Gui *g, const char *path);
 void gui_save_config(Gui *g);
 void gui_destroy(Gui *g);
+/* Detect configured/system engines first, otherwise install Stockfish. */
+void gui_ensure_engine(Gui *g);
 void gui_handle_event(Gui *g, const SDL_Event *e);
 void gui_tick(Gui *g, Uint32 now);
 void gui_render(Gui *g, SDL_Renderer *ren);

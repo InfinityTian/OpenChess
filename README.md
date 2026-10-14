@@ -60,7 +60,13 @@ FEN import/export, board flipping, move animations, and SAN text entry.
 - **libwebsockets** – optional; needed only for Online Multiplayer (also builds
   the `server/openchessd` game server).
 - **SDL2_mixer** – optional; needed only for move sounds.
-- **Stockfish** – optional; needed only for Singleplayer.
+- **Stockfish** – used for Singleplayer and analysis. At startup OpenChess detects
+  a configured engine, a `stockfish` executable beside the app, its private
+  installation, common system locations and PATH. If none is found, it downloads
+  the official Stockfish 19 universal build in the background, verifies SHA-256,
+  and installs it under the user data directory (`engines/stockfish`). No administrator
+  privileges or package manager are required. Settings > Engine shows installation
+  status and lets you retry after a network failure. Existing engines are reused.
 
 See [`docs/BUILD.md`](docs/BUILD.md) for install commands per platform.
 
@@ -188,7 +194,11 @@ were collected by a third-party repository — see
 - **SDL2**、**SDL2_ttf**、**SDL2_image**。
 - **SDL2_net** —— 可选，仅本地多人模式需要。
 - **libwebsockets** —— 可选，仅在线对战需要（同时构建 `server/openchessd` 服务器）。
-- **Stockfish** —— 可选，仅单人模式需要。
+- **Stockfish** —— 单人模式和分析使用。启动时先检测配置路径、程序旁的
+  Stockfish、应用自己的安装目录、系统常见目录和 PATH；没有找到时后台下载
+  官方 Stockfish 19 通用版本，校验 SHA-256 后安装到用户数据目录下的
+  `engines/stockfish`，无需管理员权限或包管理器。设置 > Engine 显示安装
+  状态，网络失败后可点击重试；已有引擎直接复用。
 
 各平台安装命令见 [`docs/BUILD.md`](docs/BUILD.md)。
 

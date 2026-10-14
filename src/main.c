@@ -76,6 +76,7 @@ int main(int argc, char **argv) {
     }
     gui_load_config(gui, path_config());
     gui_init_assets(gui, ren);
+    gui_ensure_engine(gui);
     gui_apply_vsync(gui);
 
     {

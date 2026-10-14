@@ -37,7 +37,7 @@ VERSION ?= $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 CFLAGS  += -DOPENCHESS_VERSION=\"$(VERSION)\"
 
 BIN      = openchess$(EXE)
-SRC_CORE = src/board.c src/move.c src/pgn.c src/movetree.c src/review.c src/opening.c src/fen.c src/ai.c src/themes.c src/paths.c
+SRC_CORE = src/board.c src/move.c src/pgn.c src/movetree.c src/review.c src/opening.c src/fen.c src/ai.c src/themes.c src/paths.c src/engine_install.c
 OBJ_CORE = $(SRC_CORE:.c=.o)
 # Transport abstraction + LAN (SDL2_net) and online (libwebsockets) backends.
 NET_SRC  = src/transport.c src/net_tcp.c src/net_ws.c
@@ -113,14 +113,18 @@ tests/test_fen: tests/test_fen.c $(OBJ_CORE)
 tests/test_pgn: tests/test_pgn.c $(OBJ_CORE)
 	$(CC) $(CFLAGS) $^ -o $@$(EXE) -lm
 
+tests/test_engine_install: tests/test_engine_install.c $(OBJ_CORE)
+	$(CC) $(CFLAGS) $^ -o $@$(EXE) -lm
+
 tests/test_ai: tests/test_ai.c $(OBJ_CORE)
 	$(CC) $(CFLAGS) $^ -o $@$(EXE) -lm
 
-test: tests/test_rules tests/test_fen tests/test_pgn tests/test_ai tests/test_transport tests/test_proto tests/test_puzzle tests/test_review tests/test_opening tests/test_movetree tests/test_net tests/test_local tests/test_gui $(TEST_ONLINE) $(SERVER_TARGET)
+test: tests/test_rules tests/test_fen tests/test_pgn tests/test_ai tests/test_engine_install tests/test_transport tests/test_proto tests/test_puzzle tests/test_review tests/test_opening tests/test_movetree tests/test_net tests/test_local tests/test_gui $(TEST_ONLINE) $(SERVER_TARGET)
 	./tests/test_rules$(EXE)
 	./tests/test_fen$(EXE)
 	./tests/test_pgn$(EXE)
 	./tests/test_ai$(EXE)
+	./tests/test_engine_install$(EXE)
 	./tests/test_transport$(EXE)
 	./tests/test_proto$(EXE)
 	./tests/test_puzzle$(EXE)
@@ -154,7 +158,7 @@ dmg: $(BIN)
 	./scripts/make_dmg.sh
 
 clean:
-	rm -f $(BIN) chess $(SERVER) tests/test_rules$(EXE) tests/test_fen$(EXE) tests/test_pgn$(EXE) tests/test_ai$(EXE) tests/test_transport$(EXE) tests/test_proto$(EXE) tests/test_puzzle$(EXE) tests/test_review$(EXE) tests/test_opening$(EXE) tests/test_movetree$(EXE) tests/test_net$(EXE) tests/test_local$(EXE) tests/test_online$(EXE) tests/test_gui$(EXE) gui_smoke.bmp $(OBJ_CORE)
+	rm -f $(BIN) chess $(SERVER) tests/test_rules$(EXE) tests/test_fen$(EXE) tests/test_pgn$(EXE) tests/test_ai$(EXE) tests/test_engine_install$(EXE) tests/test_transport$(EXE) tests/test_proto$(EXE) tests/test_puzzle$(EXE) tests/test_review$(EXE) tests/test_opening$(EXE) tests/test_movetree$(EXE) tests/test_net$(EXE) tests/test_local$(EXE) tests/test_online$(EXE) tests/test_gui$(EXE) gui_smoke.bmp $(OBJ_CORE)
 	rm -rf dist
 
 .PHONY: all test run clean install uninstall app dmg

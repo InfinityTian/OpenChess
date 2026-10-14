@@ -1,19 +1,21 @@
 #include "ai.h"
 #include "fen.h"
+#include "paths.h"
 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <process.h>
 #include <io.h>
-#define ai_access(p) (_access((p), 0))
+#define ai_file_access(p) (_access((p), 0))
 #else
-#define ai_access(p) (access((p), X_OK))
+#define ai_file_access(p) (access((p), X_OK))
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -22,6 +24,12 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #endif
+
+static int ai_access(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode) ? ai_file_access(path) : -1;
+}
 
 struct AiEngine {
 #ifdef _WIN32
@@ -229,7 +237,8 @@ const char *ai_find_engine(const char *configured)
         NULL
     };
     const char *sep = ";";
-    const char *exe = "stockfish.exe";
+    const char *executables[] = {"stockfish.exe", "stockfish-windows-x86-64-universal.exe",
+                                "stockfish-windows-arm64-universal.exe", NULL};
 #else
     static const char *common[] = {
         "/opt/homebrew/bin/stockfish",
@@ -238,8 +247,17 @@ const char *ai_find_engine(const char *configured)
         NULL
     };
     const char *sep = ":";
-    const char *exe = "stockfish";
+    const char *executables[] = {"stockfish", "stockfish-macos-universal",
+                                "stockfish-linux-x86-64-universal",
+                                "stockfish-linux-arm64-universal", NULL};
 #endif
+    /* Portable installations and our private install do not need PATH changes. */
+    for (int i = 0; executables[i]; i++) {
+        snprintf(found, sizeof found, "%s/%s", path_exe_dir(), executables[i]);
+        if (ai_access(found) == 0) return found;
+    }
+    snprintf(found, sizeof found, "%s", path_stockfish());
+    if (ai_access(found) == 0) return found;
     for (int i = 0; common[i]; i++) {
         if (ai_access(common[i]) == 0) {
             snprintf(found, sizeof found, "%s", common[i]);
@@ -252,10 +270,12 @@ const char *ai_find_engine(const char *configured)
         char *dup = strdup(path);
         if (dup) {
             for (char *tok = strtok(dup, sep); tok; tok = strtok(NULL, sep)) {
-                snprintf(found, sizeof found, "%s/%s", tok, exe);
-                if (ai_access(found) == 0) {
-                    free(dup);
-                    return found;
+                for (int i = 0; executables[i]; i++) {
+                    snprintf(found, sizeof found, "%s/%s", tok, executables[i]);
+                    if (ai_access(found) == 0) {
+                        free(dup);
+                        return found;
+                    }
                 }
             }
             free(dup);

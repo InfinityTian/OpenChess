@@ -24,6 +24,9 @@ void path_make_parent(const char *file);
 /* Base data directory (XDG_DATA_HOME/openchess or %APPDATA%\openchess). */
 const char *path_data_dir(void);
 
+/* Stable path for the privately installed Stockfish executable. */
+const char *path_stockfish(void);
+
 /* Directory where exported PGN games are stored. */
 const char *path_games_dir(void);
 

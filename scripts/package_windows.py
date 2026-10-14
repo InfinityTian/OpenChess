@@ -87,9 +87,11 @@ for package in sorted(packages):
     f"OpenChess {tag} - Windows 10/11 x64 portable build\n\n"
     "Extract the entire ZIP, then run OpenChess.bat (or openchess.exe).\n"
     "Keep assets and DLL files beside the executable. MSYS2 is not required.\n\n"
-    "Stockfish is optional and is not bundled. Download a Windows build from\n"
-    "https://stockfishchess.org/download/ and select it in Settings > Engine.\n"
-    "You can also place stockfish.exe here and use OpenChess.bat to find it.\n\n"
+    "OpenChess detects existing engines first. When none is found it installs\n"
+    "official Stockfish automatically under %APPDATA%\\openchess\\engines.\n"
+    "Internet access is needed for the first installation. Settings > Engine\n"
+    "shows status and allows retrying. You can also select a custom engine or\n"
+    "place stockfish.exe beside openchess.exe.\n\n"
     "Settings and exported games: %APPDATA%\\openchess\\\n",
     encoding="utf-8")
 # Exercise the packaged executable with all build-tool directories removed.

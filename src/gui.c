@@ -13,6 +13,9 @@
 #include <time.h>
 #include <unistd.h>
 #include <SDL_image.h>
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 #define GUI_PI 3.14159265358979323846f
 
@@ -2029,6 +2032,7 @@ static void destroy_thumbs(SDL_Texture ***arr, int n)
 void gui_destroy(Gui *g)
 {
     if (!g) return;
+    engine_install_free(g->engine_install);
     if (g->ai) ai_stop(g->ai);
     if (g->eval_ai) ai_stop(g->eval_ai);
     if (g->net) {
@@ -3541,6 +3545,21 @@ static void handle_appearance_mousedown(Gui *g)
 
 #define ENGINE_MAX 8
 
+void gui_ensure_engine(Gui *g)
+{
+    if (g->engine_install) return;
+    const char *existing = ai_find_engine(g->engine_path);
+    if (existing) {
+        snprintf(g->engine_path, sizeof g->engine_path, "%s", existing);
+        g->config_dirty = true;
+        return;
+    }
+    g->engine_install = engine_install_start();
+    snprintf(g->engine_install_status, sizeof g->engine_install_status, "%s",
+             g->engine_install ? "Downloading and installing Stockfish..."
+                               : "Stockfish installation failed. Click to retry.");
+}
+
 static void detect_engines(Gui *g)
 {
     g->engine_count = 0;
@@ -3555,12 +3574,21 @@ static void detect_engines(Gui *g)
     if (path) {
         char *dup = strdup(path);
         if (dup) {
-            for (char *dir = strtok(dup, ":"); dir && g->engine_count < ENGINE_MAX;
-                 dir = strtok(NULL, ":")) {
+#ifdef _WIN32
+            const char *sep = ";", *suffix = ".exe";
+#else
+            const char *sep = ":", *suffix = "";
+#endif
+            for (char *dir = strtok(dup, sep); dir && g->engine_count < ENGINE_MAX;
+                 dir = strtok(NULL, sep)) {
                 for (int i = 0; names[i] && g->engine_count < ENGINE_MAX; i++) {
                     char full[512];
-                    snprintf(full, sizeof full, "%s/%s", dir, names[i]);
+                    snprintf(full, sizeof full, "%s/%s%s", dir, names[i], suffix);
+#ifdef _WIN32
+                    if (_access(full, 0) != 0) continue;
+#else
                     if (access(full, X_OK) != 0) continue;
+#endif
                     bool seen = false;
                     for (int j = 0; j < g->engine_count; j++)
                         if (strcmp(g->engine_candidates[j], full) == 0) seen = true;
@@ -3734,6 +3762,12 @@ static void handle_engine_textinput(Gui *g, const SDL_TextInputEvent *te)
 
 static void handle_engine_mousedown(Gui *g)
 {
+    SDL_Rect install = {80, 380, 440, 40};
+    if (!g->engine_path[0] && pt_in(&install, g->mouse.x, g->mouse.y)) {
+        gui_ensure_engine(g);
+        detect_engines(g);
+        return;
+    }
     SDL_Rect items[ENGINE_MAX], custom, back;
     SDL_Rect minus[ENG_CTRL_COUNT], plus[ENG_CTRL_COUNT];
     engine_rects(g, items, &custom, &back);
@@ -4951,6 +4985,23 @@ static void hostjoin_tick(Gui *g)
 
 void gui_tick(Gui *g, Uint32 now)
 {
+    if (g->engine_install) {
+        int result = engine_install_poll(g->engine_install);
+        if (result) {
+            engine_install_free(g->engine_install);
+            g->engine_install = NULL;
+            AiEngine *probe = result > 0 ? ai_start(path_stockfish()) : NULL;
+            if (probe) {
+                ai_stop(probe);
+                /* A user may have chosen another engine while downloading. */
+                if (!g->engine_path[0]) apply_engine(g, path_stockfish());
+                detect_engines(g);
+            }
+            snprintf(g->engine_install_status, sizeof g->engine_install_status, "%s",
+                     probe ? "Stockfish installed successfully."
+                           : "Stockfish installation failed. Click to retry.");
+        }
+    }
     if (g->scene == SCENE_HOSTJOIN) {
         hostjoin_tick(g);
         return;
@@ -7111,7 +7162,7 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
 
     if (!engine_ok)
         render_text_centered(g, g->font_small,
-                             "Stockfish not found - run 'brew install stockfish'",
+                             g->engine_install_status[0] ? g->engine_install_status : "Stockfish unavailable. Open Settings > Engine to install.",
                              g->win_w / 2, 610, (SDL_Color){ 255, 140, 120, 255 });
     if (g->menu_msg[0])
         render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 640,
@@ -7564,6 +7615,13 @@ static void render_settings_tabs(Gui *g, SDL_Renderer *ren)
 
 static void render_settings_engine(Gui *g, SDL_Renderer *ren)
 {
+    if (g->engine_install_status[0] || !g->engine_path[0]) {
+        SDL_Rect install = {80, 380, 440, 40};
+        draw_rect(ren, &install, 45, 65, 80, true);
+        render_text(g, g->font_small,
+                    g->engine_install_status[0] ? g->engine_install_status : "Install Stockfish (click)",
+                    install.x + 8, install.y + 10, (SDL_Color){210, 225, 235, 255});
+    }
     char cur[600];
     snprintf(cur, sizeof cur, "Current: %s",
              g->engine_path[0] ? g->engine_path : "(none)");

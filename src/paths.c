@@ -206,6 +206,17 @@ void path_game_file(char *out, size_t n, const char *name)
     snprintf(out, n, "%s/%s", path_games_dir(), clean);
 }
 
+const char *path_stockfish(void)
+{
+    static char path[PATHS_MAX];
+#ifdef _WIN32
+    snprintf(path, sizeof path, "%s/engines/stockfish/stockfish.exe", path_data_dir());
+#else
+    snprintf(path, sizeof path, "%s/engines/stockfish/stockfish", path_data_dir());
+#endif
+    return path;
+}
+
 void path_make_parent(const char *file)
 {
     if (!file || !*file) return;

@@ -14,8 +14,9 @@ typedef struct AiEngine AiEngine;
 
 /*
  * Locate an engine binary. If `configured` is a readable/executable path it is
- * used; otherwise a `stockfish` binary is searched for in common locations and
- * on PATH. Returns a pointer to a static buffer, or NULL when not found.
+ * used; otherwise Stockfish is searched beside the executable, in the private
+ * installation directory, common locations and PATH. Returns a pointer to a
+ * static buffer, or NULL when not found.
  */
 const char *ai_find_engine(const char *configured);
 
