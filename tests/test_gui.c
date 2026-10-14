@@ -114,8 +114,99 @@ static void tf_window(const Gui *g, float bx, float by, int *wx, int *wy)
     *wy = (int)lroundf((g->tf_vpy + by) * s / uy);
 }
 
+/* Navigation must track every input even when none of the preceding visual
+ * transitions have finished, including a direction change and castling. */
+static int test_analysis_navigation(SDL_Renderer *ren)
+{
+    Gui *g = gui_create();
+    if (!g) return 1;
+    g->eng_multipv = 0;
+    gui_init_assets(g, ren);
+    for (int c = RC_BOOK; c <= RC_MISS; c++) {
+        if (c != RC_FORCED && !g->badge_tex[c]) {
+            fprintf(stderr, "quality badge %d did not load\n", c);
+            return 1;
+        }
+    }
+    g->scene = SCENE_GAME;
+    g->mode = MODE_ANALYSIS;
+    g->pgntree = mt_new_root(&g->board);
+    g->tree_cur = g->pgntree;
+    MoveNode *nodes[8] = { g->pgntree };
+    const char *uci[] = { "e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "e1g1" };
+    for (int i = 0; i < 7; i++) {
+        Move m;
+        if (!ai_uci_to_move(&nodes[i]->board, uci[i], &m)) return 1;
+        nodes[i + 1] = mt_add_child(nodes[i], m, NULL);
+        nodes[i + 1]->cls = RC_BRILLIANT + i;
+    }
+    gui_render(g, ren);
+    SDL_Event click = {0};
+    click.type = SDL_MOUSEBUTTONDOWN;
+    click.button.button = SDL_BUTTON_LEFT;
+    tf_window(g, g->panel_x + PANEL_W * 3 / 4, g->board_y + 398,
+              &click.button.x, &click.button.y);
+    for (int i = 1; i <= 7; i++) {
+        gui_handle_event(g, &click);
+        if (g->ply != i || g->tree_cur != nodes[i] || g->anim_count != 1 ||
+            g->anim_queue[0].to != MOVE_TO(nodes[i]->move) ||
+            memcmp(&g->board, &nodes[i]->board, sizeof(Board)) != 0) {
+            fprintf(stderr, "rapid Next click left stale animation/position at ply %d\n", i);
+            return 1;
+        }
+        /* The first two clicks arrive before any render; later ones arrive
+         * halfway through the transition. */
+        if (i >= 2) {
+            gui_anim_advance(g, 1000);
+            gui_anim_advance(g, 1000 + g->anim_queue[0].dur / 2);
+        }
+    }
+    gui_handle_event(g, &click); /* End of line settles the final animation. */
+    if (g->anim_count || g->ply != 7) return 1;
+
+    SDL_Event key = {0};
+    key.type = SDL_KEYDOWN;
+    key.key.keysym.sym = SDLK_LEFT;
+    gui_handle_event(g, &key);
+    if (g->anim_count != 1 || !g->anim_queue[0].has_rook ||
+        g->anim_queue[0].rfrom != algebraic_to_sq("f1") ||
+        g->anim_queue[0].rto != algebraic_to_sq("h1")) {
+        fprintf(stderr, "reverse castling did not animate both pieces\n");
+        return 1;
+    }
+    key.key.keysym.sym = SDLK_RIGHT;
+    gui_handle_event(g, &key);
+    if (g->anim_count != 1 || g->anim_queue[0].reverse || g->tree_cur != nodes[7]) {
+        fprintf(stderr, "direction change retained a reverse transition\n");
+        return 1;
+    }
+
+    gui_render(g, ren);
+    bool jumped = false;
+    for (int i = 0; i < g->move_hit_count; i++) {
+        if (g->move_hit_node[i] != nodes[2]) continue;
+        SDL_Rect r = g->move_hit_rect[i];
+        tf_window(g, r.x + r.w / 2, r.y + r.h / 2,
+                  &click.button.x, &click.button.y);
+        gui_handle_event(g, &click);
+        jumped = true;
+        break;
+    }
+    if (!jumped || g->anim_count || g->tree_cur != nodes[2] || g->ply != 2) {
+        fprintf(stderr, "move-list jump retained a stale animation\n");
+        return 1;
+    }
+    g->anim_style = ANIM_NONE;
+    gui_handle_event(g, &key);
+    if (g->anim_count || g->tree_cur != nodes[3]) return 1;
+    gui_destroy(g);
+    return 0;
+}
+
 int main(void)
 {
+    /* Paths are cached on first use (including puzzle loading in gui_create). */
+    setenv("XDG_DATA_HOME", "/tmp/openchess-test-data", 1);
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
@@ -166,6 +257,7 @@ int main(void)
     }
 
     if (test_engine_config() != 0) return 1;
+    if (test_analysis_navigation(ren) != 0) return 1;
 
     /* ---- welcome menu renders (title + mode list) ---- */
     g->scene = SCENE_MENU;
@@ -315,7 +407,6 @@ int main(void)
     }
 
     /* ---- PGN export through the save prompt ---- */
-    setenv("XDG_DATA_HOME", "/tmp/openchess-test-data", 1);
     snprintf(g->white_name, sizeof g->white_name, "Alice");
     snprintf(g->black_name, sizeof g->black_name, "Bob");
     SDL_Event save = {0};

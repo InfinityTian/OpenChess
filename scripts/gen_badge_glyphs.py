@@ -15,6 +15,7 @@ import sys
 from fontTools.ttLib import TTFont
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
+from fontTools.pens.boundsPen import BoundsPen
 from fontTools.misc.transform import Transform
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -42,8 +43,27 @@ def text_path(font, glyphset, text, size, baseline, letter_spacing):
     for ch in text:
         gname = font.getBestCmap()[ord(ch)]
         widths.append(glyphset[gname].width * scale)
-    total = sum(widths) + letter_spacing * (len(text) - 1)
-    x = 64.0 - total / 2.0
+    # Fit and visually centre the ink rather than the font's advance box.
+    # This keeps !, ?, and paired glyphs equally legible in 16px list badges.
+    bounds = []
+    x = 0.0
+    for ch, w in zip(text, widths):
+        pen = BoundsPen(glyphset)
+        glyphset[font.getBestCmap()[ord(ch)]].draw(pen)
+        x0, y0, x1, y1 = pen.bounds
+        bounds.append((x + x0 * scale, -y1 * scale,
+                       x + x1 * scale, -y0 * scale))
+        x += w + letter_spacing
+    left = min(b[0] for b in bounds)
+    right = max(b[2] for b in bounds)
+    top = min(b[1] for b in bounds)
+    bottom = max(b[3] for b in bounds)
+    fit = min(74.0 / (right - left), 68.0 / (bottom - top))
+    size *= fit
+    widths = [w * fit for w in widths]
+    letter_spacing *= fit
+    x = 64.0 - (left + right) * fit / 2.0
+    baseline = 64.0 - (top + bottom) * fit / 2.0
     parts = []
     for ch, w in zip(text, widths):
         d, _ = glyph_path(font, glyphset, ch, size, baseline, x, letter_spacing)
@@ -70,7 +90,7 @@ TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" v
 
 THUMB = """<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <title>Excellent</title>
-  <circle cx="64" cy="64" r="48" fill="#95BB4A"/>
+  <circle cx="64" cy="64" r="48" fill="#81B64C"/>
   <path fill="#FFFFFF" d="M52 96 L52 58 C52 58 50 52 50 46 C50 38 56 34 61 38 C65 41 66 47 66 52 L66 56 L82 56 C87 56 90 59 89 64 L85 88 C84 93 80 96 75 96 Z M38 58 L46 58 L46 96 L38 96 C35 96 33 94 33 91 L33 63 C33 60 35 58 38 58 Z"/>
 </svg>
 """

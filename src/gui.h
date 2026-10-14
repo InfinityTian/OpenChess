@@ -50,7 +50,7 @@ typedef struct {
  * (see themes.h); the user selects indices into Gui.boards / Gui.pieces. */
 
 typedef enum {
-    ANIM_ARCADE = 0,   /* springy overshoot + lift + scale pop */
+    ANIM_ARCADE = 0,   /* eased straight slide with a fading colour trail */
     ANIM_SLIDE,
     ANIM_FADE,
     ANIM_NONE,

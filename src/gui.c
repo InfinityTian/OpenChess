@@ -837,6 +837,10 @@ static void set_msg(Gui *g, const char *fmt, const char *arg)
 /* Step one ply forward in the tree, animating the played move. */
 static void tree_go_forward(Gui *g)
 {
+    /* The board already contains the previous move's destination. Dropping
+     * its visual transition makes repeated navigation settle immediately. */
+    clear_anims(g);
+    g->check_anim = 0;
     if (!g->tree_cur || !g->tree_cur->first) return;
     MoveNode *child = g->tree_cur->first;
     enqueue_move_anim(g, &g->tree_cur->board, child->move);
@@ -848,6 +852,8 @@ static void tree_go_forward(Gui *g)
 /* Step one ply back in the tree, animating the move in reverse. */
 static void tree_go_back(Gui *g)
 {
+    clear_anims(g);
+    g->check_anim = 0;
     MoveNode *node = g->tree_cur;
     if (!node || !node->parent) return;
     Move m = node->move;
@@ -863,6 +869,14 @@ static void tree_go_back(Gui *g)
         captured = pre->board[cap_sq];
     }
     enqueue_anim_manual(g, piece, MOVE_TO(m), MOVE_FROM(m), captured, cap_sq, true);
+    if (g->anim_count && (MOVE_FLAGS(m) & (FLAG_CASTLE_K | FLAG_CASTLE_Q))) {
+        AnimStep *s = &g->anim_queue[g->anim_count - 1];
+        bool kingside = (MOVE_FLAGS(m) & FLAG_CASTLE_K) != 0;
+        s->has_rook = true;
+        s->rfrom = MOVE_TO(m) + (kingside ? -1 : 1);
+        s->rto = MOVE_TO(m) + (kingside ? 1 : -2);
+        s->rook = pre->board[s->rto];
+    }
     g->tree_cur = node->parent;
     sync_from_tree(g);
     analysis_refresh(g);
@@ -4162,6 +4176,12 @@ static void handle_game_textinput(Gui *g, const SDL_TextInputEvent *te)
     g->input.text[g->input.len] = 0;
 }
 
+static void analysis_nav_rect(const Gui *g, int index, SDL_Rect *r)
+{
+    *r = (SDL_Rect){ g->panel_x + index * (PANEL_W / 2 + 2),
+                    g->board_y + 384, PANEL_W / 2 - 2, 28 };
+}
+
 static void handle_game_mousedown(Gui *g)
 {
     SDL_Point p = g->mouse;
@@ -4171,8 +4191,19 @@ static void handle_game_mousedown(Gui *g)
 
     /* Click a previous move (or a variation) to jump to that position. */
     if (g->mode == MODE_ANALYSIS) {
+        for (int i = 0; i < 2; i++) {
+            SDL_Rect r;
+            analysis_nav_rect(g, i, &r);
+            if (pt_in(&r, p.x, p.y)) {
+                if (i == 0) tree_go_back(g);
+                else tree_go_forward(g);
+                return;
+            }
+        }
         for (int i = 0; i < g->move_hit_count; i++) {
             if (pt_in(&g->move_hit_rect[i], p.x, p.y)) {
+                clear_anims(g);
+                g->check_anim = 0;
                 g->tree_cur = g->move_hit_node[i];
                 sync_from_tree(g);
                 analysis_refresh(g);
@@ -4929,36 +4960,34 @@ static void draw_ring_thick(SDL_Renderer *ren, int cx, int cy, int rad,
 static void draw_capture_ring(Gui *g, SDL_Renderer *ren, int cx, int cy,
                               int sq, Uint8 alpha);
 
-/* Straight comet trail behind a sliding piece: uniform width with a fade, and
- * a length that grows from 0, holds ~3 squares, then shrinks to 0. Blue for
- * White pieces, red for Black. */
+/* Straight trail behind a sliding piece: grows to three squares and fades
+ * on arrival. Cyan for White pieces, coral for Black. */
 static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
                             float fx, float fy, float tx, float ty, float t)
 {
     if (!WHITE_PIECE(piece) && !BLACK_PIECE(piece)) return;
     bool white = WHITE_PIECE(piece);
-    Uint8 cr = white ? 80 : 235, cg = white ? 170 : 80, cb = white ? 245 : 70;
+    Uint8 cr = white ? 80 : 255, cg = white ? 210 : 92, cb = white ? 245 : 100;
 
     float ex = tx - fx, ey = ty - fy;
     float D = sqrtf(ex * ex + ey * ey);
     if (D < 2.0f) return;
     float ux = ex / D, uy = ey / D;
 
-    /* Length follows the *linear* progress (grows, holds, shrinks); the head
-     * follows the eased position. */
-    float d = t * D;                  /* travelled */
-    float r = (1.0f - t) * D;         /* remaining */
-    float L = d < r ? d : r;
+    /* Keep the tail inside the travelled segment, including at the start.
+     * Let it fade behind the arriving piece, as in Trail.mov. */
+    float e = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+    float L = e * D;
     float maxL = 3.0f * (float)g->sq;
     if (L > maxL) L = maxL;
     if (L < 1.0f) return;
 
-    float e = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
     /* Head is the piece's current centre; tail is L back along the direction. */
     float hx = fx + ex * e, hy = fy + ey * e;
     float tlx = hx - ux * L, tly = hy - uy * L;
-    float hw = g->sq * 0.22f;         /* uniform half-width (thin) */
+    float hw = g->sq * 0.30f;
     float px = -uy * hw, py = ux * hw;
+    Uint8 opacity = (Uint8)(165.0f * (1.0f - t * t));
 
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
 #if SDL_VERSION_ATLEAST(2, 0, 18)
@@ -4967,7 +4996,7 @@ static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
     v[1].position = (SDL_FPoint){ hx - px, hy - py };
     v[2].position = (SDL_FPoint){ tlx - px, tly - py };
     v[3].position = (SDL_FPoint){ tlx + px, tly + py };
-    SDL_Color head = { cr, cg, cb, 150 };
+    SDL_Color head = { cr, cg, cb, opacity };
     SDL_Color tail = { cr, cg, cb, 0 };
     v[0].color = head; v[1].color = head;
     v[2].color = tail; v[3].color = tail;
@@ -4983,7 +5012,7 @@ static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
         float s = (float)i / (float)N;           /* 0 at head, 1 at tail */
         int cx = (int)lroundf(hx - ux * L * s);
         int cy = (int)lroundf(hy - uy * L * s);
-        int a = (int)(150.0f * (1.0f - s));
+        int a = (int)(opacity * (1.0f - s));
         SDL_SetRenderDrawColor(ren, cr, cg, cb, (Uint8)a);
         fill_circle(ren, cx, cy, (int)hw);
     }
@@ -5488,7 +5517,7 @@ static void render_status(Gui *g)
     } else if (g->mode == MODE_ANALYSIS) {
         if (!g->eval_ai)
             render_text(g, g->font_small, "Analysis: no engine",
-                        g->panel_x, g->board_y + 30,
+                        g->panel_x, g->board_y + (g->ply > 0 ? 52 : 30),
                         (SDL_Color){ 150, 210, 230, 255 });
     }
 }
@@ -6036,16 +6065,16 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
 static bool review_badge_color(ReviewClass c, Uint8 *r, Uint8 *g, Uint8 *b)
 {
     switch (c) {
-        case RC_BRILLIANT:  *r = 27;  *g = 172; *b = 166; return true;  /* teal */
-        case RC_GREAT:      *r = 91;  *g = 139; *b = 176; return true;  /* blue */
+        case RC_BRILLIANT:  *r = 39;  *g = 194; *b = 163; return true;  /* teal */
+        case RC_GREAT:      *r = 116; *g = 153; *b = 191; return true;  /* blue */
         case RC_BEST:       *r = 129; *g = 182; *b = 76;  return true;  /* green */
-        case RC_EXCELLENT:  *r = 149; *g = 187; *b = 74;  return true;  /* green */
-        case RC_GOOD:       *r = 149; *g = 187; *b = 74;  return true;  /* green */
-        case RC_BOOK:       *r = 168; *g = 136; *b = 101; return true;  /* brown */
-        case RC_INACCURACY: *r = 240; *g = 178; *b = 50;  return true;  /* amber */
-        case RC_MISTAKE:    *r = 229; *g = 143; *b = 42;  return true;  /* orange */
-        case RC_BLUNDER:    *r = 202; *g = 52;  *b = 49;  return true;  /* red */
-        case RC_MISS:       *r = 202; *g = 52;  *b = 49;  return true;  /* red */
+        case RC_EXCELLENT:  *r = 129; *g = 182; *b = 76;  return true;  /* green */
+        case RC_GOOD:       *r = 150; *g = 182; *b = 117; return true;  /* sage */
+        case RC_BOOK:       *r = 213; *g = 164; *b = 124; return true;  /* brown */
+        case RC_INACCURACY: *r = 247; *g = 198; *b = 49;  return true;  /* amber */
+        case RC_MISTAKE:    *r = 255; *g = 164; *b = 89;  return true;  /* orange */
+        case RC_BLUNDER:    *r = 250; *g = 65;  *b = 45;  return true;  /* red */
+        case RC_MISS:       *r = 255; *g = 119; *b = 105; return true;  /* coral */
         default: return false;
     }
 }
@@ -6103,9 +6132,15 @@ static void draw_quality_badge(Gui *g, SDL_Renderer *ren, int sq, ReviewClass c)
 {
     SDL_Rect rc;
     window_sq(g, sq, &rc);
-    int rad = g->sq * 21 / 100;
+    int rad = g->sq * 19 / 100;
     if (rad < 9) rad = 9;
-    draw_badge_circle(g, ren, rc.x + rc.w - rad, rc.y + rad, rad, c);
+    int cx = rc.x + rc.w - g->sq * 7 / 100;
+    int cy = rc.y + g->sq * 7 / 100;
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 55);
+    fill_circle(ren, cx, cy + 1, rad + 1);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+    draw_badge_circle(g, ren, cx, cy, rad, c);
 }
 
 /* ---- move tree panel (mainline grid + inline variations, scrollable) ---- */
@@ -6157,7 +6192,8 @@ static void mv_emit_flow(Gui *g, MvLayout *L, MoveNode *node, ReviewClass cls,
                          const char *text)
 {
     if (L->n >= MVTOK_MAX) return;
-    int w = mv_width(g, text);
+    int badge_w = node && cls != RC_NONE ? 20 : 0;
+    int w = mv_width(g, text) + badge_w;
     if (L->x > L->x0 && L->x + w > L->right) {
         L->x = L->x0;
         L->y += L->row_h;
@@ -6176,14 +6212,11 @@ static void mv_emit_move(Gui *g, MvLayout *L, MoveNode *m, bool force_num)
     int num = (ply + 1) / 2;
     char label[32];
     if (white)
-        snprintf(label, sizeof label, "%d.%s%s", num, m->san,
-                 review_glyph((ReviewClass)m->cls));
+        snprintf(label, sizeof label, "%d.%s", num, m->san);
     else if (force_num)
-        snprintf(label, sizeof label, "%d...%s%s", num, m->san,
-                 review_glyph((ReviewClass)m->cls));
+        snprintf(label, sizeof label, "%d...%s", num, m->san);
     else
-        snprintf(label, sizeof label, "%s%s", m->san,
-                 review_glyph((ReviewClass)m->cls));
+        snprintf(label, sizeof label, "%s", m->san);
     mv_emit_flow(g, L, m, (ReviewClass)m->cls, label);
 }
 
@@ -6213,7 +6246,7 @@ static void move_box_rect(const Gui *g, SDL_Rect *r)
     r->x = g->panel_x;
     r->y = g->board_y + (analysis ? 218 : 78);
     r->w = PANEL_W;
-    int bottom = g->board_y + 412;
+    int bottom = g->board_y + (analysis ? 380 : 412);
     r->h = bottom - r->y;
     if (r->h < 60) r->h = 60;
 }
@@ -6278,8 +6311,8 @@ static void render_move_list(Gui *g)
                 have = true;
             }
             if (have) {
-                mv_push(&mv, node, cls, text, cx + 18, y, true);
-                mv.toks[mv.n - 1].w = mv_width(g, text) + 22;
+                mv_push(&mv, node, cls, text, cx + 20, y, true);
+                mv.toks[mv.n - 1].w = mv_width(g, text) + 24;
                 mv.toks[mv.n - 1].x = cx;   /* rect starts at the badge slot */
             }
         }
@@ -6352,18 +6385,21 @@ static void render_move_list(Gui *g)
         }
 
         if (t->mainline) {
-            if (t->node && t->cls != RC_NONE)
+            if (t->cls != RC_NONE)
                 draw_badge_circle(g, ren, t->x + 9, ty + mv.row_h / 2, 8,
                                   (ReviewClass)t->cls);
             render_text(g, g->font_small, t->text,
-                        t->x + (t->node ? 18 : 0), ty, mv_c);
+                        t->x + (t->w > 0 ? 20 : 0), ty, mv_c);
             if (t->node && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x, ty - 2, t->w, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
                 g->move_hit_node[g->move_hit_count++] = t->node;
             }
         } else {
-            render_text(g, g->font_small, t->text, t->x, ty,
+            int badge_w = t->node && t->cls != RC_NONE ? 20 : 0;
+            if (badge_w)
+                draw_badge_circle(g, ren, t->x + 9, ty + mv.row_h / 2, 8, t->cls);
+            render_text(g, g->font_small, t->text, t->x + badge_w, ty,
                         (SDL_Color){ 190, 205, 215, 255 });
             if (t->node && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x - 2, ty - 2, t->w + 4, mv.row_h };
@@ -7845,7 +7881,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
         draw_check_overlay(g, ren, g->check_anim_sq,
                            (float)(now - g->check_anim) / 900.0f);
 
-    if (last_to >= 0 && last_cls != RC_NONE)
+    if (last_to >= 0 && last_cls != RC_NONE && g->anim_count == 0)
         draw_quality_badge(g, ren, last_to, last_cls);
     draw_engine_arrows(g, ren);
     draw_annotations(g, ren);
@@ -7909,6 +7945,20 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     render_engine_panel(g, ren);
     render_review_bar(g, ren);
     render_move_list(g);
+    if (g->mode == MODE_ANALYSIS) {
+        for (int i = 0; i < 2; i++) {
+            SDL_Rect r;
+            analysis_nav_rect(g, i, &r);
+            bool enabled = g->tree_cur && (i == 0 ? g->tree_cur->parent != NULL
+                                                 : g->tree_cur->first != NULL);
+            draw_rect(ren, &r, 40, 44, 52, true);
+            render_text_centered(g, g->font_small,
+                                 i == 0 ? "< Previous" : "Next >",
+                                 r.x + r.w / 2, r.y + 4,
+                                 enabled ? (SDL_Color){230, 235, 240, 255}
+                                         : (SDL_Color){100, 108, 120, 255});
+        }
+    }
     if (g->mode == MODE_ANALYSIS) render_fen_box(g, ren);
     render_hud(g);
     render_chat(g, ren);

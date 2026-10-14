@@ -6,6 +6,16 @@ All notable changes to OpenChess. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Move-quality badges use larger centred glyphs and the reference palette;
+  board badges sit over the square's upper-right corner and appear on arrival.
+  Mainline and variation moves share the same circular icons.
+- Arcade trails are wider, fade on arrival and stay within the travelled path.
+- Analysis has clickable Previous/Next controls. Each navigation input settles
+  the previous animation before starting the latest move, so rapid stepping
+  never queues stale positions. Move-list jumps clear animations, and reverse
+  castling animates both king and rook.
+
 ### Added
 - **Vector move-quality badges.** The badges are SVG-shaped (from the provided
   `chess_badges_svg` set plus Best/Excellent/Good) and loaded through SDL_image's
