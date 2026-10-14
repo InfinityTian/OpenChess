@@ -48,9 +48,22 @@ jobs:
         run: make -j2 CC='gcc -pthread' OS=Windows_NT openchess.exe
       - name: Run native rules, network and GUI regression tests
         run: |
-          mkdir -p /c/tmp/openchess-test-data
-          export APPDATA='C:/tmp/openchess-test-data'
+          drive="$(cygpath -m "$PWD" | cut -c1)"
+          mkdir -p "/${drive,,}/tmp/openchess-test-data"
+          export APPDATA="$drive:/tmp/openchess-test-data"
           export OPENCHESS_ASSETS="$(cygpath -m "$PWD/assets")"
+          # SDL's Windows entry point requires argc/argv in the test mains.
+          # Only the tests are adapted; the release executable stays unchanged.
+          python - <<'PY'
+          from pathlib import Path
+          for name in ('test_gui.c', 'test_local.c'):
+              p = Path('tests') / name
+              s = p.read_text()
+              old = 'int main(void)\n{'
+              if old not in s:
+                  raise SystemExit('Unexpected test entry point: ' + name)
+              p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
+          PY
           tests='rules fen pgn ai transport proto puzzle review opening movetree net local gui'
           targets=''
           for test in $tests; do targets="$targets tests/test_$test"; done
