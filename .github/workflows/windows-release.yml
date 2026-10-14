@@ -1,0 +1,63 @@
+name: Windows release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to build and attach the Windows ZIP to
+        required: true
+        default: v2.0.1
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+        working-directory: source
+    steps:
+      - name: Check out packaging tools
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Check out the exact released source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.release_tag }}
+          path: source
+      - name: Install native Windows toolchain and libraries
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-SDL2_ttf
+            mingw-w64-ucrt-x86_64-SDL2_image
+            mingw-w64-ucrt-x86_64-SDL2_net
+            mingw-w64-ucrt-x86_64-SDL2_mixer
+            mingw-w64-ucrt-x86_64-libwebsockets
+            mingw-w64-ucrt-x86_64-sqlite3
+      - name: Build Windows x64 executable
+        run: make -j2 CC='gcc -pthread' OS=Windows_NT openchess.exe
+      - name: Run native rules, network and GUI regression tests
+        run: |
+          mkdir -p /c/tmp/openchess-test-data
+          export APPDATA='C:/tmp/openchess-test-data'
+          export OPENCHESS_ASSETS="$(cygpath -m "$PWD/assets")"
+          tests='rules fen pgn ai transport proto puzzle review opening movetree net local gui'
+          targets=''
+          for test in $tests; do targets="$targets tests/test_$test"; done
+          make -j2 CC='gcc -pthread -include ../scripts/windows-test-env.h' OS=Windows_NT $targets
+          for test in $tests; do ./tests/test_$test.exe; done
+      - name: Bundle, verify and upload portable Windows ZIP
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: python ../scripts/package_windows.py . "$(cygpath -m /ucrt64/bin)" "$RELEASE_TAG"
