@@ -7,6 +7,9 @@ All notable changes to OpenChess. The format follows
 ## [Unreleased]
 
 ### Changed
+- Clicking a piece now shows repeating outward cyan ripples; held pieces pulse
+  between normal size and 16% larger throughout a drag, including while still.
+  Releasing preserves the current pulse size and smoothly settles to normal.
 - Added the vector Forced arrow badge from `18.png`; badges rasterize at 512px
   and use the reference palette throughout board, list and reports.
 - The move list follows `19.png`: bold grade-coloured SAN, alternating rows,

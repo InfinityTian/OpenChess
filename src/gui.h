@@ -120,6 +120,7 @@ typedef struct {
     bool   started;
     bool   fast;            /* drag drop: settle from the release position */
     float  cursor_x, cursor_y;
+    float  cursor_scale;    /* keep the held pulse size when settling a drop */
     bool   reverse;         /* used when stepping back through the game */
 } AnimStep;
 
@@ -264,7 +265,7 @@ typedef struct {
     int    puzzle_rating;       /* local puzzle Elo */
 
     int    selected;            /* from-square, or -1 */
-    Uint32 pick_started;        /* one lift pulse on selection/drag start */
+    Uint32 pick_started;        /* phase origin for selection ripples/drag pulse */
     SDL_Point pick_mouse;       /* drag threshold origin in board coordinates */
     MoveList targets;           /* legal targets when a piece is selected */
 

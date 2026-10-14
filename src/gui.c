@@ -37,6 +37,7 @@ static void draw_badge_circle(Gui *g, SDL_Renderer *ren, int cx, int cy, int rad
 static void draw_chip(Gui *g, SDL_Renderer *ren, int x, int y, int w, int h,
                       const char *txt);
 static int  mv_width(Gui *g, const char *s);
+static float pick_scale(const Gui *g, Uint32 now, bool dragging);
 
 /* ------------------------------------------------------------------ */
 /* style registries                                                    */
@@ -765,6 +766,7 @@ static void enqueue_move_anim(Gui *g, const Board *pre, Move m)
     s.fast    = g->anim_fast;
     s.cursor_x = g->mouse.x;
     s.cursor_y = g->mouse.y;
+    s.cursor_scale = s.fast ? pick_scale(g, SDL_GetTicks(), true) : 1.0f;
     s.dur     = g->anim_fast ? 90 : ANIM_DURS[g->anim_style];
     s.started = false;
     s.start   = 0;
@@ -5233,7 +5235,13 @@ static float pick_scale(const Gui *g, Uint32 now, bool dragging)
     if (!g->pick_started || g->anim_style == ANIM_NONE) return 1.0f;
     Sint32 elapsed = (Sint32)(now - g->pick_started);
     if (elapsed < 0) elapsed = 0;
-    if (dragging) return 1.0f + 0.10f * smoothstepf(0, 160, (float)elapsed);
+    if (dragging) {
+        /* Repeat for as long as the pointer holds the piece, including when
+         * the pointer stops moving. Phase belongs to this drag, not the app. */
+        float phase = (float)(elapsed % 900) / 900.0f;
+        float pulse = 0.5f - 0.5f * cosf(phase * 6.28318531f);
+        return 1.0f + 0.16f * smoothstepf(0, 120, (float)elapsed) * pulse;
+    }
     if (elapsed >= 280) return 1.0f;
     return 1.0f + 0.08f * sinf((float)elapsed * 3.14159265f / 280.0f);
 }
@@ -5298,6 +5306,7 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
             draw_move_trail(g, ren, s->piece, fx, fy, tx, ty, t);
 
         anim_piece_transform(g, g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
+        if (s->fast) sc *= 1.0f + (s->cursor_scale - 1.0f) * (1.0f - t);
         render_piece_box(g, ren, s->piece, x, y, g->sq * sc, al);
 
         if (s->has_rook) {
@@ -5455,7 +5464,7 @@ static void draw_target_dot(Gui *g, SDL_Renderer *ren, int sq, bool capture)
 }
 
 /* Soft radial glow behind the selected piece. */
-static void draw_selection_glow(Gui *g, SDL_Renderer *ren, int sq)
+static void draw_selection_glow(Gui *g, SDL_Renderer *ren, int sq, Uint32 now)
 {
     SDL_Rect rc;
     window_sq(g, sq, &rc);
@@ -5466,6 +5475,21 @@ static void draw_selection_glow(Gui *g, SDL_Renderer *ren, int sq)
         fill_circle(ren, cx, cy, (int)(g->sq * 0.78f));
         SDL_SetRenderDrawColor(ren, 60, 210, 242, 32);
         fill_circle(ren, cx, cy, (int)(g->sq * 0.56f));
+        if (g->pick_started && g->anim_style != ANIM_NONE) {
+            Sint32 elapsed = (Sint32)(now - g->pick_started);
+            if (elapsed < 0) elapsed = 0;
+            /* Two broad cyan wavefronts expand and dissolve continuously
+             * while selected (Pick.mov), instead of a static halo. */
+            for (int wave = 0; wave < 2; wave++) {
+                float p = (float)((elapsed + wave * 450) % 900) / 900.0f;
+                float radius = g->sq * (0.28f + 0.62f * p);
+                int thick = (int)(g->sq * (0.10f - 0.07f * p));
+                if (thick < 2) thick = 2;
+                Uint8 alpha = (Uint8)(42.0f * sinf(p * 3.14159265f) * (1.0f - p));
+                draw_ring_thick(ren, cx, cy, (int)radius, thick, 60, 220, 250, alpha);
+            }
+            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        }
     }
     SDL_SetRenderDrawColor(ren, 80, 220, 245, g->dragging ? 26 : 60);
     SDL_RenderFillRect(ren, &rc);
@@ -8005,12 +8029,13 @@ static void render_review_report(Gui *g, SDL_Renderer *ren)
 
 static void render_openings(Gui *g, SDL_Renderer *ren)
 {
+    Uint32 now = SDL_GetTicks();
     set_render_color(ren, 22, 26, 34);
     SDL_RenderClear(ren);
 
     draw_board_squares(g, ren);
     draw_coordinates(g);
-    if (g->selected >= 0) draw_selection_glow(g, ren, g->selected);
+    if (g->selected >= 0) draw_selection_glow(g, ren, g->selected, now);
     for (int i = 0; i < g->targets.count; i++) {
         Move m = g->targets.moves[i];
         bool cap = (MOVE_FLAGS(m) & (FLAG_CAPTURE | FLAG_EP | FLAG_PROMO)) != 0;
@@ -8230,7 +8255,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     }
 
     if (g->selected >= 0)
-        draw_selection_glow(g, ren, g->selected);
+        draw_selection_glow(g, ren, g->selected, now);
 
     if (g->selected >= 0)
         for (int i = 0; i < g->targets.count; i++) {
@@ -8269,14 +8294,13 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     if (g->promo_from >= 0) draw_promo_chooser(g, ren);
 
-    /* One lift settles at a constant drag size, with a cyan disc and square
-     * frame under the pointer (Pick.mov). */
+    /* The held piece and its cyan disc pulse together throughout the drag. */
     if (g->dragging && g->selected >= 0) {
         int cx = g->mouse.x, cy = g->mouse.y;
 
         /* Big soft radial halo behind the piece (per 17.png): a translucent
          * disc that fades out over its outer 40%. */
-        int maxr = (int)(g->sq * 0.85f);
+        int maxr = (int)(g->sq * 0.85f * pick_scale(g, now, true));
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
         for (int rr = maxr; rr > 0; rr -= 2) {
             float f = (float)rr / (float)maxr;          /* 0 centre .. 1 edge */

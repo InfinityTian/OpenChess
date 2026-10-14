@@ -48,6 +48,20 @@ static int count_rgb(SDL_Renderer *ren, SDL_Rect rect, Uint8 r, Uint8 g, Uint8 b
     return count;
 }
 
+static uint64_t region_hash(SDL_Renderer *ren, SDL_Rect rect)
+{
+    size_t bytes = (size_t)rect.w * rect.h * 4;
+    Uint8 *pixels = malloc(bytes);
+    if (!pixels) return 0;
+    if (SDL_RenderReadPixels(ren, &rect, SDL_PIXELFORMAT_RGBA32,
+                             pixels, rect.w * 4) != 0) { free(pixels); return 0; }
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (size_t i = 0; i < bytes; i++)
+        hash = (hash ^ pixels[i]) * UINT64_C(1099511628211);
+    free(pixels);
+    return hash;
+}
+
 static void do_restart_test(Gui *g)
 {
     board_reset(&g->board);
@@ -344,6 +358,25 @@ static int test_position_effects(SDL_Renderer *ren)
     click.button.button = SDL_BUTTON_LEFT;
     sq_window(g, ren, algebraic_to_sq("e2"), &click.button.x, &click.button.y);
     gui_handle_event(g, &click);
+    SDL_Rect ripple = { g->board_x + 3 * g->sq, g->board_y + 5 * g->sq,
+                        2 * g->sq, 2 * g->sq };
+    g->pick_started = SDL_GetTicks() - 340;
+    gui_render(g, ren);
+    uint64_t first_wave = region_hash(ren, ripple);
+    g->pick_started = SDL_GetTicks() - 700;
+    gui_render(g, ren);
+    if (!first_wave || first_wave == region_hash(ren, ripple)) {
+        fprintf(stderr, "selected piece ripple remained static\n");
+        return 1;
+    }
+    g->anim_style = ANIM_NONE;
+    g->pick_started = SDL_GetTicks() - 340;
+    gui_render(g, ren);
+    first_wave = region_hash(ren, ripple);
+    g->pick_started = SDL_GetTicks() - 700;
+    gui_render(g, ren);
+    if (first_wave != region_hash(ren, ripple)) return 1;
+    g->anim_style = ANIM_ARCADE;
     SDL_Event motion = {0};
     motion.type = SDL_MOUSEMOTION;
     motion.motion.state = SDL_BUTTON_LMASK;
@@ -354,12 +387,28 @@ static int test_position_effects(SDL_Renderer *ren)
     motion.motion.x += 12;
     gui_handle_event(g, &motion);
     if (!g->dragging) return 1;
+    SDL_Rect held = { g->mouse.x - g->sq, g->mouse.y - g->sq,
+                      2 * g->sq, 2 * g->sq };
+    /* No pointer events between these frames: the pulse must keep running. */
+    g->pick_started = SDL_GetTicks() - 450;
     gui_render(g, ren);
+    int large = count_rgb(ren, held, 0, 0, 0);
+    g->pick_started = SDL_GetTicks() - 900;
+    gui_render(g, ren);
+    int normal = count_rgb(ren, held, 0, 0, 0);
+    if (normal <= 0 || large < normal * 11 / 10) {
+        fprintf(stderr, "held piece did not pulse in size (%d vs %d pixels)\n", large, normal);
+        return 1;
+    }
+    g->pick_started = SDL_GetTicks() - 1350; /* pulse again on the next cycle */
+    gui_render(g, ren);
+    if (count_rgb(ren, held, 0, 0, 0) < normal * 11 / 10) return 1;
     click.type = SDL_MOUSEBUTTONUP;
     click.button.x = motion.motion.x; click.button.y = motion.motion.y;
     gui_handle_event(g, &click);
     if (g->ply != 1 || g->anim_count != 1 || !g->anim_queue[0].fast ||
-        fabsf(g->anim_queue[0].cursor_x - g->mouse.x) > 1) {
+        fabsf(g->anim_queue[0].cursor_x - g->mouse.x) > 1 ||
+        g->anim_queue[0].cursor_scale < 1.10f) {
         fprintf(stderr, "drop did not settle from the pointer position\n");
         return 1;
     }
