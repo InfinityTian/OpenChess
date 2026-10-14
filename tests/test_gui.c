@@ -360,22 +360,41 @@ static int test_position_effects(SDL_Renderer *ren)
     gui_handle_event(g, &click);
     SDL_Rect ripple = { g->board_x + 3 * g->sq, g->board_y + 5 * g->sq,
                         2 * g->sq, 2 * g->sq };
-    g->pick_started = SDL_GetTicks() - 340;
+    g->pick_started = SDL_GetTicks() - 100;
     gui_render(g, ren);
-    uint64_t first_wave = region_hash(ren, ripple);
-    g->pick_started = SDL_GetTicks() - 700;
+    uint64_t pressed = region_hash(ren, ripple);
+    click.type = SDL_MOUSEBUTTONUP;
+    gui_handle_event(g, &click);
+    if (!g->pick_released || g->selected != algebraic_to_sq("e2")) return 1;
+    g->pick_released = SDL_GetTicks() - 80;
     gui_render(g, ren);
-    if (!first_wave || first_wave == region_hash(ren, ripple)) {
-        fprintf(stderr, "selected piece ripple remained static\n");
+    uint64_t fading = region_hash(ren, ripple);
+    g->pick_released = SDL_GetTicks() - 400;
+    gui_render(g, ren);
+    uint64_t settled = region_hash(ren, ripple);
+    if (!pressed || pressed == fading || fading == settled) {
+        fprintf(stderr, "click bloom did not decay after release\n");
+        return 1;
+    }
+    g->pick_released = SDL_GetTicks() - 1300;
+    gui_render(g, ren);
+    if (settled != region_hash(ren, ripple)) {
+        fprintf(stderr, "released pickup restarted its bloom\n");
+        return 1;
+    }
+    click.type = SDL_MOUSEBUTTONDOWN;
+    gui_handle_event(g, &click);
+    if (g->selected != algebraic_to_sq("e2") || g->pick_released) {
+        fprintf(stderr, "clicking the same piece did not restart pickup\n");
         return 1;
     }
     g->anim_style = ANIM_NONE;
     g->pick_started = SDL_GetTicks() - 340;
     gui_render(g, ren);
-    first_wave = region_hash(ren, ripple);
+    uint64_t disabled = region_hash(ren, ripple);
     g->pick_started = SDL_GetTicks() - 700;
     gui_render(g, ren);
-    if (first_wave != region_hash(ren, ripple)) return 1;
+    if (disabled != region_hash(ren, ripple)) return 1;
     g->anim_style = ANIM_ARCADE;
     SDL_Event motion = {0};
     motion.type = SDL_MOUSEMOTION;

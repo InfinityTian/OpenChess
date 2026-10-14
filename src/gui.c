@@ -578,6 +578,7 @@ static void clear_selection(Gui *g)
 {
     g->selected = -1;
     g->pick_started = 0;
+    g->pick_released = 0;
     g->targets.count = 0;
 }
 
@@ -1051,6 +1052,7 @@ static void select_square(Gui *g, int sq)
 
     g->selected = sq;
     g->pick_started = SDL_GetTicks() + 1;
+    g->pick_released = 0;
     MoveList legal;
     gen_legal(&g->board, &legal);
     for (int i = 0; i < legal.count; i++) {
@@ -1931,6 +1933,39 @@ static SDL_Texture *make_ring_texture(SDL_Renderer *ren, int size,
     return t;
 }
 
+/* A single smooth radial disc reproduces the filled bloom in Pick.mov.
+ * Cache at high resolution so its contracting edge stays soft under zoom. */
+static SDL_Texture *make_pick_glow(SDL_Renderer *ren)
+{
+    const int size = 512;
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, size, size, 32,
+                                                   SDL_PIXELFORMAT_RGBA32);
+    if (!s) return NULL;
+    SDL_LockSurface(s);
+    for (int y = 0; y < size; y++) {
+        Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + y * s->pitch);
+        for (int x = 0; x < size; x++) {
+            float dx = (x + 0.5f - size / 2) / (size / 2);
+            float dy = (y + 0.5f - size / 2) / (size / 2);
+            float edge = (sqrtf(dx * dx + dy * dy) - 0.62f) / 0.38f;
+            if (edge < 0) edge = 0;
+            if (edge > 1) edge = 1;
+            float alpha = 1.0f - edge * edge * (3.0f - 2.0f * edge);
+            row[x] = SDL_MapRGBA(s->format, 60, 220, 245, (Uint8)(255 * alpha));
+        }
+    }
+    SDL_UnlockSurface(s);
+    SDL_Texture *t = SDL_CreateTextureFromSurface(ren, s);
+    SDL_FreeSurface(s);
+    if (t) {
+        SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+        SDL_SetTextureScaleMode(t, SDL_ScaleModeLinear);
+#endif
+    }
+    return t;
+}
+
 void gui_init_assets(Gui *g, SDL_Renderer *ren)
 {
     g->ren = ren;
@@ -1962,6 +1997,7 @@ void gui_init_assets(Gui *g, SDL_Renderer *ren)
     load_badges(g);
     if (!g->capture_ring)
         g->capture_ring = make_ring_texture(ren, 256, 225, 80, 70);
+    if (!g->pick_glow) g->pick_glow = make_pick_glow(ren);
 }
 
 static void destroy_thumbs(SDL_Texture ***arr, int n)
@@ -1991,6 +2027,7 @@ void gui_destroy(Gui *g)
     for (int i = 0; i < 12; i++)
         if (g->badge_tex[i]) SDL_DestroyTexture(g->badge_tex[i]);
     if (g->capture_ring) SDL_DestroyTexture(g->capture_ring);
+    if (g->pick_glow) SDL_DestroyTexture(g->pick_glow);
     for (int i = 0; i < 3; i++)
         if (g->end_tex[i]) SDL_DestroyTexture(g->end_tex[i]);
     if (g->tex_board) SDL_DestroyTexture(g->tex_board);
@@ -4493,10 +4530,8 @@ static void handle_game_mousedown(Gui *g)
     Piece pc = g->board.board[sq];
     bool my = (g->board.side == WHITE) ? WHITE_PIECE(pc) : BLACK_PIECE(pc);
     if (pc != EMPTY && my && may_move && g->state == NO_GAME_OVER) {
-        if (sq == g->selected)
-            clear_selection(g);
-        else
-            select_square(g, sq);
+        /* Pressing the selected piece retriggers its pickup, as in Pick.mov. */
+        select_square(g, sq);
     } else {
         clear_selection(g);
     }
@@ -4507,6 +4542,7 @@ static void handle_game_mouseup(Gui *g)
     SDL_Point p = g->mouse;
     bool was_drag = g->dragging;
     g->dragging = false;
+    if (g->selected >= 0) g->pick_released = SDL_GetTicks() + 1;
 
     if (g->resizing_board) {
         g->resizing_board = false;
@@ -4669,6 +4705,7 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                 if (!g->dragging && g->selected >= 0 && dx * dx + dy * dy >= 16) {
                     g->dragging = true;
                     g->pick_started = SDL_GetTicks() + 1;
+                    g->pick_released = 0;
                 }
             }
             return;
@@ -4750,6 +4787,8 @@ void gui_handle_event(Gui *g, const SDL_Event *e)
                 return;
             }
             if (g->scene == SCENE_GAME) handle_game_mouseup(g);
+            else if (g->scene == SCENE_OPENINGS && g->selected >= 0)
+                g->pick_released = SDL_GetTicks() + 1;
             return;
         case SDL_MOUSEWHEEL:
             if (g->scene == SCENE_GAME && g->pgn_import_open) {
@@ -5230,6 +5269,17 @@ static void draw_check_overlay(Gui *g, SDL_Renderer *ren, int sq, float p)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+static float click_pick_strength(const Gui *g, Uint32 now)
+{
+    if (!g->pick_started || g->anim_style == ANIM_NONE) return 0.0f;
+    if (g->pick_released) {
+        Sint32 elapsed = (Sint32)(now - g->pick_released);
+        return 1.0f - smoothstepf(0, 180, elapsed > 0 ? (float)elapsed : 0.0f);
+    }
+    Sint32 elapsed = (Sint32)(now - g->pick_started);
+    return smoothstepf(0, 16, elapsed > 0 ? (float)elapsed : 0.0f);
+}
+
 static float pick_scale(const Gui *g, Uint32 now, bool dragging)
 {
     if (!g->pick_started || g->anim_style == ANIM_NONE) return 1.0f;
@@ -5242,8 +5292,7 @@ static float pick_scale(const Gui *g, Uint32 now, bool dragging)
         float pulse = 0.5f - 0.5f * cosf(phase * 6.28318531f);
         return 1.0f + 0.16f * smoothstepf(0, 120, (float)elapsed) * pulse;
     }
-    if (elapsed >= 280) return 1.0f;
-    return 1.0f + 0.08f * sinf((float)elapsed * 3.14159265f / 280.0f);
+    return 1.0f + 0.04f * click_pick_strength(g, now);
 }
 
 static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
@@ -5470,30 +5519,22 @@ static void draw_selection_glow(Gui *g, SDL_Renderer *ren, int sq, Uint32 now)
     window_sq(g, sq, &rc);
     int cx = rc.x + rc.w / 2, cy = rc.y + rc.h / 2;
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    if (!g->dragging) {
-        SDL_SetRenderDrawColor(ren, 60, 210, 242, 24);
-        fill_circle(ren, cx, cy, (int)(g->sq * 0.78f));
-        SDL_SetRenderDrawColor(ren, 60, 210, 242, 32);
-        fill_circle(ren, cx, cy, (int)(g->sq * 0.56f));
-        if (g->pick_started && g->anim_style != ANIM_NONE) {
-            Sint32 elapsed = (Sint32)(now - g->pick_started);
-            if (elapsed < 0) elapsed = 0;
-            /* Two broad cyan wavefronts expand and dissolve continuously
-             * while selected (Pick.mov), instead of a static halo. */
-            for (int wave = 0; wave < 2; wave++) {
-                float p = (float)((elapsed + wave * 450) % 900) / 900.0f;
-                float radius = g->sq * (0.28f + 0.62f * p);
-                int thick = (int)(g->sq * (0.10f - 0.07f * p));
-                if (thick < 2) thick = 2;
-                Uint8 alpha = (Uint8)(42.0f * sinf(p * 3.14159265f) * (1.0f - p));
-                draw_ring_thick(ren, cx, cy, (int)radius, thick, 60, 220, 250, alpha);
-            }
-            SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        }
+    float strength = g->dragging ? 1.0f : click_pick_strength(g, now);
+    if (!g->dragging && g->pick_glow && strength > 0.0f) {
+        /* Frame-by-frame reference: a filled cyan bloom while pressed;
+         * after release its radius and opacity diminish together. */
+        float size = g->sq * 2.0f * (0.40f + 0.25f * strength);
+        SDL_Rect dst = { (int)lroundf(cx - size / 2), (int)lroundf(cy - size / 2),
+                         (int)lroundf(size), (int)lroundf(size) };
+        SDL_SetTextureAlphaMod(g->pick_glow, (Uint8)(150 * strength));
+        SDL_RenderCopy(ren, g->pick_glow, NULL, &dst);
+        SDL_SetTextureAlphaMod(g->pick_glow, 255);
     }
     SDL_SetRenderDrawColor(ren, 80, 220, 245, g->dragging ? 26 : 60);
     SDL_RenderFillRect(ren, &rc);
-    SDL_SetRenderDrawColor(ren, 95, 232, 255, 240);
+    /* The frame disappears on release; only the disc continues contracting. */
+    float frame = g->dragging || !g->pick_released ? strength : 0.0f;
+    SDL_SetRenderDrawColor(ren, 95, 232, 255, (Uint8)(240 * frame));
     int thick = g->sq * 4 / 100;
     if (thick < 2) thick = 2;
     for (int i = 0; i < thick; i++) {
@@ -7891,6 +7932,8 @@ static void handle_openings_mousedown(Gui *g)
         MoveList all;
         gen_legal(&g->board, &all);
         g->selected = sq;
+        g->pick_started = SDL_GetTicks() + 1;
+        g->pick_released = 0;
         g->targets.count = 0;
         for (int i = 0; i < all.count; i++)
             if (MOVE_FROM(all.moves[i]) == sq && g->targets.count < MAX_MOVES)

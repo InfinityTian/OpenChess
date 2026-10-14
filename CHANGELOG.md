@@ -7,7 +7,11 @@ All notable changes to OpenChess. The format follows
 ## [Unreleased]
 
 ### Changed
-- Clicking a piece now shows repeating outward cyan ripples; held pieces pulse
+- Clicking now follows the press/release sequence in the first half of
+  `Pick.mov`: a filled cyan bloom and frame on press, contracting and fading
+  over 180ms after release, then only the selected-square tint remains.
+  Clicking the same piece retriggers the effect instead of deselecting it.
+- Clicking a piece now shows a finite filled cyan bloom; held pieces pulse
   between normal size and 16% larger throughout a drag, including while still.
   Releasing preserves the current pulse size and smoothly settles to normal.
 - Added the vector Forced arrow badge from `18.png`; badges rasterize at 512px
