@@ -7,6 +7,9 @@ on:
         description: Existing release tag to build and attach the Windows ZIP to
         required: true
         default: v2.0.1
+      source_ref:
+        description: Source commit or branch (empty builds the release tag)
+        required: false
 
 permissions:
   contents: write
@@ -22,10 +25,10 @@ jobs:
     steps:
       - name: Check out packaging tools
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Check out the exact released source
+      - name: Check out the requested source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: ${{ inputs.release_tag }}
+          ref: ${{ inputs.source_ref || inputs.release_tag }}
           path: source
       - name: Install native Windows toolchain and libraries
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
@@ -64,11 +67,19 @@ jobs:
                   raise SystemExit('Unexpected test entry point: ' + name)
               p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
           PY
-          tests='rules fen pgn ai transport proto puzzle review opening movetree net local gui'
+          tests='rules fen pgn ai engine_install transport proto puzzle review opening movetree net local gui'
           targets=''
           for test in $tests; do targets="$targets tests/test_$test"; done
           make -j2 CC='gcc -pthread -include ../scripts/windows-test-env.h' OS=Windows_NT $targets
           for test in $tests; do ./tests/test_$test.exe; done
+      - name: Verify official Stockfish installation and UCI handshake
+        run: |
+          destination="$(cygpath -m "$PWD/dist/stockfish-install-test")"
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File assets/engine/install-stockfish.ps1 -Destination "$destination"
+          printf 'uci\nquit\n' | ./dist/stockfish-install-test/stockfish.exe > dist/stockfish-uci.txt
+          grep -q '^uciok' dist/stockfish-uci.txt
+          # A second invocation reuses the installed engine.
+          powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File assets/engine/install-stockfish.ps1 -Destination "$destination"
       - name: Bundle, verify and upload portable Windows ZIP
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}

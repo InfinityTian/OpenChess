@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import urllib.request
+import urllib.parse
 import zipfile
 
 source = Path(sys.argv[1]).resolve()
@@ -81,6 +82,10 @@ for package in sorted(packages):
 (stage / "DEPENDENCIES.txt").write_text(
     "MSYS2 UCRT64 runtime packages (sources and recipes: https://github.com/msys2/MINGW-packages):\n"
     + "\n".join(manifest) + "\n", encoding="utf-8")
+(stage / "BUILD.txt").write_text(
+    "Source commit: " + subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True).strip() + "\n",
+    encoding="utf-8")
 (stage / "OpenChess.bat").write_bytes(
     b'@echo off\r\nsetlocal\r\ncd /d "%~dp0"\r\nset "PATH=%~dp0;%PATH%"\r\nstart "" "%~dp0openchess.exe"\r\n')
 (stage / "README-Windows.txt").write_text(
@@ -130,12 +135,21 @@ def api(method, url, data=None, kind="application/json"):
         return json.load(response)
 base = f"https://api.github.com/repos/{repo}"
 release = api("GET", base + "/releases/tags/" + tag)
-if any(a["name"] == archive.name for a in release["assets"]):
-    raise SystemExit("A Windows ZIP already exists; refusing to overwrite")
-upload = release["upload_url"].split("{", 1)[0] + "?name=" + archive.name
+old_assets = [a for a in release["assets"] if a["name"] == archive.name]
+# Keep the previous download available until its replacement is verified.
+temporary_name = archive.name + ".pending-" + os.environ.get("GITHUB_RUN_ID", digest[:12])
+upload = release["upload_url"].split("{", 1)[0] + "?name=" + urllib.parse.quote(temporary_name)
 asset = api("POST", upload, archive.read_bytes(), "application/zip")
 if asset["size"] != archive.stat().st_size or asset["state"] != "uploaded":
     raise SystemExit("Uploaded ZIP verification failed")
 if asset.get("digest") and asset["digest"] != "sha256:" + digest:
     raise SystemExit("Uploaded ZIP checksum mismatch")
+for old in old_assets:
+    request = urllib.request.Request(base + "/releases/assets/" + str(old["id"]), method="DELETE",
+        headers={"Authorization": "Bearer " + token, "User-Agent": "OpenChess-Windows-release"})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        if response.status != 204:
+            raise SystemExit("Could not replace previous Windows asset")
+asset = api("PATCH", base + "/releases/assets/" + str(asset["id"]),
+            json.dumps({"name": archive.name}).encode())
 print("DOWNLOAD_URL=" + asset["browser_download_url"], flush=True)
