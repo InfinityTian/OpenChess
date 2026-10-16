@@ -64,6 +64,10 @@ static void ui_apply_theme(Gui *g);
 static SDL_Color ui_surface_color(SDL_Color color);
 static SDL_Color ui_legacy_text_color(Gui *g,TTF_Font *font,SDL_Color color);
 static void ui_tooltip_render(Gui *g);
+static void ui_round_outline(SDL_Renderer *r,SDL_Rect rect,SDL_Color color);
+static void ui_move_background(Gui *g,SDL_Rect rect,bool selected);
+static void ui_puzzle_rating(Gui *g);
+static void ui_caret_color(SDL_Renderer *ren);
 
 
 /* ------------------------------------------------------------------ */
@@ -356,7 +360,7 @@ static void draw_rect(SDL_Renderer *ren, SDL_Rect *rc, Uint8 r, Uint8 g, Uint8 b
     if(r<110&&g<130&&b<150&&fill){r=242;g=248;b=253;}
     set_render_color(ren, r, g, b);
     if (fill) ui_round(ren,*rc,(SDL_Color){r,g,b,255},6);
-    else SDL_RenderDrawRect(ren, rc);
+    else ui_round_outline(ren,*rc,(SDL_Color){r,g,b,255});
 }
 
 static void render_text(Gui *g, TTF_Font *font, const char *txt,
@@ -563,10 +567,11 @@ static void rebuild_fonts(Gui *g)
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
     if (g->font_tiny) TTF_CloseFont(g->font_tiny);
+    if (g->font_rating) TTF_CloseFont(g->font_rating);
     if (g->font_move) TTF_CloseFont(g->font_move);
     g->font_piece[0] = g->font_piece[1] = NULL;
     g->font_ui = g->font_small = g->font_tiny = NULL;
-    g->font_move = NULL;
+    g->font_move = g->font_rating = NULL;
 
     const char *fpath = find_font();
     if (fpath) {
@@ -579,6 +584,8 @@ static void rebuild_fonts(Gui *g)
         g->font_small   = TTF_OpenFont(ui_path, (int)lroundf(15 * sc));
         g->font_tiny    = TTF_OpenFont(ui_path, (int)lroundf(12 * sc));
         g->font_move    = TTF_OpenFont(ui_path, (int)lroundf(17 * sc));
+        g->font_rating  = TTF_OpenFont(ui_path, (int)lroundf(32 * sc));
+        if(g->font_rating)TTF_SetFontStyle(g->font_rating,TTF_STYLE_BOLD);
         if (g->font_move) TTF_SetFontStyle(g->font_move, TTF_STYLE_BOLD);
         if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui ||
             !g->font_small || !g->font_tiny || !g->font_move)
@@ -1197,8 +1204,9 @@ static void pgn_btn_rect(const Gui *g, SDL_Rect *out)
 
 static void input_rect(const Gui *g, SDL_Rect *out)
 {
-    out->x = g->panel_x; out->y = g->win_h - (g->mode == MODE_ANALYSIS ? 192 : 200);
-    out->w = 320; out->h = 40;
+    out->x = g->board_x + (g->mode == MODE_ANALYSIS ? 220 : 0);
+    out->y = g->board_y + 8*g->sq + (g->mode == MODE_PUZZLE ? (g->ui&&g->ui->reviewing?132:88) : 28);
+    out->w = 8*g->sq - (g->mode == MODE_ANALYSIS ? 220 : 0); out->h = 40;
 }
 
 static void menu_btn_rect(const Gui *g, SDL_Rect *out)
@@ -2134,6 +2142,7 @@ void gui_destroy(Gui *g)
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
     if (g->font_tiny) TTF_CloseFont(g->font_tiny);
+    if (g->font_rating) TTF_CloseFont(g->font_rating);
     if (g->font_move) TTF_CloseFont(g->font_move);
     free(g);
 }
@@ -2411,6 +2420,16 @@ static const char *const PUZZLE_THEMES[] = {
 };
 #define PUZZLE_THEME_COUNT ((int)(sizeof PUZZLE_THEMES / sizeof PUZZLE_THEMES[0]))
 
+static const char *const PUZZLE_THEME_LABELS[]={
+    "All themes","Mate in one","Mate in two","Mate in three","Fork","Pin","Skewer",
+    "Discovered attack","Deflection","Attraction","Sacrifice","Defensive move",
+    "Kingside attack","Queenside attack","Endgame"
+};
+static const char *puzzle_theme_label(Gui *g,int index)
+{
+    return g->ui&&g->ui->zh?ui_old_text(g,PUZZLE_THEMES[index]):PUZZLE_THEME_LABELS[index];
+}
+
 static void puzzle_split_moves(Gui *g)
 {
     g->puzzle_nmoves = 0;
@@ -2576,6 +2595,12 @@ static void handle_puzzle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     SDL_Keycode k = ke->keysym.sym;
     bool ctrl = (ke->keysym.mod & KMOD_CTRL) != 0;
     if (ctrl && k == SDLK_q) { g->quit = true; return; }
+    if(g->ui&&g->ui->theme_open){
+        if(k==SDLK_ESCAPE){g->ui->theme_open=false;return;}
+        if(k==SDLK_UP||k==SDLK_DOWN){g->puzzle_theme=(g->puzzle_theme+(k==SDLK_DOWN?1:PUZZLE_THEME_COUNT-1))%PUZZLE_THEME_COUNT;return;}
+        if(k==SDLK_RETURN||k==SDLK_SPACE){g->ui->theme_open=false;return;}
+        return;
+    }
     if (k == SDLK_ESCAPE) { g->scene = SCENE_MENU; return; }
     if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_TAB) { g->setup_field ^= 1; return; }
     if (k == SDLK_LEFT || k == SDLK_RIGHT) {
@@ -2586,7 +2611,7 @@ static void handle_puzzle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
             g->puzzle_theme = (g->puzzle_theme + d + PUZZLE_THEME_COUNT) % PUZZLE_THEME_COUNT;
         return;
     }
-    if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) open_puzzle(g);
+    if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {if(g->setup_field==1&&g->ui)g->ui->theme_open=true;else open_puzzle(g);}
 }
 
 static void handle_puzzle_setup_mousedown(Gui *g)
@@ -2594,11 +2619,16 @@ static void handle_puzzle_setup_mousedown(Gui *g)
     SDL_Rect bands[PUZZLE_BAND_COUNT], theme, start, back;
     puzzle_setup_rects(g, bands, &theme, &start, &back);
     SDL_Point p = g->mouse;
+    if(g->ui&&g->ui->theme_open){
+        SDL_Rect list={theme.x,theme.y+theme.h+4,theme.w,PUZZLE_THEME_COUNT*26};
+        if(pt_in(&list,p.x,p.y))g->puzzle_theme=(p.y-list.y)/26;
+        g->ui->theme_open=false;return;
+    }
     for (int i = 0; i < PUZZLE_BAND_COUNT; i++)
         if (pt_in(&bands[i], p.x, p.y)) { g->setup_field = 0; g->puzzle_band = i; return; }
     if (pt_in(&theme, p.x, p.y)) {
         g->setup_field = 1;
-        g->puzzle_theme = (g->puzzle_theme + 1) % PUZZLE_THEME_COUNT;
+        if(g->ui)g->ui->theme_open=true;
         return;
     }
     if (pt_in(&start, p.x, p.y)) { open_puzzle(g); return; }
@@ -2623,12 +2653,8 @@ static void render_puzzle_setup(Gui *g, SDL_Renderer *ren)
 
     render_text_centered(g, g->font_small, "Theme", (208+(g->win_w-208)/2), 372,
                          (SDL_Color){ 150, 180, 200, 255 });
-    draw_rect(ren, &theme, 40, 44, 54, true);
-    if (g->setup_field == 1) draw_rect(ren, &theme, 90, 150, 200, false);
-    char tl[64];
-    snprintf(tl, sizeof tl, "<  %s  >", ui_old_text(g,PUZZLE_THEMES[g->puzzle_theme]));
-    render_text_centered(g, g->font_ui, tl, theme.x + theme.w / 2, theme.y + 8,
-                         (SDL_Color){ 235, 235, 235, 255 });
+    char tl[96];snprintf(tl,sizeof tl,"%s   v",puzzle_theme_label(g,g->puzzle_theme));
+    ui_button(g,theme,tl,-1,false);
 
     ui_button(g,start,ui_old_text(g,"Start"),-1,true);
     ui_button(g,back,ui_old_text(g,"Back"),-1,false);
@@ -2641,6 +2667,16 @@ static void render_puzzle_setup(Gui *g, SDL_Renderer *ren)
     if (g->menu_msg[0])
         render_text_centered(g, g->font_small, g->menu_msg, (208+(g->win_w-208)/2), 650,
                              (SDL_Color){ 255, 170, 120, 255 });
+    if(g->ui&&g->ui->theme_open){
+        SDL_Rect list={theme.x,theme.y+theme.h+4,theme.w,PUZZLE_THEME_COUNT*26};
+        ui_round(ren,list,ui_surface_color((SDL_Color){250,253,255,255}),8);
+        for(int i=0;i<PUZZLE_THEME_COUNT;i++){
+            SDL_Rect row={list.x+3,list.y+i*26,list.w-6,26};
+            if(i==g->puzzle_theme||pt_in(&row,g->mouse.x,g->mouse.y))ui_move_background(g,row,true);
+            render_text(g,g->font_small,puzzle_theme_label(g,i),row.x+12,row.y+4,(SDL_Color){235,235,235,255});
+        }
+    }
+
 }
 
 /* ---- local multiplayer host/join ---- */
@@ -4572,7 +4608,7 @@ static void handle_game_mousedown(Gui *g)
     if (pt_in(&styles, p.x, p.y)) {
         if (g->mode == MODE_PUZZLE) open_puzzle(g);
         else if (g->mode == MODE_ANALYSIS) pgn_import_open(g);
-        else open_appearance(g, SCENE_GAME);
+        else return;
         return;
     }
     if (pt_in(&pgn, p.x, p.y)) { pgn_open_prompt(g); return; }
@@ -5968,9 +6004,7 @@ static void render_status(Gui *g)
                        : g->puzzle_failed ? "Answer shown"
                                           : (g->board.side == g->human_color
                                                  ? "Your move" : "...");
-        snprintf(info, sizeof info, "Puzzle %d  %s   -   Rating %d (%+d)   %s",
-                 g->puzzle_cur.rating, g->puzzle_cur.themes,
-                 g->puzzle_rating, g->puzzle_delta, st);
+        snprintf(info, sizeof info, "%s", ui_old_text(g,st));
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 65, 102, 138, 255 });
     } else if (g->mode == MODE_ANALYSIS) {
@@ -6730,9 +6764,9 @@ static void move_box_rect(const Gui *g, SDL_Rect *r)
 {
     bool analysis = (g->mode == MODE_ANALYSIS);
     r->x = g->panel_x;
-    r->y = g->board_y + (analysis ? 218 : 78);
+    r->y = g->board_y + (analysis ? 218 : g->mode==MODE_PUZZLE ? 220 : 78);
     r->w = PANEL_W;
-    int bottom = g->board_y + (analysis ? 380 : 412);
+    int bottom = g->board_y + (analysis ? 380 : g->mode==MODE_PUZZLE ? 540 : 412);
     r->h = bottom - r->y;
     if (r->h < 60) r->h = 60;
 }
@@ -6869,7 +6903,7 @@ static void render_move_list(Gui *g)
         if ((row++ % 2) == 0) {
             SDL_Rect stripe = { box.x, box.y + t->y - g->move_scroll - 3,
                                 box.w, mv.row_h };
-            draw_rect(ren, &stripe, 42, 41, 38, true);
+            ui_move_background(g,stripe,false);
         }
     }
 
@@ -6892,8 +6926,7 @@ static void render_move_list(Gui *g)
         SDL_Color mv_c = { r, gg, b, 255 };
         if (t->node && t->node == g->tree_cur) {
             SDL_Rect hl = { t->x - 3, ty - 2, t->w + 6, mv.row_h };
-            SDL_SetRenderDrawColor(ren, 69, 68, 65, 255);
-            SDL_RenderFillRect(ren, &hl);
+            ui_move_background(g,hl,true);
             mv_c = (SDL_Color){255, 255, 255, 255};
         }
 
@@ -7056,7 +7089,7 @@ static void render_san_hint(Gui *g)
 {
     SDL_Rect ib;
     input_rect(g, &ib);
-    render_text(g, g->font_small, "Press Enter to type a move", g->panel_x, ib.y + 12,
+    render_text(g, g->font_small, "Press Enter to type a move", ib.x + 12, ib.y + 12,
                 (SDL_Color){ 120, 130, 140, 255 });
 }
 
@@ -7064,7 +7097,7 @@ static void render_input_box(Gui *g, SDL_Renderer *ren)
 {
     SDL_Rect ib;
     input_rect(g, &ib);
-    render_text(g, g->font_small, "Type a move (SAN):", g->panel_x, ib.y - 22,
+    render_text(g, g->font_small, "Type a move (SAN):", ib.x, ib.y - 22,
                 (SDL_Color){ 200, 200, 200, 255 });
     draw_rect(ren, &ib, 30, 30, 32, true);
     draw_rect(ren, &ib, 60, 60, 70, false);
@@ -7079,13 +7112,13 @@ static void render_input_box(Gui *g, SDL_Renderer *ren)
             tw = (int)lroundf(s->w / sc);
             SDL_FreeSurface(s);
         }
-        set_render_color(ren, 240, 240, 240);
+        ui_caret_color(ren);
         SDL_Rect caret = { ib.x + 12 + tw, ib.y + 8, 2, ib.h - 16 };
         SDL_RenderFillRect(ren, &caret);
     } else {
         render_text(g, g->font_small, "e.g. e4, Nf3, O-O-O", ib.x + 10, ib.y + 12,
                     (SDL_Color){ 120, 120, 120, 255 });
-        set_render_color(ren, 120, 120, 120);
+        ui_caret_color(ren);
         SDL_Rect caret = { ib.x + 12, ib.y + 8, 2, ib.h - 16 };
         SDL_RenderFillRect(ren, &caret);
     }
@@ -7115,7 +7148,7 @@ static void render_fen_box(Gui *g, SDL_Renderer *ren)
         int lw = (int)lroundf(w / sc);
         int cx = field.x + 8 + lw;
         if (cx > field.x + field.w - 3) cx = field.x + field.w - 3;
-        set_render_color(ren, 240, 240, 240);
+        ui_caret_color(ren);
         SDL_Rect caret = { cx, field.y + 8, 2, field.h - 16 };
         SDL_RenderFillRect(ren, &caret);
     }
@@ -7172,7 +7205,7 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &restart, restart_label);
     const char *styles_label = (g->mode == MODE_PUZZLE) ? "Next"
                              : (g->mode == MODE_ANALYSIS) ? "Import" : "Styles";
-    render_text_centered_rect(g, ren, &styles, styles_label);
+    if(g->mode==MODE_PUZZLE||g->mode==MODE_ANALYSIS)render_text_centered_rect(g, ren, &styles, styles_label);
     render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
     const char *legend;
@@ -7186,19 +7219,6 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
         legend = "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip";
     render_text(g, g->font_tiny, legend,
                 g->panel_x, undo.y + 48, (SDL_Color){ 130, 130, 130, 255 });
-}
-
-static void render_hud(Gui *g)
-{
-    char line[192];
-    snprintf(line, sizeof line, "Board: %s   Pieces: %s   Anim: %s",
-             theme_label(&g->boards, g->board_index),
-             theme_label(&g->pieces, g->piece_index),
-             ANIM_LABELS[g->anim_style]);
-    render_text(g, g->font_small, line, g->panel_x, g->win_h - 268,
-                (SDL_Color){ 150, 200, 215, 255 });
-    render_text(g, g->font_small, "Ctrl+B board   Ctrl+P pieces   Ctrl+M anim",
-                g->panel_x, g->win_h - 250, (SDL_Color){ 120, 140, 150, 255 });
 }
 
 static void render_setup(Gui *g, SDL_Renderer *ren)
@@ -7817,6 +7837,10 @@ static void render_settings(Gui *g, SDL_Renderer *ren)
 
     render_text_centered(g, g->font_ui, "Settings", g->win_w / 2, 28,
                          (SDL_Color){ 235, 225, 200, 255 });
+    if(g->ui){
+        ui_button(g,(SDL_Rect){g->win_w-218,22,194,36},ui_tr(g,g->ui->dark_mode?"Dark mode: On":"Dark mode: Off",g->ui->dark_mode?"深色模式：开启":"深色模式：关闭"),-1,g->ui->dark_mode);
+        ui_button(g,(SDL_Rect){g->win_w-360,22,130,36},ui_tr(g,"Themes","应用主题"),-1,false);
+    }
     render_settings_tabs(g, ren);
 
     if (g->settings_tab == 0) render_settings_engine(g, ren);
@@ -8435,7 +8459,7 @@ static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
         TTF_SizeUTF8(g->font_ui, g->pgn_name, &w, &h);
         float sc = eff_scale(g);
         int lw = (int)lroundf(w / sc);
-        set_render_color(ren, 240, 240, 240);
+        ui_caret_color(ren);
         SDL_Rect caret = { field.x + 10 + lw, field.y + 8, 2, field.h - 16 };
         SDL_RenderFillRect(ren, &caret);
     }
@@ -8605,7 +8629,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
             render_analysis_graph(g, ren);
             render_fen_box(g, ren);
         }
-    } else render_hud(g);
+    }
     render_chat(g, ren);
     if (!g->chat_open && !(g->mode == MODE_ANALYSIS && g->analysis_summary)) {
         if (g->san_open) render_input_box(g, ren);
@@ -8729,7 +8753,7 @@ void gui_render(Gui *g, SDL_Renderer *ren)
 
     if(g->ui){
         g->ui->legacy_paint=false;
-        if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE){ui_puzzle_strip(g);ui_daily_panel(g);}
+        if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE){ui_puzzle_strip(g);ui_daily_panel(g);ui_puzzle_rating(g);}
         if(g->scene==SCENE_GAME&&g->mode==MODE_ANALYSIS)ui_button(g,(SDL_Rect){g->board_x,g->board_y+8*g->sq+28,200,40},ui_tr(g,"Save analysis","保存分析"),3,false);
         if(g->scene==SCENE_PUZZLE_SETUP)ui_button(g,(SDL_Rect){g->board_x,g->win_h-210,310,40},ui_tr(g,g->ui->rated?"Rated · click to switch":"Unrated · click to switch",g->ui->rated?"计分练习 · 点击切换":"不计分练习 · 点击切换"),-1,false);
         ui_shell(g);

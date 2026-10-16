@@ -215,6 +215,14 @@ bool workspace_issue(Workspace *w,const char *owner,const char *id,const Puzzle 
     bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);
     if(ok&&day){s=workspace_stmt(w,"INSERT OR IGNORE INTO oc_daily_progress(owner,day,completed,practiced) VALUES(?,?,0,1)");text(s,1,owner);sqlite3_bind_int(s,2,day);sqlite3_step(s);sqlite3_finalize(s);}return ok;
 }
+/* Only an unresolved ordinary attempt can change scoring mode. */
+bool workspace_puzzle_mode(Workspace *w,const char *owner,const char *attempt,bool rated)
+{
+    if(!w||!owner||!attempt)return false;
+    sqlite3_stmt *s=workspace_stmt(w,"UPDATE oc_attempts SET rated=? WHERE owner=? AND id=? AND day=0 AND settled=0");
+    sqlite3_bind_int(s,1,rated);text(s,2,owner);text(s,3,attempt);
+    bool ok=sqlite3_step(s)==SQLITE_DONE&&sqlite3_changes(w->db)>0;sqlite3_finalize(s);return ok;
+}
 static bool solution(const Puzzle *p,const char *moves) {
     /* The first UCI move belongs to the opponent; callers submit the complete
      * actual line, including automatic replies, never a claimed success flag. */

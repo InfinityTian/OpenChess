@@ -82,6 +82,10 @@ cJSON *community_request(Workspace *w,Puzzles *p,int uid,const char *owner,const
         if(!found)return error(r,"No matching puzzle");
         char id[100];sqlite3_randomness(16,id);char attempt[40];for(int k=0;k<16;k++)snprintf(attempt+k*2,3,"%02x",(unsigned char)id[k]);
         bool rated=boolean(q,"rated")&&!day&&strncmp(reason,"Review:",7);workspace_issue(w,owner,attempt,&puzzle,rated,day);cJSON_AddBoolToObject(r,"rated",rated);cJSON_AddStringToObject(r,"attempt",attempt);cJSON_AddNumberToObject(r,"day",day);cJSON_AddStringToObject(r,"reason",reason);cJSON_AddItemToObject(r,"puzzle",workspace_puzzle_json(&puzzle));
+    }else if(!strcmp(op,"puzzle.mode")){
+        cJSON_AddStringToObject(r,"attempt",string(q,"attempt"));
+        if(!workspace_puzzle_mode(w,owner,string(q,"attempt"),boolean(q,"rated")))return error(r,"This attempt cannot change scoring mode");
+        cJSON_AddBoolToObject(r,"rated",boolean(q,"rated"));
     }else if(!strcmp(op,"puzzle.submit")){
         cJSON_AddItemToObject(r,"result",workspace_submit(w,owner,string(q,"attempt"),string(q,"moves"),boolean(q,"hint"),boolean(q,"reveal"),integer(q,"elapsed",0)));
     }else return error(r,"Unknown operation");

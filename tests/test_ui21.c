@@ -33,6 +33,16 @@ int main(void)
  }
  g->ui->dark_mode=true;g->scene=SCENE_SETTINGS;capture(g,r,"dark-settings");g->scene=SCENE_GAME;capture(g,r,"dark-analysis");g->ui->dark_mode=false;g->scene=SCENE_GAME;capture(g,r,"light-analysis");
  g->ui->smart=false;g->scene=SCENE_PUZZLE_SETUP;capture(g,r,"puzzle-difficulty");
+ /* Dropdown, settings access and live scoring changes. */
+ click(g,800,420);if(!g->ui->theme_open)return 16;capture(g,r,"puzzle-theme-dropdown");
+ click(g,800,448+4*26+10);if(g->ui->theme_open||g->puzzle_theme!=4)return 17;
+ g->puzzle_theme=0;g->offline_mode=true;g->account_local=true;g->ui->rated=true;
+ click(g,740,540);if(g->scene!=SCENE_GAME||g->mode!=MODE_PUZZLE)return 18;
+ int current=g->ui->current_entry;if(current<0||g->ui->entries[current].day)return 19;
+ click(g,g->win_w-130,g->board_y+120);if(g->ui->rated||g->ui->entries[current].rated)return 20;
+ click(g,g->win_w-130,g->board_y+120);if(!g->ui->rated||!g->ui->entries[current].rated)return 21;
+ capture(g,r,"puzzle-rating-card");g->san_open=true;capture(g,r,"puzzle-move-input");g->san_open=false;
+ g->scene=SCENE_SETTINGS;g->ui->dark_mode=false;click(g,g->win_w-120,40);if(!g->ui->dark_mode)return 22;capture(g,r,"settings-dark-toggle");
  gui_destroy(g);SDL_DestroyRenderer(r);SDL_FreeSurface(surface);
  SDL_Window *window=SDL_CreateWindow("UI test",0,0,1024,720,SDL_WINDOW_HIDDEN);r=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);g=gui_create();gui_init_assets(g,r);SDL_SetWindowSize(window,1024,720);g->board_driven_resize=false;SDL_Event resize={0};resize.type=SDL_WINDOWEVENT;resize.window.event=SDL_WINDOWEVENT_SIZE_CHANGED;resize.window.data1=1024;resize.window.data2=720;gui_handle_event(g,&resize);g->scene=SCENE_MENU;capture(g,r,"compact-top");g->mouse.x=600;SDL_Event wheel={0};wheel.type=SDL_MOUSEWHEEL;wheel.wheel.y=-8;gui_handle_event(g,&wheel);if(g->ui->home_scroll<=0)return 6;capture(g,r,"compact-scroll");gui_destroy(g);SDL_DestroyRenderer(r);SDL_DestroyWindow(window);
  TTF_Quit();SDL_Quit();puts("V2.1 UI screens rendered and navigation passed.");return 0;}

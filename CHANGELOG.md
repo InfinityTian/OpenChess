@@ -9,6 +9,12 @@ All notable changes to OpenChess. The format follows
 ## [2.1.1] - 2026-10-16
 
 ### Changed
+- Human-readable puzzle theme dropdown and a large rating card with live
+  Rated/Unrated switching for unresolved ordinary attempts, checked by the server.
+- Visible dark-mode/theme controls in Settings; theme-tinted backgrounds and
+  image backgrounds with an adjustable overlay.
+- Distinct alternating move rows, rounded input borders, and SAN entry/hints
+  below the board. In-game appearance labels and shortcut hints are hidden.
 - Ten application themes and an independent, persistent dark-mode switch.
 - Improved text contrast, vector sidebar icons, centered compact buttons and
   tooltips; small text-only actions fit their available space.

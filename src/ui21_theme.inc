@@ -12,13 +12,13 @@ static void ui_apply_theme(Gui *g)
     int index=g->ui?clampi(g->ui->app_theme,0,9):0;ui_dark=g->ui&&g->ui->dark_mode;SDL_Color accent=ui_accents[index];
     ui_accent=accent;
     if(ui_dark){
-        ui_bg=ui_mix((SDL_Color){19,24,32,255},accent,0.07f);ui_surface=ui_mix((SDL_Color){29,36,46,255},accent,0.08f);
+        ui_bg=ui_mix((SDL_Color){19,24,32,255},accent,0.20f);ui_surface=ui_mix((SDL_Color){29,36,46,255},accent,0.08f);
         ui_sidebar=ui_mix((SDL_Color){24,31,42,255},accent,0.10f);ui_control=ui_mix((SDL_Color){43,52,65,255},accent,0.12f);
         ui_hover=ui_mix((SDL_Color){52,68,85,255},accent,0.20f);ui_border=(SDL_Color){79,97,116,255};
         ui_ink=(SDL_Color){233,240,248,255};ui_muted=(SDL_Color){174,190,208,255};ui_accent=ui_mix(accent,(SDL_Color){90,160,240,255},0.18f);
     }else{
-        ui_bg=index?ui_mix((SDL_Color){250,251,252,255},accent,0.075f):(SDL_Color){234,243,251,255};
-        ui_surface=(SDL_Color){250,253,255,255};ui_sidebar=ui_mix((SDL_Color){241,247,252,255},accent,0.10f);
+        ui_bg=index?ui_mix((SDL_Color){250,251,252,255},accent,0.16f):(SDL_Color){234,243,251,255};
+        ui_surface=ui_mix((SDL_Color){253,254,255,255},accent,0.025f);ui_sidebar=ui_mix((SDL_Color){241,247,252,255},accent,0.10f);
         ui_control=ui_mix((SDL_Color){241,247,252,255},accent,0.075f);ui_hover=ui_mix((SDL_Color){230,240,249,255},accent,0.16f);
         ui_border=ui_mix((SDL_Color){189,205,220,255},accent,0.18f);ui_ink=(SDL_Color){30,54,78,255};ui_muted=(SDL_Color){79,101,123,255};
         if(index==0){ui_sidebar=(SDL_Color){218,234,247,255};ui_control=(SDL_Color){226,237,248,255};ui_hover=(SDL_Color){192,216,240,255};ui_border=(SDL_Color){166,189,211,255};}

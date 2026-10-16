@@ -77,5 +77,15 @@ int main(void)
         CHECK(workspace_puzzle_parse(cJSON_GetObjectItem(result,"puzzle"),&issued));int target=1610+(level-2)*300;
         CHECK(issued.rating>=target-150&&issued.rating<=target+149);cJSON_Delete(result);cJSON_Delete(q);
     }
+    /* Live mode changes cannot affect daily, settled or another player's attempt. */
+    workspace_profile(w,"switch",1500);CHECK(workspace_issue(w,"switch","switch-off",&puzzle,true,0));
+    CHECK(!workspace_puzzle_mode(w,"alice","switch-off",false));CHECK(workspace_puzzle_mode(w,"switch","switch-off",false));
+    result=workspace_submit(w,"switch","switch-off",puzzle.moves,false,false,100);CHECK(integer(result,"delta")==0);cJSON_Delete(result);
+    CHECK(!workspace_puzzle_mode(w,"switch","switch-off",true));
+    CHECK(workspace_issue(w,"switch","switch-on",&puzzle,false,0));CHECK(workspace_puzzle_mode(w,"switch","switch-on",true));
+    result=workspace_submit(w,"switch","switch-on",puzzle.moves,false,false,100);CHECK(integer(result,"delta")==0);cJSON_Delete(result); /* Repeat puzzle still cannot score. */
+    CHECK(workspace_issue(w,"switch","daily-mode",&puzzle,false,end));CHECK(!workspace_puzzle_mode(w,"switch","daily-mode",true));
+    CHECK(workspace_issue(w,"alice","server-mode",&puzzle,true,0));
+    q=cJSON_Parse("{\"op\":\"puzzle.mode\",\"attempt\":\"server-mode\",\"rated\":false}");result=community_request(w,p,1,"alice",q);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(result,"ok")));CHECK(cJSON_IsFalse(cJSON_GetObjectItem(result,"rated")));cJSON_Delete(result);cJSON_Delete(q);
     puzzles_free(p);workspace_close(w);printf("Workspace, daily archive, immutable scoring, social permissions and setup: %s\n",failures?"FAILED":"PASSED");return failures!=0;
 }

@@ -448,6 +448,7 @@ typedef struct {
     TTF_Font *font_ui;
     TTF_Font *font_small;
     TTF_Font *font_tiny;
+    TTF_Font *font_rating;      /* Large rating figures at native display density. */
     TTF_Font *font_move;        /* bold move list and summary typography */
     SDL_Texture *tex_board;     /* active board image, or NULL for procedural */
     SDL_Texture *tex_piece[16]; /* piece textures (indexed by Piece) */

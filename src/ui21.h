@@ -13,7 +13,7 @@ typedef struct Ui21 {
     Workspace *store, *cache;
     char owner[96], nickname[100], status[256], input[8192], search[100];
     bool zh, rated, smart, reviewing, legacy_paint, input_focus, calendar_open;
-    bool background_fit, dark_mode;
+    bool background_fit, dark_mode, theme_open;
     int app_theme;
     char tooltip[160];
     SDL_Rect tooltip_anchor;

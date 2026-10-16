@@ -28,6 +28,7 @@ bool workspace_pick(Workspace *w, const Puzzles *p, const char *owner, int ratin
 bool workspace_pick_level(const Puzzles *p,int rating,int level,const char *theme,Puzzle *out);
 bool workspace_issue(Workspace *w, const char *owner, const char *id,
                      const Puzzle *p, bool rated, int daily_day);
+bool workspace_puzzle_mode(Workspace *w,const char *owner,const char *attempt,bool rated);
 cJSON *workspace_submit(Workspace *w, const char *owner, const char *id,
                          const char *moves, bool hint, bool reveal, int elapsed_ms);
 sqlite3_stmt *workspace_stmt(Workspace *w, const char *sql);

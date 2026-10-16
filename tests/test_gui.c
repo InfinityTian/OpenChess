@@ -187,6 +187,10 @@ static int test_analysis_navigation(SDL_Renderer *ren)
         nodes[i + 1]->cls = RC_BRILLIANT + i;
     }
     gui_render(g, ren);
+    SDL_Rect first_row={g->panel_x+420,g->board_y+226,4,10},second_row=first_row;second_row.y+=30;
+    if(count_rgb(ren,first_row,226,237,248)<3||count_rgb(ren,second_row,226,237,248)>0){
+        fprintf(stderr,"move-list alternating row contrast was lost\n");return 1;
+    }
     SDL_Rect san_area = { g->panel_x + 68, g->board_y + 226, 60, 21 };
     if (count_rgb(ren, san_area, 27, 134, 112) < 3) {
         fprintf(stderr, "SAN text did not use its light-theme Brilliant grade colour\n");
@@ -1198,7 +1202,8 @@ int main(void)
             g->puzzles = puzzles_load(ppath);
         }
         if (g->puzzles) {
-            g->puzzle_band = 0;      /* Around my rating (1500) */
+            g->puzzle_band = 2;      /* Normal: around my rating (1500). */
+            g->setup_field = 0;      /* Enter on the theme field now opens its dropdown. */
             g->puzzle_theme = 0;
             SDL_Event st = {0};
             st.type = SDL_KEYDOWN;
