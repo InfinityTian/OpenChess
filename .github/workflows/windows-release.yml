@@ -80,9 +80,13 @@ jobs:
               if not p.exists():
                   continue
               s = p.read_text()
+              if name == 'test_gui.c':
+                  s = s.replace('fprintf(stderr, "reverse castling did not animate both pieces\\n");',
+                      'fprintf(stderr, "reverse castling: ply=%d depth=%d anim=%d rook=%d from=%d to=%d style=%d fen=%d san=%d account=%d input=%d setup=%d scene=%d mode=%d key=%d\\n", g->ply, mt_depth(g->tree_cur), g->anim_count, g->anim_queue[0].has_rook, g->anim_queue[0].rfrom, g->anim_queue[0].rto, g->anim_style, g->fen_active, g->san_open, g->account_open, g->ui->input_focus, g->ui->setup_fen_focus, g->scene, g->mode, key.key.keysym.sym);')
               old = 'int main(void)\n{'
               if old not in s:
                   if re.search(r'int\s+main\s*\(\s*int\s+argc\s*,\s*char\s*\*\s*\*\s*argv\s*\)', s):
+                      p.write_text(s)
                       continue
                   raise SystemExit('Unexpected test entry point: ' + name)
               p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
@@ -92,7 +96,12 @@ jobs:
           targets=''
           for test in $tests; do targets="$targets tests/test_$test"; done
           make -j2 CC='gcc -pthread -include ../scripts/windows-test-env.h' OS=Windows_NT $targets
-          for test in $tests; do ./tests/test_$test.exe; done
+          failed=0
+          for test in $tests; do
+            echo "Running $test"
+            if ! ./tests/test_$test.exe; then failed=1; fi
+          done
+          test "$failed" = 0
       - name: Verify official Stockfish installation and UCI handshake
         run: |
           destination="$(cygpath -m "$PWD/dist/stockfish-install-test")"
