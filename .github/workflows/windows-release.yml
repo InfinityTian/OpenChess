@@ -1,12 +1,23 @@
 name: Windows release build
 
 on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      source_ref:
+        required: false
+        type: string
+      publish:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       release_tag:
         description: Existing release tag to build and attach the Windows ZIP to
         required: true
-        default: v2.0.1
+        default: v2.1.1
       source_ref:
         description: Source commit or branch (empty builds the release tag)
         required: false
@@ -70,6 +81,8 @@ jobs:
               s = p.read_text()
               old = 'int main(void)\n{'
               if old not in s:
+                  if 'int main(int argc, char **argv)' in s:
+                      continue
                   raise SystemExit('Unexpected test entry point: ' + name)
               p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
           PY

@@ -290,3 +290,9 @@ scripts/    资源导入与 .app/.dmg 辅助脚本
 
 源代码：MIT（见 `LICENSE`）。棋盘与棋子图片版权归 chess.com 所有，由第三方仓库
 收集 —— 详见 [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md)。
+
+### Versioned desktop releases / 双平台版本发布
+
+Pushing a `vX.Y.Z` tag runs the **Publish macOS and Windows release** workflow. It tests the tagged sources, builds a self-contained macOS DMG and a portable Windows x64 ZIP, and publishes the Release only after both platforms pass. macOS downloads identify their architecture in the filename. The macOS app is ad-hoc signed, without Apple notarization.
+
+每次上传新版本时一并推送 `vX.Y.Z` 标签，即自动构建 macOS 和 Windows 安装包；两个平台均验证成功后才公开 Release。历史版本可在该工作流中手动指定已有标签补包。构建使用标签对应的应用源码和当前工作流版本的打包工具，不移动已有版本标签。macOS 文件名标明架构，应用使用本地签名，尚未经 Apple 公证。

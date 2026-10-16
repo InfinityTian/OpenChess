@@ -1,0 +1,85 @@
+name: Publish macOS and Windows release
+run-name: Release ${{ inputs.release_tag || github.ref_name }}
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Version tag to build (historical tags are supported)
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Prepare a draft release without replacing published downloads
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git show "$TAG:VERSION")" = "${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --draft --title "OpenChess $TAG" --generate-notes
+          fi
+  windows:
+    needs: prepare
+    uses: ./.github/workflows/windows-release.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}
+      source_ref: ${{ needs.prepare.outputs.tag }}
+      publish: true
+  macos:
+    needs: prepare
+    runs-on: macos-14
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          path: source
+      - name: Install build dependencies
+        run: brew install pkg-config sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets sqlite stockfish
+      - name: Build and test the tagged source
+        run: make -C source -j3 all test
+      - name: Build a self-contained macOS disk image
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          # Packaging comes from the workflow revision; app sources remain at the tag.
+          cp scripts/make_app.sh scripts/bundle_macos.py source/scripts/
+          make -C source dmg
+          hdiutil verify source/dist/OpenChess.dmg
+          arch="$(uname -m)"
+          mv source/dist/OpenChess.dmg "source/dist/OpenChess-$TAG-macOS-$arch.dmg"
+          shasum -a 256 source/dist/*.dmg > source/dist/SHA256-macOS.txt
+      - name: Upload verified macOS download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" source/dist/*.dmg source/dist/SHA256-macOS.txt --clobber
+  publish:
+    needs: [prepare, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Publish only after both platform packages pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          if test "$TAG" = "v$(cat VERSION)"; then latest=true; else latest=false; fi
+          gh release edit "$TAG" --draft=false --latest="$latest"

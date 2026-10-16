@@ -47,4 +47,10 @@ else
     echo "warning: '$ICON_SRC' or iconutil missing; skipping app icon" >&2
 fi
 
+# Stamp from source, including historical versions built by current packaging tools.
+VERSION="$(cat "$ROOT/VERSION")"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+python3 "$ROOT/scripts/bundle_macos.py" "$APP" "$ROOT"
+
 echo "Built $APP"
