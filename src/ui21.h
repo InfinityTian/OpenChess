@@ -42,6 +42,6 @@ typedef struct Ui21 {
     char challenge_minutes[16],challenge_increment[16];
     char metadata[6][128];
     bool erase_tool;
-    int home_scroll;
+    int home_scroll, message_cursor;
 } Ui21;
 #endif

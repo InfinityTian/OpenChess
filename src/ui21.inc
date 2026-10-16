@@ -122,7 +122,7 @@ static void ui_owner(Gui *g)
     g->puzzle_rating=online&&g->online?online_puzzle_rating(g->online):workspace_rating(u->store,owner,4);
     snprintf(u->nickname,sizeof u->nickname,"%s",online?((g->online&&online_logged_in(g->online))?online_username(g->online):g->account_user):g->local_profile);
     cJSON_Delete(u->people);u->people=NULL;cJSON_Delete(u->messages);u->messages=NULL;cJSON_Delete(u->games);u->games=NULL;
-    cJSON_Delete(u->profile);u->profile=NULL;cJSON_Delete(u->rating_history);u->rating_history=NULL;cJSON_Delete(u->calendar);u->calendar=NULL;cJSON_Delete(u->invitations);u->invitations=NULL;cJSON_Delete(u->headtohead);u->headtohead=NULL;cJSON_Delete(u->friends);u->friends=NULL;u->unread_messages=u->friend_requests=0;u->peer=0;u->input[0]=0;u->connected_before=false;
+    cJSON_Delete(u->profile);u->profile=NULL;cJSON_Delete(u->rating_history);u->rating_history=NULL;cJSON_Delete(u->calendar);u->calendar=NULL;cJSON_Delete(u->invitations);u->invitations=NULL;cJSON_Delete(u->headtohead);u->headtohead=NULL;cJSON_Delete(u->friends);u->friends=NULL;u->unread_messages=u->friend_requests=0;u->peer=0;u->message_cursor=0;u->input[0]=0;u->connected_before=false;
     if(online&&g->online&&online_logged_in(g->online)){online_request(g->online,"profile.get",NULL);online_request(g->online,"games",NULL);online_request(g->online,"daily.get",NULL);}
     else {sqlite3_stmt *q=workspace_stmt(u->store,"SELECT nickname,avatar FROM oc_profiles WHERE owner=?");sqlite3_bind_text(q,1,owner,-1,SQLITE_TRANSIENT);if(sqlite3_step(q)==SQLITE_ROW){const char *nick=(const char *)sqlite3_column_text(q,0);if(nick&&*nick)snprintf(u->nickname,sizeof u->nickname,"%s",nick);u->avatar=sqlite3_column_int(q,1);}sqlite3_finalize(q);}
 }
@@ -158,6 +158,7 @@ static void ui_home(Gui *g)
 }
 static void ui_open_analysis(Gui *g)
 {
+    if(g->mode==MODE_ANALYSIS&&g->pgntree)ui_save_analysis(g,"last");
     if(ui_active_game(g)){snprintf(g->ui->status,256,"%s",ui_tr(g,"Finish the current game before opening another board.","请先完成当前对局，再打开其他棋盘。"));return;}
     g->scene=SCENE_ANALYSIS_HOME;g->ui->input[0]=0;g->ui->input_focus=false;
 }
@@ -256,6 +257,7 @@ static void ui_receive(Gui *g,cJSON *r)
 {
     Ui21 *u=g->ui;const cJSON *actor=cJSON_GetObjectItem(r,"actor");if(cJSON_IsString(actor)&&strcmp(actor->valuestring,g->account_user))return;const cJSON *opj=cJSON_GetObjectItem(r,"op");const char *op=cJSON_IsString(opj)?opj->valuestring:"";
     const cJSON *peer=cJSON_GetObjectItem(r,"peer");if((!strcmp(op,"messages")||!strcmp(op,"message.send")||!strcmp(op,"message.read"))&&cJSON_IsNumber(peer)&&peer->valueint!=u->peer)return;
+    if(!strcmp(op,"messages")||!strcmp(op,"message.read")){const cJSON *offset=cJSON_GetObjectItem(r,"offset");if(cJSON_IsNumber(offset)&&offset->valueint!=u->message_cursor)return;}
     if(cJSON_IsFalse(cJSON_GetObjectItem(r,"ok"))){const cJSON *err=cJSON_GetObjectItem(r,"error");snprintf(u->status,256,"%s",cJSON_IsString(err)?err->valuestring:"Request failed");return;}
     cJSON **target=NULL;
     if(!strcmp(op,"people")||!strcmp(op,"blocks")||(!strcmp(op,"friends")&&u->social_tab==0)){
@@ -272,7 +274,7 @@ static void ui_receive(Gui *g,cJSON *r)
     const cJSON *notify=cJSON_GetArrayItem(cJSON_GetObjectItem(r,"notifications"),0),*pending=cJSON_GetArrayItem(cJSON_GetObjectItem(r,"requests"),0);
     if(notify)u->unread_messages=cJSON_GetObjectItem(notify,"unread")->valueint;
     if(pending)u->friend_requests=cJSON_GetObjectItem(pending,"pending")->valueint;
-    if((!strcmp(op,"messages")||!strcmp(op,"message.send"))&&g->scene==SCENE_SOCIAL){const cJSON *latest=cJSON_GetArrayItem(cJSON_GetObjectItem(r,"rows"),0);if(latest){cJSON *q=ui_args_int("peer",u->peer);cJSON_AddNumberToObject(q,"through",cJSON_GetObjectItem(latest,"id")->valueint);online_request(g->online,"message.read",q);}}
+    if((!strcmp(op,"messages")||!strcmp(op,"message.send"))&&g->scene==SCENE_SOCIAL){const cJSON *latest=cJSON_GetArrayItem(cJSON_GetObjectItem(r,"rows"),0);if(latest){cJSON *q=ui_args_int("peer",u->peer);cJSON_AddNumberToObject(q,"through",cJSON_GetObjectItem(latest,"id")->valueint);cJSON_AddNumberToObject(q,"offset",u->message_cursor);online_request(g->online,"message.read",q);}}
     if(cJSON_IsNumber(cJSON_GetObjectItem(r,"self")))u->self_id=cJSON_GetObjectItem(r,"self")->valueint;
     if(!strcmp(op,"daily.calendar")){cJSON_Delete(u->calendar);u->calendar=cJSON_Duplicate(cJSON_GetObjectItem(r,"rows"),true);u->daily_current=cJSON_GetObjectItem(r,"current")->valueint;u->daily_longest=cJSON_GetObjectItem(r,"longest")->valueint;
         const cJSON *row=NULL;cJSON_ArrayForEach(row,u->calendar){sqlite3_stmt *q=workspace_stmt(u->cache,"INSERT INTO oc_daily_progress(owner,day,completed,practiced) VALUES(?,?,?,?) ON CONFLICT(owner,day) DO UPDATE SET completed=excluded.completed,practiced=excluded.practiced");sqlite3_bind_text(q,1,u->owner,-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,2,cJSON_GetObjectItem(row,"day")->valueint);sqlite3_bind_int(q,3,cJSON_GetObjectItem(row,"completed")->valueint);sqlite3_bind_int(q,4,cJSON_GetObjectItem(row,"practiced")->valueint);sqlite3_step(q);sqlite3_finalize(q);}
@@ -316,12 +318,12 @@ static void ui_tick(Gui *g,Uint32 now)
     }
     u->connected_before=connected;
     if(g->online){cJSON *r;while((r=online_take_response(g->online))){ui_receive(g,r);cJSON_Delete(r);}}
-    if(g->online&&online_logged_in(g->online)&&now-u->last_refresh>5000){u->last_refresh=now;online_request(g->online,"challenge.list",NULL);online_request(g->online,"friends",NULL);if(!workspace_daily(u->cache,workspace_today(),&(Puzzle){0}))online_request(g->online,"daily.get",NULL);if(g->scene==SCENE_SOCIAL){cJSON *args=ui_args_int("offset",u->offset);cJSON_AddStringToObject(args,"search",u->search);online_request(g->online,ui_social_op(u),args);if(u->peer)online_request(g->online,"messages",ui_args_int("peer",u->peer));}}
+    if(g->online&&online_logged_in(g->online)&&now-u->last_refresh>5000){u->last_refresh=now;online_request(g->online,"challenge.list",NULL);online_request(g->online,"friends",NULL);if(!workspace_daily(u->cache,workspace_today(),&(Puzzle){0}))online_request(g->online,"daily.get",NULL);if(g->scene==SCENE_SOCIAL){cJSON *args=ui_args_int("offset",u->offset);cJSON_AddStringToObject(args,"search",u->search);online_request(g->online,ui_social_op(u),args);if(u->peer){cJSON *q=ui_args_int("peer",u->peer);cJSON_AddNumberToObject(q,"offset",u->message_cursor);online_request(g->online,"messages",q);}}}
     if(u->current_entry>=0&&!u->reviewing&&g->mode==MODE_PUZZLE)u->entries[u->current_entry].step=g->puzzle_step;
 }
 static void ui_nav_action(Gui *g,int group,int item)
 {
-    Ui21 *u=g->ui;u->nav_hover=-1;u->input_focus=false;
+    Ui21 *u=g->ui;if(g->mode==MODE_ANALYSIS&&g->pgntree&&g->scene==SCENE_GAME)ui_save_analysis(g,"last");u->nav_hover=-1;u->input_focus=false;
     if(ui_active_game(g)&&(group==1||group==2||(group==0&&(item==1||item==2)))){snprintf(u->status,256,"%s",ui_tr(g,"Finish the active game before opening another board.","请先完成当前对局，再打开其他棋盘。"));return;}
     if(group==0){if(item==0){g->scene=SCENE_ONLINE;g->online_ui=1;online_ensure(g);}else if(item==1)g->scene=SCENE_SINGLE_SETUP;else if(item==2)g->scene=SCENE_HOSTJOIN;else {g->scene=SCENE_LIBRARY;ui_request(g,"games",NULL);}}
     else if(group==1){if(item==1){ui_open_daily(g,workspace_today());return;}u->smart=item==2;u->page=0;g->scene=SCENE_PUZZLE_SETUP;}
@@ -502,12 +504,12 @@ static void ui_social_render(Gui *g)
     rows=u->messages?cJSON_GetObjectItem(u->messages,"rows"):NULL;count=cJSON_GetArraySize(rows);
     char transcript[8192]="";size_t used=0;
     for(int k=0;k<count&&k<10&&used<sizeof transcript-720;k++){const cJSON *row=cJSON_GetArrayItem(rows,count-1-k),*body=cJSON_GetObjectItem(row,"body");bool mine=cJSON_GetObjectItem(row,"sender")->valueint==u->self_id;
-        used+=(size_t)snprintf(transcript+used,sizeof transcript-used,"%s%s: %s\n\n",mine?"":"",mine?ui_tr(g,"You","你"):ui_tr(g,"Friend","好友"),cJSON_IsString(body)?body->valuestring:"");}
+        used+=(size_t)snprintf(transcript+used,sizeof transcript-used,"%s%s: %s\n\n",mine&&cJSON_GetObjectItem(row,"read")->valueint?"✓ ":"",mine?ui_tr(g,"You","你"):ui_tr(g,"Friend","好友"),cJSON_IsString(body)?body->valuestring:"");}
     SDL_Rect conversation={716,270,g->win_w-760,343};SDL_RenderSetClipRect(g->ren,&conversation);
     int lines=render_wrapped_text(g,g->ren,transcript,conversation,u->message_scroll,ui_ink);SDL_RenderSetClipRect(g->ren,NULL);
     u->message_scroll_max=clampi(lines*(text_height(g,g->font_small)+3)+16-conversation.h,0,100000);u->message_scroll=clampi(u->message_scroll,0,u->message_scroll_max);
     ui_button(g,(SDL_Rect){716,638,g->win_w-870,44},u->input[0]?u->input:ui_tr(g,"Private message...","输入私信……"),-1,false);ui_button(g,(SDL_Rect){g->win_w-142,638,108,44},ui_tr(g,"Send","发送"),-1,true);
-    ui_button(g,(SDL_Rect){716,694,212,34},ui_tr(g,"Older messages","更早的消息"),-1,false);
+    ui_button(g,(SDL_Rect){716,694,212,34},ui_tr(g,"Older messages","更早的消息"),-1,false);ui_button(g,(SDL_Rect){944,694,212,34},ui_tr(g,"Latest messages","最新消息"),-1,false);
     rows=u->invitations?cJSON_GetObjectItem(u->invitations,"rows"):NULL;
     for(int k=0;k<cJSON_GetArraySize(rows)&&k<2;k++){const cJSON *row=cJSON_GetArrayItem(rows,k);char label[180];snprintf(label,sizeof label,ui_tr(g,"Invitation #%d · %d + %d","约战 #%d · %d + %d"),cJSON_GetObjectItem(row,"id")->valueint,cJSON_GetObjectItem(row,"time")->valueint/60000,cJSON_GetObjectItem(row,"inc")->valueint/1000);ui_text(g,label,240,770+k*42,ui_ink);ui_button(g,(SDL_Rect){700,756+k*42,150,34},ui_tr(g,"Accept","接受"),-1,true);ui_button(g,(SDL_Rect){864,756+k*42,150,34},ui_tr(g,"Decline","拒绝"),-1,false);}
 }
@@ -626,10 +628,10 @@ static bool ui_click(Gui *g)
     if(g->scene==SCENE_SOCIAL){
         if(my>=96&&my<140&&mx<680){u->social_tab=clampi((mx-240)/148,0,2);u->offset=0;ui_request(g,ui_social_op(u),NULL);return true;}
         if(my>=154&&my<194&&mx<680){if(mx<580){u->input_focus=true;u->page=2;snprintf(u->input,sizeof u->input,"%s",u->search);}else{cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"search",u->search);ui_request(g,ui_social_op(u),q);}return true;}
-        if(my>=210&&my<680&&mx<680){const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->people,"rows"),(my-210)/47);if(row){u->peer=cJSON_GetObjectItem(row,"id")->valueint;ui_request(g,"messages",ui_args_int("peer",u->peer));ui_request(g,"headtohead",ui_args_int("peer",u->peer));u->input[0]=0;u->page=0;}return true;}
+        if(my>=210&&my<680&&mx<680){const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->people,"rows"),(my-210)/47);if(row){u->peer=cJSON_GetObjectItem(row,"id")->valueint;u->message_cursor=u->message_scroll=0;cJSON_Delete(u->messages);u->messages=NULL;ui_request(g,"messages",ui_args_int("peer",u->peer));ui_request(g,"headtohead",ui_args_int("peer",u->peer));u->input[0]=0;u->page=0;}return true;}
         if(mx>=716&&my>=116&&my<204){int k=((my-116)/48)*3+(mx-716)/218;if(k<4){const char *actions[]={"request","accept","remove",u->social_tab==2?"unblock":"block"};ui_social_action(g,actions[k]);}else if(k==4&&u->peer){u->challenge_open=true;u->dialog_field=-1;u->challenge_color=-1;u->challenge_rated=true;snprintf(u->challenge_minutes,16,"5");snprintf(u->challenge_increment,16,"0");}return true;}
-        if(my>=638&&my<682&&mx>=716){if(mx<g->win_w-150){u->input_focus=true;u->page=0;}else{cJSON *q=ui_args_int("peer",u->peer);cJSON_AddStringToObject(q,"text",u->input);ui_request(g,"message.send",q);u->input[0]=0;}return true;}
-        if(my>=694&&my<742){if(mx<680){u->offset=mx<450?clampi(u->offset-10,0,100000):u->offset+10;cJSON *q=ui_args_int("offset",u->offset);ui_request(g,ui_social_op(u),q);}else{const cJSON *rows=cJSON_GetObjectItem(u->messages,"rows"),*last=cJSON_GetArrayItem(rows,cJSON_GetArraySize(rows)-1);cJSON *q=ui_args_int("peer",u->peer);if(last)cJSON_AddNumberToObject(q,"offset",cJSON_GetObjectItem(last,"id")->valueint);ui_request(g,"messages",q);}return true;}
+        if(my>=638&&my<682&&mx>=716){if(mx<g->win_w-150){u->input_focus=true;u->page=0;}else{cJSON *q=ui_args_int("peer",u->peer);cJSON_AddStringToObject(q,"text",u->input);u->message_cursor=u->message_scroll=0;ui_request(g,"message.send",q);u->input[0]=0;}return true;}
+        if(my>=694&&my<742){if(mx<680){u->offset=mx<450?clampi(u->offset-10,0,100000):u->offset+10;cJSON *q=ui_args_int("offset",u->offset);ui_request(g,ui_social_op(u),q);}else{const cJSON *rows=cJSON_GetObjectItem(u->messages,"rows"),*last=cJSON_GetArrayItem(rows,cJSON_GetArraySize(rows)-1);cJSON *q=ui_args_int("peer",u->peer);if(mx>=944)u->message_cursor=0;else if(last)u->message_cursor=cJSON_GetObjectItem(last,"id")->valueint;cJSON_AddNumberToObject(q,"offset",u->message_cursor);u->message_scroll=0;ui_request(g,"messages",q);}return true;}
         if(my>=756&&my<840&&mx>=700){int k=(my-756)/42;const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->invitations,"rows"),k);if(row){int from=cJSON_GetObjectItem(row,"from")->valueint;cJSON *q=ui_args_int("id",cJSON_GetObjectItem(row,"id")->valueint);ui_request(g,mx<855?"challenge.accept":from==u->self_id?"challenge.cancel":"challenge.decline",q);}return true;}return true;
     }
     if(g->scene==SCENE_LIBRARY){if(u->page){if(my>=100&&my<142)ui_load_analysis(g,"last");else if(my>=166&&my<736){const cJSON *row=cJSON_GetArrayItem(u->analyses,(my-166)/57),*id=cJSON_GetObjectItem(row,"id");if(cJSON_IsString(id))ui_load_analysis(g,id->valuestring);}}
