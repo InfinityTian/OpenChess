@@ -169,6 +169,10 @@ static void test_custom_root(void)
 
 int main(void)
 {
+    CHECK(pgn_parse_checked("1. e4 e5 2. Qh9",NULL)==NULL);
+    CHECK(pgn_parse_checked("1. e4 (1. d4",NULL)==NULL);
+    CHECK(pgn_parse_checked("[FEN \"invalid\"] 1. e4",NULL)==NULL);
+    MoveNode *valid=pgn_parse_checked("1. e4 (1. d4 d5) e5 *",NULL);CHECK(valid!=NULL);mt_free(valid);
     test_custom_root();
     test_write();
     test_result();

@@ -10,7 +10,7 @@ int main(void)
 {SDL_setenv("SDL_VIDEODRIVER","dummy",1);SDL_setenv("XDG_DATA_HOME","/tmp/openchess-ui21-test",1);if(SDL_Init(SDL_INIT_VIDEO)||TTF_Init())return 1;IMG_Init(IMG_INIT_PNG);
  SDL_Surface *surface=SDL_CreateRGBSurfaceWithFormat(0,WIN_W,WIN_H,32,SDL_PIXELFORMAT_RGBA32);SDL_Renderer *r=SDL_CreateSoftwareRenderer(surface);Gui *g=gui_create();gui_init_assets(g,r);if(!g->ui||!g->ui->store||!g->font_ui||!g->puzzles)return 1;
  capture(g,r,"home");g->ui->zh=true;capture(g,r,"home-zh");g->ui->nav_hover=2;capture(g,r,"submenu");g->ui->nav_hover=-1;
- g->scene=SCENE_ANALYSIS_HOME;capture(g,r,"analysis");click(g,g->panel_x+70,335);if(g->scene!=SCENE_POSITION_SETUP)return 2;capture(g,r,"setup");
+ g->scene=SCENE_ANALYSIS_HOME;snprintf(g->ui->input,sizeof g->ui->input,"1. e4 Qh9");click(g,g->panel_x+40,260);if(g->scene!=SCENE_ANALYSIS_HOME||!g->ui->input[0]||!g->ui->status[0])return 7;g->ui->input[0]=g->ui->status[0]=0;capture(g,r,"analysis");click(g,g->panel_x+70,335);if(g->scene!=SCENE_POSITION_SETUP)return 2;capture(g,r,"setup");
  g->scene=SCENE_MENU;click(g,1150,800);if(g->mode!=MODE_PUZZLE||g->ui->current_entry<0)return 3;capture(g,r,"daily");
  int daily=g->ui->current_entry;SDL_Event key={0};key.type=SDL_KEYDOWN;key.key.keysym.sym=SDLK_n;gui_handle_event(g,&key);if(g->ui->current_entry<=daily||!g->ui->entries[g->ui->current_entry].day||g->ui->entries[g->ui->current_entry].rated)return 4;
  g->mode=MODE_ANALYSIS;board_reset(&g->board);g->ply=0;g->flipped=false;g->state=NO_GAME_OVER;g->selected=-1;g->targets.count=0;click(g,g->board_x+4*g->sq+g->sq/2,g->board_y+6*g->sq+g->sq/2);if(g->targets.count!=2)return 5;capture(g,r,"legal-indicators");

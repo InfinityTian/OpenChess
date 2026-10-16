@@ -332,10 +332,10 @@ void pgn_write(FILE *f, const char moves[][8], int ply,
 /* ---- PGN import (variations/NAGs/comments) ------------------------------ */
 
 static const char *parse_moves(const char *p, MoveNode **cur,
-                               char *res, size_t rn);
+                               char *res, size_t rn, bool *valid, int depth);
 
 static void parse_header_line(const char *start, const char *end, PgnHeaders *out,
-                              Board *fen_out, bool *have_fen)
+                              Board *fen_out, bool *have_fen, bool *valid)
 {
     char tag[32] = "", val[160] = "";
     const char *q = start + 1;
@@ -349,6 +349,7 @@ static void parse_header_line(const char *start, const char *end, PgnHeaders *ou
     while (q < end && *q != '"' && i < 159) val[i++] = *q++;
     val[i] = '\0';
 
+    if (strcasecmp(tag,"FEN")==0){Board b;if(fen_parse(val,&b)){*fen_out=b;*have_fen=true;}else *valid=false;}
     if (!out) return;
     if (strcasecmp(tag, "Event") == 0) snprintf(out->event, sizeof out->event, "%s", val);
     else if (strcasecmp(tag, "Site") == 0) snprintf(out->site, sizeof out->site, "%s", val);
@@ -364,16 +365,17 @@ static void parse_header_line(const char *start, const char *end, PgnHeaders *ou
 }
 
 static const char *parse_moves(const char *p, MoveNode **cur,
-                               char *res, size_t rn)
+                               char *res, size_t rn, bool *valid, int depth)
 {
+    if(depth>64){*valid=false;return p+strlen(p);}
     for (;;) {
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
         if (!*p) return p;
-        if (*p == ')') return p;
+        if (*p == ')'){if(!depth)*valid=false;return p;}
 
         if (*p == '{') {
             const char *e = strchr(p, '}');
-            if (!e) return p + strlen(p);
+            if (!e){*valid=false;return p + strlen(p);}
             if (*cur) {
                 size_t n = (size_t)(e - p - 1);
                 if (n >= sizeof (*cur)->comment) n = sizeof (*cur)->comment - 1;
@@ -394,13 +396,13 @@ static const char *parse_moves(const char *p, MoveNode **cur,
             MoveNode *save = *cur;
             if (save && save->parent) {
                 MoveNode *vc = save->parent;
-                p = parse_moves(p + 1, &vc, res, rn);
+                p = parse_moves(p + 1, &vc, res, rn,valid,depth+1);
             } else {
                 int depth = 1; p++;
                 while (*p && depth) { if (*p == '(') depth++; else if (*p == ')') depth--; p++; }
                 continue;
             }
-            if (*p == ')') p++;
+            if (*p == ')') p++;else *valid=false;
             continue;
         }
         if (*p >= '0' && *p <= '9') {
@@ -425,10 +427,11 @@ static const char *parse_moves(const char *p, MoveNode **cur,
         Move m;
         if (*cur && san_find(&(*cur)->board, tok, &m))
             *cur = mt_add_child(*cur, m, NULL);
+        else *valid=false;
     }
 }
 
-MoveNode *pgn_parse_text(const char *text, PgnHeaders *out)
+static MoveNode *pgn_parse_internal(const char *text, PgnHeaders *out,bool *valid)
 {
     Board start;
     board_reset(&start);
@@ -440,17 +443,20 @@ MoveNode *pgn_parse_text(const char *text, PgnHeaders *out)
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') p++;
         if (*p != '[') break;
         const char *e = strchr(p, ']');
-        if (!e) break;
-        parse_header_line(p, e, out, &start, &have_fen);
+        if (!e){*valid=false;break;}
+        parse_header_line(p, e, out, &start, &have_fen,valid);
         p = e + 1;
     }
     (void)have_fen;
 
     MoveNode *root = mt_new_root(&start);
     MoveNode *cur = root;
-    parse_moves(p, &cur, out ? out->result : NULL, out ? sizeof out->result : 0);
+    parse_moves(p, &cur, out ? out->result : NULL, out ? sizeof out->result : 0,valid,0);
     return root;
 }
+
+MoveNode *pgn_parse_text(const char *text,PgnHeaders *out){bool valid=true;return pgn_parse_internal(text,out,&valid);}
+MoveNode *pgn_parse_checked(const char *text,PgnHeaders *out){bool valid=true;MoveNode *root=pgn_parse_internal(text,out,&valid);if(!valid){mt_free(root);return NULL;}return root;}
 
 typedef struct { char *p; size_t len, cap; } Buf;
 

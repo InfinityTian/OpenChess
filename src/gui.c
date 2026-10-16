@@ -4048,9 +4048,11 @@ static void pgn_import_upload(Gui *g)
 static void pgn_import_load(Gui *g)
 {
     PgnHeaders h;
-    MoveNode *root = pgn_parse_text(g->pgn_text, &h);
+    MoveNode *root = pgn_parse_checked(g->pgn_text, &h);
+    if(!root){if(g->ui)snprintf(g->ui->status,sizeof g->ui->status,"%s",ui_tr(g,"PGN contains invalid moves, FEN or variations.","PGN 包含无效走子、FEN 或变例，请修改后重试。"));set_msg(g,"Invalid PGN",NULL);return;}
 
-    if (!root->first && !strstr(g->pgn_text,"[FEN ")) { set_msg(g, "No moves parsed", NULL); mt_free(root); return; }
+    char validation[160];if(!position_validate(&root->board,validation)){if(g->ui)snprintf(g->ui->status,sizeof g->ui->status,"%s",validation);mt_free(root);return;}
+    if (!root->first && !strstr(g->pgn_text,"[FEN ")) {if(g->ui)snprintf(g->ui->status,sizeof g->ui->status,"%s",ui_tr(g,"No moves parsed.","未解析到有效走子。"));set_msg(g, "No moves parsed", NULL); mt_free(root); return; }
 
     /* Always clear the previous analysis tree/board and replace it. */
     if (g->pgntree) { mt_free(g->pgntree); g->pgntree = NULL; }

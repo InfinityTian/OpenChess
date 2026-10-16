@@ -60,6 +60,9 @@ typedef struct {
  * $n NAGs and [%eval ...]) into a move tree. Never returns NULL. */
 MoveNode *pgn_parse_text(const char *text, PgnHeaders *out);
 
+/* Strict import rejects illegal moves and malformed variations/FEN tags. */
+MoveNode *pgn_parse_checked(const char *text, PgnHeaders *out);
+
 /* Serialize a tree (mainline + variations + NAGs/comments) to a heap string. */
 char *pgn_serialize(const MoveNode *root, const PgnHeaders *h);
 
