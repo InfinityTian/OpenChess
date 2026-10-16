@@ -78,6 +78,7 @@ static void ui_round_outline(SDL_Renderer *r,SDL_Rect rect,SDL_Color color);
 static void ui_move_background(Gui *g,SDL_Rect rect,bool selected);
 static void ui_puzzle_rating(Gui *g);
 static void ui_caret_color(SDL_Renderer *ren);
+static bool ui_action_buttons(Gui *g,bool click);
 
 
 /* ------------------------------------------------------------------ */
@@ -258,6 +259,7 @@ static void eval_restart(Gui *g)
     g->eval_side = g->board.side;
     g->eng_line_count = 0;
     g->eval_valid = false;
+    g->eval_best_uci[0]=0;
 
     if (g->eng_depth > 0) {
         ai_set_depth(g->eval_ai, g->eng_depth);
@@ -398,6 +400,12 @@ static void render_text(Gui *g, TTF_Font *font, const char *txt,
     SDL_RenderCopy(ren, t, NULL, &rc);
     SDL_DestroyTexture(t);
     SDL_FreeSurface(s);
+}
+
+static void render_text_exact(Gui *g,TTF_Font *font,const char *text,int x,int y,SDL_Color color)
+{
+    bool legacy=g->ui&&g->ui->legacy_paint;if(g->ui)g->ui->legacy_paint=false;
+    render_text(g,font,text,x,y,color);if(g->ui)g->ui->legacy_paint=legacy;
 }
 
 /* Map a board square (rank0=rank1) to a screen column/row (0..7), honoring
@@ -709,6 +717,7 @@ static void sync_from_tree(Gui *g)
 static void clear_anims(Gui *g)
 {
     g->anim_count = 0;
+    g->quality_anim=0;
     g->check_anim = 0;
     g->end_anim = 0;
 }
@@ -756,6 +765,7 @@ static void reset_board_state(Gui *g)
 {
     if(g->play_tree)mt_free(g->play_tree);g->play_tree=g->play_live=g->play_view=NULL;
     g->move_hit_count=0;
+    g->quality_node=NULL;g->quality_class=RC_NONE;
     g->history_browsing=false;
     clear_selection(g);
     ann_clear(g);
@@ -927,6 +937,7 @@ static void push_move(Gui *g, Move m)
             (!(MOVE_FLAGS(m) & FLAG_PROMO) || MOVE_PROMO(bm) == MOVE_PROMO(m)))
             was_best = true;
     }
+    bool choice_known=g->eval_valid&&g->eval_best_uci[0];
     g->move_was_best[g->ply] = was_best;
 
     g->before[g->ply] = pre;
@@ -947,6 +958,7 @@ static void push_move(Gui *g, Move m)
     if (g->mode == MODE_ANALYSIS && g->pgntree && g->tree_cur &&
         board_rep_equal(&pre, &g->tree_cur->board)) {
         g->tree_cur = mt_add_child(g->tree_cur, m, g->last_san);
+        if(g->tree_cur){g->tree_cur->engine_choice_known=choice_known;g->tree_cur->engine_choice=was_best;}
         sync_from_tree(g);
     }
     g->move_follow = true;
@@ -1121,7 +1133,7 @@ static bool san_can_type(const Gui *g)
     }
 }
 
-/* Reveal the SAN entry box (Enter while playing). */
+/* Space opens move input; Enter submits it. */
 static void san_open_box(Gui *g)
 {
     if(g->mode==MODE_PUZZLE)puzzle_prepare_input(g);
@@ -1250,10 +1262,10 @@ static int eng_slider_from_x(const Gui *g, int mx)
 /* "Arrows" checkbox on the Engine-lines label row. */
 static void engine_arrows_rect(const Gui *g, SDL_Rect *box)
 {
-    box->x = g->panel_x + 78;
+    box->x = g->panel_x + 4;
     box->y = g->board_y + 82;
-    box->w = 16;
-    box->h = 16;
+    box->w = 24;
+    box->h = 24;
 }
 
 static void styles_btn_rect(const Gui *g, SDL_Rect *out)
@@ -2730,10 +2742,7 @@ static void handle_puzzle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     if (k == SDLK_UP || k == SDLK_DOWN || k == SDLK_TAB) { g->setup_field ^= 1; return; }
     if (k == SDLK_LEFT || k == SDLK_RIGHT) {
         int d = (k == SDLK_RIGHT) ? 1 : -1;
-        if (g->setup_field == 0)
-            g->puzzle_band = (g->puzzle_band + d + PUZZLE_BAND_COUNT) % PUZZLE_BAND_COUNT;
-        else
-            g->puzzle_theme = (g->puzzle_theme + d + PUZZLE_THEME_COUNT) % PUZZLE_THEME_COUNT;
+        g->puzzle_theme = (g->puzzle_theme + d + PUZZLE_THEME_COUNT) % PUZZLE_THEME_COUNT;
         return;
     }
     if (k == SDLK_RETURN || k == SDLK_KP_ENTER || k == SDLK_SPACE) {if(g->setup_field==1&&g->ui)g->ui->theme_open=true;else open_puzzle(g);}
@@ -2749,8 +2758,7 @@ static void handle_puzzle_setup_mousedown(Gui *g)
         if(pt_in(&list,p.x,p.y))g->puzzle_theme=(p.y-list.y)/26;
         g->ui->theme_open=false;return;
     }
-    for (int i = 0; i < PUZZLE_BAND_COUNT; i++)
-        if (pt_in(&bands[i], p.x, p.y)) { g->setup_field = 0; g->puzzle_band = i; return; }
+
     if (pt_in(&theme, p.x, p.y)) {
         g->setup_field = 1;
         if(g->ui)g->ui->theme_open=true;
@@ -2771,10 +2779,7 @@ static void render_puzzle_setup(Gui *g, SDL_Renderer *ren)
     puzzle_setup_rects(g, bands, &theme, &start, &back);
 
     bool smart=g->ui&&g->ui->smart;
-    char around[160];snprintf(around,sizeof around,ui_tr(g,"Around my rating · %d · Target %+d","围绕当前评分 · %d · 目标偏移 %+d"),g->puzzle_rating,PUZZLE_BANDS[g->puzzle_band].offset);
-    render_text_centered(g,g->font_small,smart?ui_tr(g,"Smart practice · Adaptive difficulty","智能练习 · 自动调整难度"):around,208+(g->win_w-208)/2,268,(SDL_Color){150,180,200,255});
-    if(!smart)for(int i=0;i<PUZZLE_BAND_COUNT;i++)ui_button(g,bands[i],ui_old_text(g,PUZZLE_BANDS[i].label),-1,g->puzzle_band==i);
-    if(!smart)render_text_centered(g,g->font_tiny,ui_tr(g,"Harder puzzles: larger gains, smaller losses. Easier puzzles: smaller gains, larger losses.","题目越难，解出加分越多、答错扣分越少；简单题则相反。"),208+(g->win_w-208)/2,350,(SDL_Color){150,180,200,255});
+    render_text_centered(g,g->font_small,smart?ui_tr(g,"Smart practice · Adaptive difficulty","智能练习 · 自动调整难度"):ui_tr(g,"Adjust difficulty while solving","可在做题界面随时调整难度"),208+(g->win_w-208)/2,300,(SDL_Color){150,180,200,255});
 
     render_text_centered(g, g->font_small, "Theme", (208+(g->win_w-208)/2), 372,
                          (SDL_Color){ 150, 180, 200, 255 });
@@ -3120,7 +3125,7 @@ static void online_tick(Gui *g)
             set_msg(g, "Opponent wants a rematch - press Rematch", NULL);
         } else if (ev == ONLINE_EV_DRAW_OFFER) {
             g->draw_offered = true;
-            set_msg(g, "Opponent offers a draw: Ctrl+A accept, Ctrl+D decline", NULL);
+            set_msg(g, "Draw offered", NULL);
         } else if (ev == ONLINE_EV_DRAW_DECLINE) {
             g->draw_offered = false;
             set_msg(g, "Draw offer declined", NULL);
@@ -3632,10 +3637,7 @@ static void render_online(Gui *g, SDL_Renderer *ren)
         render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 630,
                              (SDL_Color){ 255, 170, 120, 255 });
 
-    render_text_centered(g, g->font_small,
-                         "Tab/Up/Down field    Enter choose    L login    R rated    Esc back",
-                         g->win_w / 2, g->win_h - 80,
-                         (SDL_Color){ 110, 120, 130, 255 });
+
 
     render_account(g, ren);
 }
@@ -4347,7 +4349,7 @@ static void render_pgn_import(Gui *g, SDL_Renderer *ren)
     } else {
         g->pgn_scroll_max = 0;
         render_text(g, g->font_small,
-                    "Paste PGN here (Ctrl+V), or use Upload.", text.x + 8, text.y + 8,
+                    "Paste PGN here, or choose a file.", text.x + 8, text.y + 8,
                     (SDL_Color){ 120, 120, 128, 255 });
     }
     SDL_RenderSetClipRect(ren, NULL);
@@ -4525,8 +4527,8 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         return;
     }
 
-    /* Enter reveals the SAN box; Enter again submits. */
-    if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
+    /* Space opens SAN input. Enter also remains available for existing users. */
+    if (k == SDLK_SPACE || k == SDLK_RETURN || k == SDLK_KP_ENTER) {
         san_open_box(g);
         return;
     }
@@ -4574,6 +4576,7 @@ static void handle_game_textinput(Gui *g, const SDL_TextInputEvent *te)
     if (!g->san_open) return;
     for (const char *p = te->text; *p; p++) {
         if (g->input.len >= (int)sizeof g->input.text - 1) break;
+        if(*p==' '&&g->input.len==0)continue;
         if (san_char_ok(*p)) g->input.text[g->input.len++] = *p;
     }
     g->input.text[g->input.len] = 0;
@@ -4690,7 +4693,7 @@ static void handle_game_mousedown(Gui *g)
     if (g->mode == MODE_ANALYSIS) {
         SDL_Rect box;
         engine_arrows_rect(g, &box);
-        SDL_Rect ahit = { box.x - 4, box.y - 4, box.w + 60, box.h + 8 };
+        SDL_Rect ahit = { box.x - 4, box.y - 4, box.w + 8, box.h + 8 };
         if (pt_in(&ahit, p.x, p.y)) {
             g->engine_arrows = !g->engine_arrows;
             g->config_dirty = true;
@@ -5297,6 +5300,14 @@ void gui_tick(Gui *g, Uint32 now)
                     g->tree_cur->eval_cp = g->state == CHECKMATE ? -30000
                         : g->board.side == WHITE ? cp : -cp;
                     g->tree_cur->eval_mate = g->board.side == WHITE ? mate : -mate;
+                    if(g->eval_has_mate&&g->state!=CHECKMATE)g->tree_cur->eval_cp=g->tree_cur->eval_mate>0?30000:-30000;
+                    MoveNode *node=g->tree_cur,*parent=node->parent;
+                    if(depth>=8&&node->cls==RC_NONE&&node->engine_choice_known&&parent&&parent->has_eval){
+                        MoveList legal;gen_legal(&parent->board,&legal);
+                        node->cls=review_classify(parent->eval_cp,parent->eval_mate!=0,-node->eval_cp,node->eval_mate!=0,
+                            parent->eval_cp,parent->eval_mate!=0,false,g->book&&opening_is_book(g->book,&node->board),legal.count,node->engine_choice);
+                        if(g->ply>0)g->review_cls[g->ply-1]=node->cls;
+                    }
                 }
                 g->eval_valid = true;
             }
@@ -6079,8 +6090,8 @@ static void render_status(Gui *g)
 {
     char line[64];
     if (g->state == CHECKMATE)
-        snprintf(line, sizeof line, "Checkmate - %s wins",
-                 g->board.side == WHITE ? "Black" : "White");
+        snprintf(line,sizeof line,ui_tr(g,"Checkmate - %s wins","将杀 — %s获胜"),
+                 ui_old_text(g,g->board.side==WHITE?"Black":"White"));
     else if (g->state == STALEMATE)
         snprintf(line, sizeof line, "Stalemate");
     else if (g->state == INSUFFICIENT_MATERIAL)
@@ -6090,9 +6101,8 @@ static void render_status(Gui *g)
     else if (g->state == FIFTY_MOVE_RULE)
         snprintf(line, sizeof line, "Draw (fifty-move rule)");
     else {
-        snprintf(line, sizeof line, "%s to move%s",
-                 g->board.side == WHITE ? "White" : "Black",
-                 in_check(&g->board, g->board.side) ? " - CHECK" : "");
+        snprintf(line,sizeof line,ui_tr(g,"%s to move%s","%s行棋%s"),ui_old_text(g,g->board.side==WHITE?"White":"Black"),
+                 in_check(&g->board,g->board.side)?ui_tr(g," - CHECK"," — 将军"):"");
     }
     render_text(g, g->font_ui, line, g->panel_x, g->board_y, (SDL_Color){ 30, 54, 78, 255 });
 
@@ -6131,7 +6141,7 @@ static void render_status(Gui *g)
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 65, 102, 138, 255 });
         if (g->draw_offered)
-            render_text(g, g->font_small, "Draw offered: Ctrl+A accept, Ctrl+D decline",
+            render_text(g, g->font_small, "Draw offered",
                         g->panel_x, g->board_y + 50, (SDL_Color){ 240, 200, 120, 255 });
     } else if (g->mode == MODE_PUZZLE) {
         char info[160];
@@ -6243,10 +6253,12 @@ static void draw_eval_bar(Gui *g, SDL_Renderer *ren)
     } else {
         snprintf(val, sizeof val, "%+.1f", g->eval_cp / 100.0);
     }
-    bool top_white = g->flipped ? (wh > 4) : (wh > h - 4);
-    SDL_Color vc = top_white ? (SDL_Color){ 30, 32, 38, 255 }
-                             : (SDL_Color){ 235, 235, 238, 255 };
-    render_text_centered(g, g->font_tiny, val, x + w / 2, y + 6, vc);
+
+    /* Keep a fixed, high-contrast score label independent of app theme. */
+    int tw=0,th=0;TTF_SizeUTF8(g->font_tiny,val,&tw,&th);float scale=eff_scale(g);
+    SDL_Rect label={x+1,y+2,w-2,text_height(g,g->font_tiny)+8};
+    SDL_SetRenderDrawColor(ren,236,236,238,255);SDL_RenderFillRect(ren,&label);
+    render_text_exact(g,g->font_tiny,val,x+(w-(int)(tw/scale))/2,y+6,(SDL_Color){30,32,38,255});
 }
 
 /* Convert a UCI principal variation into a short SAN sequence. */
@@ -6339,11 +6351,11 @@ static void review_finish_ply(Gui *g, MoveNode *node)
                (loss > 0 || min_attacker_value(&after, to, opp) < piece_value(moved));
     MoveList ml;
     gen_legal(before, &ml);
-    bool book = g->book && opening_is_book(g->book, before);
+    bool book = g->book && opening_is_book(g->book, &after);
 
     ReviewClass rc = review_classify(
         g->rb_cp, g->rb_hm, g->ra_cp, g->ra_hm,
-        g->r2_cp, g->r2_hm, sac, book, ml.count);
+        g->r2_cp, g->r2_hm, sac, book, ml.count,g->r_played_best);
     g->review_cls[g->review_i] = rc;
     node->cls = rc;
 
@@ -6477,23 +6489,27 @@ static void review_step(Gui *g)
         if (n > 0) {
             g->rb_cp = lines[0].cp; g->rb_mate = lines[0].mate;
             g->rb_hm = lines[0].has_mate;
+            if(g->rb_hm)g->rb_cp=g->rb_mate>0?30000:-30000;
         } else {
             g->rb_cp = cp; g->rb_mate = mate;
             g->rb_hm = ai_eval_has_mate(g->review_ai);
+            if(g->rb_hm)g->rb_cp=g->rb_mate>0?30000:-30000;
         }
         if (n > 1) {
             g->r2_cp = lines[1].cp; g->r2_mate = lines[1].mate;
             g->r2_hm = lines[1].has_mate;
+            if(g->r2_hm)g->r2_cp=g->r2_mate>0?30000:-30000;
         } else {
             g->r2_cp = g->rb_cp; g->r2_mate = g->rb_mate; g->r2_hm = g->rb_hm;
         }
 
         Move bestm;
         bool played_best = false;
-        if (n > 0 && lines[0].pv[0] &&
-            ai_uci_to_move(&before, lines[0].pv, &bestm))
+        if (ai_uci_to_move(&before,uci,&bestm))
             played_best = (MOVE_FROM(bestm) == MOVE_FROM(played) &&
-                           MOVE_TO(bestm) == MOVE_TO(played));
+                           MOVE_TO(bestm) == MOVE_TO(played) &&
+                           (!(MOVE_FLAGS(played)&FLAG_PROMO)||MOVE_PROMO(bestm)==MOVE_PROMO(played)));
+        g->r_played_best=played_best;
 
         if (played_best) {
             g->ra_cp = g->rb_cp; g->ra_mate = g->rb_mate; g->ra_hm = g->rb_hm;
@@ -6508,6 +6524,7 @@ static void review_step(Gui *g)
     ai_get_eval(g->review_ai, &cp, &mate, &depth);
     g->ra_cp = -cp; g->ra_mate = -mate;
     g->ra_hm = ai_eval_has_mate(g->review_ai);
+    if(g->ra_hm)g->ra_cp=mate>0?-30000:30000;
     review_finish_ply(g, node);
 }
 
@@ -6530,19 +6547,18 @@ static void render_review_bar(Gui *g, SDL_Renderer *ren)
 static void draw_chip(Gui *g, SDL_Renderer *ren, int x, int y, int w, int h,
                       const char *txt)
 {
-    SDL_Rect rc = { x, y, w, h };
-    set_render_color(ren, 226, 226, 230);
-    SDL_RenderFillRect(ren, &rc);
-    set_render_color(ren, 40, 42, 48);
-    SDL_RenderDrawRect(ren, &rc);
-    render_text_centered(g, g->font_small, txt, x + w / 2,
-                         y + (h - text_height(g, g->font_small)) / 2,
-                         (SDL_Color){ 30, 32, 38, 255 });
+    SDL_Rect rc={x,y,w,h};
+    ui_round(ren,rc,ui_surface_color((SDL_Color){226,237,248,255}),6);
+    SDL_Color ink=ui_legacy_text_color(g,g->font_small,(SDL_Color){235,235,235,255});
+    if(!g->ui||!g->ui->legacy_paint)ink=(SDL_Color){30,54,78,255};
+    int tw=0,th=0;TTF_SizeUTF8(g->font_small,txt,&tw,&th);
+    render_text_exact(g,g->font_small,txt,x+(w-(int)(tw/eff_scale(g)))/2,y+(h-text_height(g,g->font_small))/2,ink);
 }
 
 /* "<san> is best" / "<san> is a mistake" / "<san> missed the best move". */
-static void move_grade_text(ReviewClass c, const char *san, char *out, size_t n)
+static void move_grade_text(Gui *g,ReviewClass c, const char *san, char *out, size_t n)
 {
+    if(g->ui&&g->ui->zh){snprintf(out,n,"%s · %s",san,ui_old_text(g,review_name(c)));return;}
     switch (c) {
         case RC_MISS:       snprintf(out, n, "%s missed the best move", san); return;
         case RC_INACCURACY: snprintf(out, n, "%s is an inaccuracy", san); return;
@@ -6580,6 +6596,7 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
 {
     if (g->mode != MODE_ANALYSIS) return;
     opening_refresh(g);
+    bool terminal=g->state!=NO_GAME_OVER;
 
     /* Coach line 1: the last played move and its grade. */
     if (g->ply > 0) {
@@ -6594,7 +6611,7 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
 
         char txt[96];
         if (lc == RC_NONE) snprintf(txt, sizeof txt, "%s", san);
-        else               move_grade_text(lc, san, txt, sizeof txt);
+        else               move_grade_text(g,lc, san, txt, sizeof txt);
 
         if (lc != RC_NONE)
             draw_badge_circle(g, ren, g->panel_x + 12, ly + 11, 11, lc);
@@ -6607,7 +6624,8 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
     if (g->eval_ai) {
         int cy = g->board_y + 52;
         char ev[24];
-        if (!g->eval_valid)
+        if(terminal)snprintf(ev,sizeof ev,g->state==CHECKMATE?"#":"0.00");
+        else if (!g->eval_valid)
             snprintf(ev, sizeof ev, "...");
         else if (g->eval_has_mate && g->eval_mate == 0)
             snprintf(ev, sizeof ev, "#");
@@ -6618,20 +6636,20 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
             snprintf(ev, sizeof ev, "%+.2f", g->eval_cp / 100.0);
         draw_chip(g, ren, g->panel_x, cy, 64, 24, ev);
 
-        if (g->eng_line_count > 0) {
+        if (!terminal&&g->eng_line_count > 0) {
             char fs[16];
             pv_first_san(g, g->eng_lines[0].pv, fs, sizeof fs);
             if (fs[0]) {
                 draw_badge_circle(g, ren, g->panel_x + 82, cy + 12, 10, RC_BEST);
                 char coach[64];
-                snprintf(coach, sizeof coach, "%s is best", fs);
+                move_grade_text(g,RC_BEST,fs,coach,sizeof coach);
                 render_text(g, g->font_small, coach, g->panel_x + 98, cy + 3,
                             (SDL_Color){ 150, 205, 150, 255 });
             }
         }
-        if (g->eval_valid) {
+        if (!terminal&&g->eval_valid&&g->eval_depth>0) {
             char dep[32];
-            snprintf(dep, sizeof dep, "depth %d", g->eval_depth);
+            snprintf(dep,sizeof dep,ui_tr(g,"Depth %d","深度 %d"),g->eval_depth);
             render_text(g, g->font_small, dep, g->panel_x + 330, cy + 3,
                         (SDL_Color){ 140, 145, 155, 255 });
         }
@@ -6639,15 +6657,7 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
 
     SDL_Rect ab;
     engine_arrows_rect(g, &ab);
-    draw_rect(ren, &ab, 40, 40, 46, true);
-    draw_rect(ren, &ab, 120, 120, 130, false);
-    if (g->engine_arrows) {
-        set_render_color(ren, 80, 200, 100);
-        SDL_Rect f = { ab.x + 3, ab.y + 3, ab.w - 6, ab.h - 6 };
-        SDL_RenderFillRect(ren, &f);
-    }
-    render_text(g, g->font_small, "Arrows", ab.x + ab.w + 6, ab.y,
-                (SDL_Color){ 200, 200, 200, 255 });
+    ui_button(g,ab,ui_old_text(g,"Arrows"),22,g->engine_arrows);
 
     SDL_Rect t;
     engine_slider_rect(g, &t);
@@ -6668,19 +6678,19 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
                 (SDL_Color){ 210, 210, 210, 255 });
 
     int y = t.y + 22;
-    int shown = g->review_on ? 0 : 3;      /* the review bar uses this space */
+    int shown = g->review_on||terminal ? 0 : 3;      /* the review bar uses this space */
     for (int i = 0; i < g->eng_line_count && i < shown; i++) {
         AiLine *L = &g->eng_lines[i];
         char sc[24], pvs[160];
         if (L->has_mate)
-            snprintf(sc, sizeof sc, "%sM%d", L->mate >= 0 ? "+" : "-",
-                     L->mate >= 0 ? L->mate : -L->mate);
+            snprintf(sc,sizeof sc,L->mate==0?"#":"%sM%d",(g->board.side==BLACK?-L->mate:L->mate)>=0?"+":"-",abs(L->mate));
         else
-            snprintf(sc, sizeof sc, "%+.2f", L->cp / 100.0);
+            snprintf(sc, sizeof sc, "%+.2f", (g->board.side==BLACK?-L->cp:L->cp) / 100.0);
         draw_chip(g, ren, g->panel_x, y - 2, 56, 20, sc);
         pv_to_san(g, L->pv, pvs, sizeof pvs);
+        SDL_Rect line_clip={g->panel_x+64,y,PANEL_W-64,20};SDL_RenderSetClipRect(ren,&line_clip);
         render_text(g, g->font_small, pvs, g->panel_x + 64, y,
-                    (SDL_Color){ 205, 215, 225, 255 });
+                    (SDL_Color){ 205, 215, 225, 255 });SDL_RenderSetClipRect(ren,NULL);
         y += 18;
     }
 
@@ -6776,10 +6786,49 @@ static void draw_quality_tint(Gui *g, SDL_Renderer *ren, int sq, ReviewClass c)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+/* The reference holds a large white mark over a colored square, then folds
+ * that mark into the persistent corner badge. All geometry follows the board. */
+static void draw_quality_celebration(Gui *g,SDL_Renderer *ren,SDL_Rect square,ReviewClass c,float elapsed)
+{
+    Uint8 red,green,blue;review_badge_color(c,&red,&green,&blue);
+    float enter=fminf(1,elapsed/0.16f),fold=fmaxf(0,fminf(1,(elapsed-1.05f)/0.35f));
+    float smooth=fold*fold*(3-2*fold),opacity=enter*(1-smooth);
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(ren,red,green,blue,(Uint8)(165*opacity));SDL_RenderFillRect(ren,&square);
+    float from_x=square.x+square.w*.5f,from_y=square.y+square.h*.53f;
+    float to_x=square.x+square.w-g->sq*.07f,to_y=square.y+g->sq*.07f;
+    float cx=from_x+(to_x-from_x)*smooth,cy=from_y+(to_y-from_y)*smooth;
+    float size=g->sq*(.70f*(1-smooth)+.36f*smooth)*(0.86f+0.14f*enter);
+    if(fold>0){SDL_SetRenderDrawColor(ren,red,green,blue,(Uint8)(255*smooth));fill_circle(ren,(int)cx,(int)cy,(int)(size*.57f));}
+    SDL_SetRenderDrawColor(ren,255,255,255,(Uint8)(255*enter));
+    int marks=c==RC_BRILLIANT?2:1;float gap=size*.27f,width=size*.18f;
+    for(int k=0;k<marks;k++){
+        float x=cx+(k-(marks-1)*.5f)*gap-width/2;
+        SDL_Rect stem={(int)x,(int)(cy-size*.44f),(int)fmaxf(2,width),(int)(size*.59f)};SDL_RenderFillRect(ren,&stem);
+        SDL_Rect dot={(int)x,(int)(cy+size*.29f),(int)fmaxf(2,width),(int)fmaxf(2,width)};SDL_RenderFillRect(ren,&dot);
+    }
+    if(opacity>0.01f){
+        const char *title=ui_tr(g,c==RC_BRILLIANT?"Brilliant!":"Great!",c==RC_BRILLIANT?"精彩！":"优秀！");
+        int tw=0,th=0;TTF_SizeUTF8(g->font_small,title,&tw,&th);float scale=eff_scale(g);
+        int width=(int)(tw/scale)+28,height=text_height(g,g->font_small)+14;
+        SDL_Rect pill={clampi((int)(from_x-width/2),g->board_x+2,g->board_x+8*g->sq-width-2),clampi(square.y-height/2,g->board_y+2,g->board_y+8*g->sq-height-2),width,height};
+        SDL_SetRenderDrawColor(ren,0,0,0,(Uint8)(30*opacity));SDL_Rect shadow=pill;shadow.y+=2;fill_round_rect(ren,shadow,height/2,true,true);
+        SDL_SetRenderDrawColor(ren,255,255,255,(Uint8)(255*opacity));fill_round_rect(ren,pill,height/2,true,true);
+        render_text_exact(g,g->font_small,title,pill.x+14,pill.y+7,(SDL_Color){red*.65f,green*.65f,blue*.65f,(Uint8)(255*opacity)});
+    }
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_NONE);
+}
+
 static void draw_quality_badge(Gui *g, SDL_Renderer *ren, int sq, ReviewClass c)
 {
     SDL_Rect rc;
     window_sq(g, sq, &rc);
+    if(g->mode==MODE_ANALYSIS&&(c==RC_BRILLIANT||c==RC_GREAT)&&g->anim_style!=ANIM_NONE){
+        if(g->quality_class!=(int)c){g->quality_class=c;g->quality_anim=SDL_GetTicks()+1;}
+        if(g->quality_anim){Uint32 now=SDL_GetTicks();float elapsed=now<g->quality_anim?0:(now-g->quality_anim)/1000.0f;
+            if(elapsed<1.40f){draw_quality_celebration(g,ren,rc,c,elapsed);return;}g->quality_anim=0;
+        }
+    }
     int rad = g->sq * 19 / 100;
     if (rad < 9) rad = 9;
     int cx = rc.x + rc.w - g->sq * 7 / 100;
@@ -7243,7 +7292,7 @@ static void render_san_hint(Gui *g)
 {
     SDL_Rect ib;
     input_rect(g, &ib);
-    render_text(g, g->font_small, "Press Enter to type a move", ib.x + 12, ib.y + 12,
+    render_text(g, g->font_small, "Press Space to type a move", ib.x + 12, ib.y + 12,
                 (SDL_Color){ 120, 130, 140, 255 });
 }
 
@@ -7322,7 +7371,12 @@ static void render_fen_box(Gui *g, SDL_Renderer *ren)
 static void render_text_centered_rect_f(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
                                         TTF_Font *font, const char *label)
 {
-    if(g->ui){ui_button(g,*r,ui_old_text(g,label),!strcmp(label,"Hint")?1:-1,false);return;}
+    if(g->ui){
+        const char *names[]={"Hint","Undo","Restart","Reveal","Next","Import","Analyze","Report","Analysis","Save PGN","Menu","Back","Start","Load","Copy","Rematch","Resign"};
+        const int icons[]={1,20,19,13,16,4,2,12,2,3,18,15,23,5,21,19,24};int icon=-1;
+        for(unsigned k=0;k<sizeof icons/sizeof icons[0];k++)if(!strcmp(label,names[k])){icon=icons[k];break;}
+        ui_button(g,*r,ui_old_text(g,label),icon,false);return;
+    }
     draw_rect(ren, r, 45, 45, 50, true);
     draw_rect(ren, r, 120, 120, 130, false);
     int ty = r->y + (r->h - text_height(g, font)) / 2;
@@ -7364,17 +7418,7 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     else if(ui_finished_game(g))render_text_centered_rect_f(g,ren,&styles,g->font_small,"Analysis");
     render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
-    const char *legend;
-    if (g->mode == MODE_ONLINE)
-        legend = "T chat  Ctrl+D draw  Ctrl+U undo  Ctrl+S save PGN  Ctrl+F flip";
-    else if (g->mode == MODE_PUZZLE)
-        legend = "H hint  R reveal  N next  Ctrl+S export  Ctrl+F flip";
-    else if (g->mode == MODE_ANALYSIS)
-        legend = "Ctrl+O import  V review  Ctrl+U undo  Ctrl+S save  Ctrl+F flip";
-    else
-        legend = "Ctrl+U undo  Ctrl+R restart  Ctrl+S save PGN  Ctrl+F flip";
-    render_text(g, g->font_tiny, legend,
-                g->panel_x, undo.y + 48, (SDL_Color){ 130, 130, 130, 255 });
+
 }
 
 static void render_setup(Gui *g, SDL_Renderer *ren)
@@ -7438,10 +7482,7 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
         render_text_centered(g, g->font_small, g->menu_msg, (208+(g->win_w-208)/2), 640,
                              (SDL_Color){ 255, 170, 120, 255 });
 
-    render_text_centered(g, g->font_small,
-                         "Left/Right change    Up/Down field    Enter start    Esc back",
-                         (208+(g->win_w-208)/2), g->win_h - 80,
-                         (SDL_Color){ 110, 120, 130, 255 });
+
 }
 
 static void hj_field(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
@@ -7496,10 +7537,7 @@ static void render_hostjoin(Gui *g, SDL_Renderer *ren)
         render_text_centered(g, g->font_small, g->menu_msg, (208+(g->win_w-208)/2), 600,
                              (SDL_Color){ 255, 180, 120, 255 });
 
-    render_text_centered(g, g->font_small,
-                         "Tab/Up/Down field    type to edit    Enter activate    Esc back",
-                         (208+(g->win_w-208)/2), g->win_h - 80,
-                         (SDL_Color){ 110, 120, 130, 255 });
+
 }
 
 /* ---- appearance thumbnails ---- */
@@ -7696,10 +7734,7 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     ape_back_rect(g, &back);
     render_text_centered_rect(g, ren, &back, "Back");
 
-    render_text_centered(g, g->font_small,
-                         ui_tr(g,"Arrows select · PgUp/PgDn page · Tab / 1–4 switch · Enter apply · Esc back","方向键选择 · PgUp/PgDn 翻页 · Tab / 1–4 切换 · 回车应用 · Esc 返回"),
-                         g->win_w / 2, g->win_h - 40,
-                         (SDL_Color){ 110, 120, 130, 255 });
+
 }
 
 /* ---- Settings panel ------------------------------------------------ */
@@ -7942,7 +7977,7 @@ static void render_settings_engine(Gui *g, SDL_Renderer *ren)
                              (SDL_Color){ 235, 235, 235, 255 });
     }
 
-    render_text(g, g->font_small, "Custom engine path (click to edit, Enter to apply):",
+    render_text(g, g->font_small, "Custom engine path:",
                 custom.x, custom.y - 22, (SDL_Color){ 150, 180, 200, 255 });
     draw_rect(ren, &custom, 30, 30, 32, true);
     draw_rect(ren, &custom,
@@ -8010,9 +8045,7 @@ static void render_settings(Gui *g, SDL_Renderer *ren)
     settings_back_rect(g, &back);
     render_text_centered_rect(g, ren, &back, "Back");
 
-    render_text_centered(g, g->font_small,
-        "Tab / 1-2-3 switch tab    Up/Down select    Left/Right change    Enter open    Esc back",
-        g->win_w / 2, g->win_h - 40, (SDL_Color){ 110, 120, 130, 255 });
+
 }
 
 /* ---- opening browser ---- */
@@ -8523,10 +8556,7 @@ static void render_openings(Gui *g, SDL_Renderer *ren)
                  g->opening_nmoves);
     render_text(g, g->font_small, info, g->panel_x, list.y + list.h + 6,
                 (SDL_Color){ 150, 210, 230, 255 });
-    render_text(g, g->font_tiny,
-                ui_tr(g,"Arrows: moves · PgUp/PgDn: openings · Enter: analysis","方向键：步进 · PgUp/PgDn：开局 · 回车：分析"),
-                g->panel_x, g->board_y + 8 * g->sq + 6,
-                (SDL_Color){ 110, 120, 130, 255 });
+
 }
 
 static void render_menu(Gui *g, SDL_Renderer *ren)
@@ -8591,10 +8621,7 @@ static void render_menu(Gui *g, SDL_Renderer *ren)
         render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2,
                              g->win_h - 118, (SDL_Color){ 255, 170, 120, 255 });
 
-    render_text_centered(g, g->font_small,
-                         "Up/Down select    Enter choose    Ctrl+Q quit",
-                         g->win_w / 2, g->win_h - 70,
-                         (SDL_Color){ 110, 120, 130, 255 });
+
 }
 
 static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
@@ -8629,9 +8656,7 @@ static void render_pgn_prompt(Gui *g, SDL_Renderer *ren)
     }
     SDL_RenderSetClipRect(ren, NULL);
 
-    render_text_centered(g, g->font_small, "Enter save    Esc cancel",
-                         box.x + bw / 2, box.y + bh - 26,
-                         (SDL_Color){ 150, 160, 175, 255 });
+
 }
 
 /* Online chat: recent lines above the HUD, and the entry line when active. */
@@ -8663,6 +8688,8 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     Board live_board=g->board,view_board;int live_ply=g->ply,live_selected=g->selected,live_targets=g->targets.count,live_anims=g->anim_count;
     GameState live_state=g->state;Uint32 live_check=g->check_anim,live_end=g->end_anim;
     bool viewing=history_board(g,&view_board);
+    MoveNode *visible_node=g->mode==MODE_ANALYSIS?g->tree_cur:NULL;
+    if(g->quality_node!=visible_node){g->quality_node=visible_node;g->quality_class=RC_NONE;g->quality_anim=0;}
     if(viewing){g->board=view_board;g->ply=g->history_cursor;g->state=game_state(&view_board);if(!play_branch(g)){g->selected=-1;g->targets.count=0;}g->anim_count=0;g->check_anim=g->end_anim=0;}
     draw_board_squares(g, ren);
     draw_coordinates(g);
@@ -8930,6 +8957,7 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE){ui_puzzle_strip(g);ui_daily_panel(g);ui_puzzle_rating(g);}
         if(g->scene==SCENE_GAME&&g->mode==MODE_ANALYSIS)ui_button(g,(SDL_Rect){g->board_x,g->board_y+8*g->sq+28,200,40},ui_tr(g,"Save analysis","保存分析"),3,false);
         if(g->scene==SCENE_PUZZLE_SETUP)ui_button(g,(SDL_Rect){g->board_x,g->win_h-210,310,40},ui_tr(g,g->ui->rated?"Rated · click to switch":"Unrated · click to switch",g->ui->rated?"计分练习 · 点击切换":"不计分练习 · 点击切换"),-1,false);
+        ui_action_buttons(g,false);
         ui_shell(g);
         ui_modal_render(g);
     }

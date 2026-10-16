@@ -74,6 +74,10 @@ SERVER_SRC    = server/main.c server/accounts.c server/community.c src/workspace
 $(SERVER): server/community_runtime.inc $(SERVER_SRC)
 	$(CC) $(CFLAGS) $(WS_CFLAGS) $(SQLITE_CFLAGS) $(filter %.c %.o,$^) -o $@ $(WS_LIBS) $(SQLITE_LIBS) -lm
 
+# Shared struct/API changes must rebuild every consumer, including cached objects.
+$(OBJ_CORE): $(wildcard src/*.h)
+$(BIN) $(SERVER_TARGET) tests/test_ui21 tests/test_gui tests/test_local: $(wildcard src/*.h)
+
 %.o: %.c
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) -c $< -o $@
 

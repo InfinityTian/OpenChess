@@ -79,7 +79,7 @@ static double win_after(int cp, bool mate)
 ReviewClass review_classify(int eval_before, bool mate_before,
                             int eval_after, bool mate_after,
                             int second_best, bool second_mate,
-                            bool sacrifice, bool book, int legal_moves)
+                            bool sacrifice, bool book, int legal_moves, bool engine_best)
 {
     if (legal_moves <= 1) return RC_FORCED;
     if (book) return RC_BOOK;
@@ -89,8 +89,8 @@ ReviewClass review_classify(int eval_before, bool mate_before,
     double loss = wb - wa;
     if (loss < 0.0) loss = 0.0;
 
-    /* Best move? (small loss) */
-    bool best = (loss <= 1.0);
+    /* The first engine choice is authoritative, independent of search noise. */
+    bool best = engine_best;
 
     /* Brilliant: a sound sacrifice that is the best move. */
     if (best && sacrifice && wa >= 45.0) return RC_BRILLIANT;
@@ -109,10 +109,12 @@ ReviewClass review_classify(int eval_before, bool mate_before,
         if (had_win && !still_win) return RC_MISS;
     }
 
-    if (loss <= 1.0) return RC_BEST;
-    if (loss < 2.0)  return RC_EXCELLENT;
-    if (loss < 5.0)  return RC_GOOD;
-    if (loss < 10.0) return RC_INACCURACY;
-    if (loss < 20.0) return RC_MISTAKE;
+    if (best) return RC_BEST;
+    /* Other accurate moves remain distinct from the engine's first choice.
+     * Tighter win-probability bands expose smaller accuracy differences. */
+    if (loss < 0.75) return RC_EXCELLENT;
+    if (loss < 2.0)  return RC_GOOD;
+    if (loss < 5.0)  return RC_INACCURACY;
+    if (loss < 10.0) return RC_MISTAKE;
     return RC_BLUNDER;
 }

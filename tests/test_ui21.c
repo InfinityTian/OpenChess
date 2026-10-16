@@ -65,6 +65,8 @@ int main(int argc,char **argv)
  int current=g->ui->current_entry;if(current<0||g->ui->entries[current].day)return 19;
  click(g,g->win_w-130,g->board_y+120);if(g->ui->rated||g->ui->entries[current].rated)return 20;
  click(g,g->win_w-130,g->board_y+120);if(!g->ui->rated||!g->ui->entries[current].rated)return 21;
+ Board difficulty_board=g->board;int difficulty_entry=g->ui->current_entry,difficulty_step=g->puzzle_step;
+ for(int k=0;k<5;k++){int width=g->win_w-g->panel_x-24;click(g,g->panel_x+20+k*((width-40)/5)+10,g->board_y+62+122);if(g->puzzle_band!=k||g->ui->current_entry!=difficulty_entry||g->puzzle_step!=difficulty_step||!board_rep_equal(&difficulty_board,&g->board))return 78;}
  capture(g,r,"puzzle-rating-card");g->san_open=true;capture(g,r,"puzzle-move-input");g->san_open=false;
  g->scene=SCENE_SETTINGS;g->ui->dark_mode=false;click(g,g->win_w-120,40);if(!g->ui->dark_mode)return 22;capture(g,r,"settings-dark-toggle");
  /* Promotion menus, retry navigation, next guard, complete answers and clean analysis roots. */
@@ -111,7 +113,21 @@ int main(int argc,char **argv)
  Board final=g->board;keypress(g,SDLK_UP);square_click(g,"g7");square_click(g,"g6");if(!g->history_browsing||g->ply!=7||!board_rep_equal(&final,&g->board))return 76;
  click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=7||mt_depth(g->tree_cur)!=7||strcmp(g->pgn_hdr.result,"1-0")||!board_rep_equal(&final,&g->board))return 48;
  MoveNode *fork=g->pgntree;for(int k=0;k<5;k++)fork=fork->first;if(!fork->first->next||strcmp(fork->first->next->san,"g6"))return 77;
- keypress(g,SDLK_LEFT);if(g->ply!=6)return 49;keypress(g,SDLK_RIGHT);if(g->ply!=7)return 50;capture(g,r,"finished-game-analysis");
+ click(g,g->panel_x+17,g->win_h-53);if(g->ply!=6)return 49;click(g,g->panel_x+59,g->win_h-53);if(g->ply!=7)return 50;
+ g->ui->dark_mode=true;g->ui->zh=true;capture(g,r,"terminal-zh-dark");g->ui->zh=false;capture(g,r,"terminal-en-dark");g->ui->zh=true;
+ keypress(g,SDLK_UP);g->eval_valid=true;g->eval_cp=-526;g->eval_side=BLACK;g->eval_has_mate=false;g->eval_depth=17;g->eng_line_count=1;g->eng_lines[0].cp=526;g->eng_lines[0].has_mate=false;snprintf(g->eng_lines[0].pv,sizeof g->eng_lines[0].pv,"g8f6 h5f7");
+ capture(g,r,"engine-score-dark");
+ for(int cls=RC_BRILLIANT;cls<=RC_GREAT;cls++){
+   g->anim_count=0;g->anim_style=ANIM_ARCADE;g->tree_cur->cls=cls;g->quality_class=RC_NONE;g->quality_anim=0;capture(g,r,"quality-start");if(!g->quality_anim)return 81;
+   g->quality_anim=SDL_GetTicks()-500;capture(g,r,cls==RC_BRILLIANT?"brilliant-hold":"great-hold");
+   g->quality_anim=SDL_GetTicks()-1220;capture(g,r,cls==RC_BRILLIANT?"brilliant-fold":"great-fold");
+   g->quality_anim=SDL_GetTicks()-1500;capture(g,r,"quality-settled");if(g->quality_anim)return 82;capture(g,r,"quality-no-replay");if(g->quality_anim)return 83;
+ }
+ g->quality_anim=SDL_GetTicks();keypress(g,SDLK_LEFT);capture(g,r,"quality-navigation-cancels");if(g->quality_anim)return 84;keypress(g,SDLK_RIGHT);g->anim_count=0;
+ g->tree_cur->cls=RC_BRILLIANT;g->quality_class=RC_NONE;g->quality_anim=0;g->anim_style=ANIM_NONE;capture(g,r,"quality-animation-disabled");if(g->quality_anim)return 85;g->anim_style=ANIM_ARCADE;
+ g->tree_cur->cls=RC_GOOD;g->analysis_summary=true;capture(g,r,"summary-badges-dark");g->analysis_summary=false;g->ui->dark_mode=false;capture(g,r,"engine-score-light");
+ keypress(g,SDLK_SPACE);if(!g->san_open||!g->input.active)return 79;keypress(g,SDLK_ESCAPE);if(g->san_open)return 80;
+ keypress(g,SDLK_DOWN);capture(g,r,"finished-game-analysis");
  game_fixture(g,MODE_ONLINE,start_fen,"e2e4 e7e5","0-1");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||strcmp(g->pgn_hdr.result,"0-1"))return 51;
  const char *custom="7k/8/8/8/8/8/R7/K7 w - - 0 23";Board initial;fen_parse(custom,&initial);
  game_fixture(g,MODE_LOCAL,custom,"a2a3 h8g8","1/2-1/2");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||!board_rep_equal(&initial,&g->pgntree->board)||strcmp(g->pgn_hdr.result,"1/2-1/2"))return 52;

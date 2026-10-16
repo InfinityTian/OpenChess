@@ -1075,7 +1075,7 @@ int main(void)
     /* ---- engine-arrow toggle (analysis panel checkbox) ---- */
     {
         bool before = g->engine_arrows;
-        int ax = g->panel_x + 78 + 8;
+        int ax = g->panel_x + 4 + 12;
         int ay = g->board_y + 82 + 8;
         int wx, wy;
         gui_render(g, ren);

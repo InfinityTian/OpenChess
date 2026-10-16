@@ -297,6 +297,7 @@ typedef struct {
     int    review_cls[MAX_PLY];
     int    review_cpl[MAX_PLY];     /* centipawn loss per move */
     double review_acc[MAX_PLY];     /* per-move accuracy 0..100 */
+    bool   r_played_best;
     int    rb_cp, rb_mate;  bool rb_hm;   /* best eval before the move */
     int    r2_cp, r2_mate;  bool r2_hm;   /* second-best eval before */
     int    ra_cp, ra_mate;  bool ra_hm;   /* eval after the move (mover view) */
@@ -449,6 +450,9 @@ typedef struct {
     AnimStep anim_queue[ANIM_QUEUE_MAX];
     int      anim_count;
     bool     anim_fast;         /* next enqueued move is a fast (drag) slide */
+    Uint32   quality_anim;
+    MoveNode *quality_node;
+    int      quality_class;
     Uint32   check_anim;        /* when a check animation started (0 = none) */
     Uint32   end_anim;          /* checkmate/draw effect, after the move lands */
     int      check_anim_sq;     /* king square for the check halo */

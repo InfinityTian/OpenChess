@@ -58,6 +58,7 @@ static MoveNode *copy_subtree(const MoveNode *src)
     n->eval_cp = src->eval_cp;
     n->eval_mate = src->eval_mate;
     n->has_eval = src->has_eval;
+    n->engine_choice_known=src->engine_choice_known;n->engine_choice=src->engine_choice;
     snprintf(n->comment, sizeof n->comment, "%s", src->comment);
 
     MoveNode *prev = NULL;

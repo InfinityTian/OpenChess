@@ -19,6 +19,7 @@ typedef struct MoveNode {
     int   eval_cp;              /* review eval (side-to-move perspective) */
     int   eval_mate;
     bool  has_eval;
+    bool  engine_choice_known, engine_choice; /* transient live analysis provenance */
     char  comment[96];
 
     struct MoveNode *parent;

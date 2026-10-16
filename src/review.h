@@ -43,10 +43,11 @@ double review_move_accuracy(double win_before, double win_after);
  * position after the move, negated to the mover's perspective. `sacrifice`
  * means the played line gives up material. `book` when the position is in the
  * opening book. `legal_moves` is the number of legal moves before.
+ * `engine_best` must match the engine first choice, including promotion.
  */
 ReviewClass review_classify(int eval_before, bool mate_before,
                             int eval_after, bool mate_after,
                             int second_best, bool second_mate,
-                            bool sacrifice, bool book, int legal_moves);
+                            bool sacrifice, bool book, int legal_moves, bool engine_best);
 
 #endif

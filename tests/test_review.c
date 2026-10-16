@@ -10,7 +10,7 @@ static int failures = 0;
 static ReviewClass cls(int eb, bool mb, int ea, bool ma, int sb, bool sm,
                        bool sac, bool book, int legal)
 {
-    return review_classify(eb, mb, ea, ma, sb, sm, sac, book, legal);
+    return review_classify(eb, mb, ea, ma, sb, sm, sac, book, legal,eb==ea||sac);
 }
 
 int main(void)
@@ -39,12 +39,17 @@ int main(void)
     CHECK(cls(600, false, 50, false, 600, false, false, false, 30) == RC_MISS);
 
     /* bands by win% drop */
-    CHECK(cls(0, false, -20, false, -400, false, false, false, 30) == RC_EXCELLENT);
-    CHECK(cls(0, false, -50, false, -400, false, false, false, 30) == RC_GOOD);
-    CHECK(cls(0, false, -80, false, -500, false, false, false, 30) == RC_INACCURACY);
-    CHECK(cls(0, false, -150, false, -600, false, false, false, 30) == RC_MISTAKE);
+    CHECK(cls(0, false, -5, false, -400, false, false, false, 30) == RC_EXCELLENT);
+    CHECK(cls(0, false, -15, false, -400, false, false, false, 30) == RC_GOOD);
+    CHECK(cls(0, false, -40, false, -500, false, false, false, 30) == RC_INACCURACY);
+    CHECK(cls(0, false, -80, false, -600, false, false, false, 30) == RC_MISTAKE);
     CHECK(cls(0, false, -400, false, -1000, false, false, false, 30) == RC_BLUNDER);
 
+    CHECK(review_classify(0,false,0,false,0,false,false,false,30,false)==RC_EXCELLENT);
+    CHECK(review_classify(0,false,-20,false,0,false,false,false,30,false)==RC_GOOD);
+    CHECK(review_classify(0,false,-50,false,0,false,false,false,30,false)==RC_INACCURACY);
+    CHECK(review_classify(0,false,-100,false,0,false,false,false,30,false)==RC_MISTAKE);
+    CHECK(review_classify(0,false,-150,false,0,false,false,false,30,false)==RC_BLUNDER);
     /* win% sanity */
     CHECK(review_win_pct(0) > 49.9 && review_win_pct(0) < 50.1);
     CHECK(review_win_pct(1000) > 90.0);
