@@ -82,4 +82,4 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           if test "$TAG" = "v$(cat VERSION)"; then latest=true; else latest=false; fi
-          gh release edit "$TAG" --draft=false --latest="$latest"
+          gh release edit "$TAG" --tag "$TAG" --verify-tag --draft=false --latest="$latest"
