@@ -33,3 +33,6 @@ max_fps = 0          # 0 = vsync; or a cap such as 60/120/144/240/320
 # 0 Sky, 1 Ocean, 2 Mint, 3 Forest, 4 Lavender, 5 Rose, 6 Peach, 7 Sand, 8 Slate, 9 Aqua.
 app_theme = 0
 dark_mode = 0        # 0 = light, 1 = dark
+
+# UI font: 0 = Maple Mono NF CN (default), 1 = Noto Sans CJK.
+ui_font = 0

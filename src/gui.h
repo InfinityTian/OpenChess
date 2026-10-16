@@ -272,6 +272,9 @@ typedef struct {
     char   puzzle_moves[32][6];
     bool   puzzle_done;
     bool   puzzle_failed;
+    bool   puzzle_wrong, puzzle_solution_visible, puzzle_had_error;
+    int    puzzle_badge_sq, puzzle_badge_kind; /* +1 correct, -1 incorrect, 0 hidden */
+    Uint32 puzzle_feedback_at;
     bool   puzzle_counted;      /* rating already applied for this puzzle */
     int    puzzle_delta;        /* last rating change (for display) */
     int    puzzle_rating;       /* local puzzle Elo */
@@ -323,6 +326,7 @@ typedef struct {
     int         path_len;
     SDL_Rect    move_hit_rect[MAX_PLY + 64];
     MoveNode   *move_hit_node[MAX_PLY + 64];
+    int         move_hit_ply[MAX_PLY + 64];
     int         move_hit_count;
 
     /* scrollable move-tree panel */
@@ -424,9 +428,9 @@ typedef struct {
     AnimStyle anim_style;
 
     /* appearance picker (thumbnails are built lazily and cached) */
-    int      ape_tab;           /* 0 = boards, 1 = pieces, 2 = animation */
-    int      ape_page[3];       /* Browsing pages do not change the applied style. */
-    int      ape_sel[3];        /* selected item per tab */
+    int      ape_tab;           /* boards, pieces, animation, fonts */
+    int      ape_page[4];       /* Browsing pages do not change the applied style. */
+    int      ape_sel[4];        /* selected item per tab */
     Uint32   ape_started;       /* for the animation preview loop */
     Scene    ape_return_scene;  /* where Back returns to */
     SDL_Texture **board_thumbs; /* per board theme, lazily created */
@@ -445,6 +449,8 @@ typedef struct {
     int      check_anim_sq;     /* king square for the check halo */
 
     TTF_Font *font_piece[2];    /* [0] filled glyph, [1] outline via same */
+    int font_index;            /* Maple Mono NF CN (default) or Noto Sans CJK. */
+    TTF_Font *font_preview[2];
     TTF_Font *font_ui;
     TTF_Font *font_small;
     TTF_Font *font_tiny;

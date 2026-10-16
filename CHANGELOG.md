@@ -9,6 +9,17 @@ All notable changes to OpenChess. The format follows
 ## [2.1.1] - 2026-10-16
 
 ### Changed
+- Maple Mono NF CN is bundled as the default UI font, with its OFL license;
+  Appearance adds a Fonts tab with persistent Maple/Noto selection.
+- Puzzle retries support Left-arrow and move-row navigation without repeated
+  rating settlement. Correct/incorrect feedback and session results use icons.
+- Puzzle promotion opens the piece chooser before answer validation, including
+  underpromotions; promotion targets use a single white move dot.
+- Unfinished puzzles cannot advance. Revealing an answer displays the full SAN
+  solution in move rows, retaining it when navigating back; completed/failed
+  puzzles offer Analysis from the original solving position.
+- New puzzles reset move-list state and ignore stale analysis trees. Move rows
+  respect the initial side/fullmove number. The checkmate hash is a centered SVG.
 - Human-readable puzzle theme dropdown and a large rating card with live
   Rated/Unrated switching for unresolved ordinary attempts, checked by the server.
 - Visible dark-mode/theme controls in Settings; theme-tinted backgrounds and

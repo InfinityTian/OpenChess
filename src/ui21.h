@@ -7,7 +7,7 @@ typedef struct {
     Puzzle puzzle;
     char attempt[80], played[256];
     int day, step, delta, elapsed;
-    bool rated, hint, reveal, settled, solved, pending;
+    bool rated, hint, reveal, settled, solved, pending, had_error;
 } PuzzleEntry;
 typedef struct Ui21 {
     Workspace *store, *cache;

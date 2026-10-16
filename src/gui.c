@@ -27,6 +27,10 @@ static int  clampi(int v, int lo, int hi);
 static void fen_refresh(Gui *g);
 static bool puzzle_human_move(Gui *g, Move m);
 static void puzzle_mistake(Gui *g);
+static void puzzle_rewind(Gui *g,int step);
+static void ui_puzzle_feedback(Gui *g);
+static void ui_result_icon(Gui *g,float x,float y,float radius,bool correct,bool disc);
+static void ui_disabled_button(Gui *g,SDL_Rect rect,const char *label);
 static void review_start(Gui *g);
 static void review_step(Gui *g);
 static void open_account(Gui *g);
@@ -294,6 +298,16 @@ static const char *find_font(void)
         if (f) { fclose(f); return candidates[i]; }
     }
     return NULL;
+}
+
+static const char *const UI_FONT_NAMES[]={"Maple Mono NF CN","Noto Sans CJK"};
+static const char *ui_font_file(int index,char path[1200])
+{
+    snprintf(path,1200,"%s/fonts/%s",path_assets(),index==0?"MapleMono-NF-CN-Regular.ttf":"NotoSansCJKsc-Regular.otf");
+    FILE *probe=fopen(path,"rb");if(probe){fclose(probe);return path;}
+    snprintf(path,1200,"%s/fonts/NotoSansCJKsc-Regular.otf",path_assets());
+    probe=fopen(path,"rb");if(probe){fclose(probe);return path;}
+    return find_font();
 }
 
 static SDL_Texture *make_piece_tex(SDL_Renderer *ren, TTF_Font *font,
@@ -564,6 +578,7 @@ static void rebuild_fonts(Gui *g)
 {
     if (g->font_piece[0]) TTF_CloseFont(g->font_piece[0]);
     if (g->font_piece[1]) TTF_CloseFont(g->font_piece[1]);
+    for(int i=0;i<2;i++){if(g->font_preview[i])TTF_CloseFont(g->font_preview[i]);g->font_preview[i]=NULL;}
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
     if (g->font_tiny) TTF_CloseFont(g->font_tiny);
@@ -575,8 +590,7 @@ static void rebuild_fonts(Gui *g)
 
     const char *fpath = find_font();
     if (fpath) {
-        char ui_font[1200];snprintf(ui_font,sizeof ui_font,"%s/fonts/NotoSansCJKsc-Regular.otf",path_assets());
-        FILE *probe=fopen(ui_font,"rb");const char *ui_path=probe?ui_font:fpath;if(probe)fclose(probe);
+        char ui_font[1200];const char *ui_path=ui_font_file(g->font_index,ui_font);
         float sc = eff_scale(g);
         g->font_piece[0] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
         g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
@@ -1069,6 +1083,7 @@ static bool san_can_type(const Gui *g)
 /* Reveal the SAN entry box (Enter while playing). */
 static void san_open_box(Gui *g)
 {
+    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
     if (g->state != NO_GAME_OVER) return;
     if (!san_can_type(g)) {
         set_msg(g, "Not your turn", NULL);
@@ -1084,6 +1099,7 @@ static void san_open_box(Gui *g)
 /* Select a piece (own side) at sq, computing legal target squares. */
 static void select_square(Gui *g, int sq)
 {
+    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
     if (g->mode == MODE_ONLINE && g->online && online_spectating(g->online))
         return;   /* spectators are read-only */
     clear_selection(g);
@@ -1113,20 +1129,20 @@ static void try_move_to(Gui *g, int to)
     if (g->selected < 0) return;
     Move *m = target_move(g, to);
     if (!m) return;
+    if (MOVE_FLAGS(*m) & FLAG_PROMO) {
+        g->anim_fast = false; /* The chooser is a separate click, not a drag. */
+        g->promo_from = MOVE_FROM(*m);
+        g->promo_to = MOVE_TO(*m);
+        g->promo_open_ms = SDL_GetTicks();
+        clear_selection(g);
+        return;
+    }
     if (g->mode == MODE_PUZZLE) {
         Move attempt = *m;
         if (puzzle_human_move(g, attempt)) { clear_selection(g); return; }
         puzzle_mistake(g);
         set_msg(g, "Incorrect - try again", NULL);
         audio_play(SND_ILLEGAL);
-        clear_selection(g);
-        return;
-    }
-    if (MOVE_FLAGS(*m) & FLAG_PROMO) {
-        g->anim_fast = false; /* The chooser is a separate click, not a drag. */
-        g->promo_from = MOVE_FROM(*m);
-        g->promo_to = MOVE_TO(*m);
-        g->promo_open_ms = SDL_GetTicks();
         clear_selection(g);
         return;
     }
@@ -1147,7 +1163,9 @@ static void resolve_promotion(Gui *g, Piece promo)
         Move m = legal.moves[i];
         if (MOVE_FROM(m) == from && MOVE_TO(m) == to &&
             (MOVE_FLAGS(m) & FLAG_PROMO) && MOVE_PROMO(m) == w) {
-            push_move(g, m);
+            if(g->mode==MODE_PUZZLE){
+                if(!puzzle_human_move(g,m)){puzzle_mistake(g);audio_play(SND_ILLEGAL);set_msg(g,"Incorrect - try again",NULL);}
+            }else push_move(g,m);
             return;
         }
     }
@@ -1654,6 +1672,7 @@ void gui_load_config(Gui *g, const char *path)
         lower_in_place(key);
         lower_in_place(val);
         if(g->ui&&strcmp(key,"ui_language")==0)g->ui->zh=strcmp(val,"zh")==0;
+        else if(strcmp(key,"ui_font")==0)g->font_index=clampi(atoi(val),0,1);
         else if(g->ui&&strcmp(key,"dark_mode")==0)g->ui->dark_mode=atoi(val)!=0;
         else if(g->ui&&strcmp(key,"app_theme")==0)g->ui->app_theme=clampi(atoi(val),0,9);
         else if(g->ui&&strcmp(key,"background_file")==0)snprintf(g->ui->background_file,sizeof g->ui->background_file,"%s",rawval);
@@ -1747,6 +1766,7 @@ void gui_save_config(Gui *g)
     fprintf(f, "engine_arrows = %d\n", g->engine_arrows ? 1 : 0);
     fprintf(f, "sound = %d\n", g->sound ? 1 : 0);
     fprintf(f, "max_fps = %d\n", g->max_fps);
+    fprintf(f,"ui_font = %d\n",g->font_index);
     fprintf(f, "puzzle_rating = %d\n", g->puzzle_rating);
     if(g->ui)fprintf(f,"ui_language = %s\nbackground_file = %s\nbackground_fit = %d\nbackground_mask = %d\navatar = %d\n",g->ui->zh?"zh":"en",g->ui->background_file,g->ui->background_fit,g->ui->background_mask,g->ui->avatar);
     if(g->ui)fprintf(f,"dark_mode = %d\napp_theme = %d\n",g->ui->dark_mode,g->ui->app_theme);
@@ -2139,6 +2159,7 @@ void gui_destroy(Gui *g)
     themes_free(&g->pieces);
     if (g->font_piece[0]) TTF_CloseFont(g->font_piece[0]);
     if (g->font_piece[1]) TTF_CloseFont(g->font_piece[1]);
+    for(int i=0;i<2;i++){if(g->font_preview[i])TTF_CloseFont(g->font_preview[i]);g->font_preview[i]=NULL;}
     if (g->font_ui) TTF_CloseFont(g->font_ui);
     if (g->font_small) TTF_CloseFont(g->font_small);
     if (g->font_tiny) TTF_CloseFont(g->font_tiny);
@@ -2475,6 +2496,9 @@ static void puzzle_mistake(Gui *g)
 
 static void open_puzzle(Gui *g)
 {
+    if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&!g->puzzle_done&&!g->puzzle_failed&&!g->puzzle_solution_visible){
+        set_msg(g,"Finish or reveal this puzzle before continuing.",NULL);return;
+    }
     if(g->ui){int day=0;if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->ui->current_entry>=0)day=g->ui->entries[g->ui->current_entry].day;
         if(day){int next=day<workspace_today()?day+1:day;g->ui->selected_day=g->ui->month_day=next;ui_next_puzzle(g,next);}else ui_next_puzzle(g,0);return;}
     if (!g->puzzles) return;
@@ -2501,6 +2525,7 @@ static void open_puzzle(Gui *g)
     g->auto_flip = false;
     g->puzzle_done = false;
     g->puzzle_failed = false;
+    g->puzzle_wrong=false;g->puzzle_badge_kind=0;g->puzzle_solution_visible=false;g->puzzle_had_error=false;
     g->puzzle_counted = false;
     g->puzzle_delta = 0;
     g->input.len = 0; g->input.text[0] = 0; g->input.active = false;
@@ -2522,6 +2547,21 @@ static void open_puzzle(Gui *g)
     snprintf(g->black_name, sizeof g->black_name, "You");
 }
 
+/* Rebuild only the played prefix; settlement and hint/reveal flags stay intact. */
+static void puzzle_rewind(Gui *g,int step)
+{
+    if(g->mode!=MODE_PUZZLE||g->puzzle_nmoves<1)return;
+    if(step<1)step=1;if(step>g->puzzle_nmoves)step=g->puzzle_nmoves;
+    if(step%2==0&&step>1)step--;
+    Board root;if(!fen_parse(g->puzzle_cur.fen,&root))return;
+    g->board=root;g->ply=0;g->puzzle_step=0;reset_board_state(g);
+    memset(g->review_cls,0,sizeof g->review_cls);memset(g->move_san,0,sizeof g->move_san);
+    for(int k=0;k<step;k++){Move move;if(!uci_to_move(&g->board,g->puzzle_moves[k],&move))break;push_move(g,move);g->puzzle_step++;}
+    clear_anims(g);g->puzzle_wrong=false;g->puzzle_badge_kind=0;g->puzzle_done=false;g->puzzle_failed=false;
+    g->move_scroll=0;g->move_hit_count=0;fen_refresh(g);
+    if(g->ui&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].step=g->puzzle_step;
+}
+
 static bool puzzle_human_move(Gui *g, Move m)
 {
     if (g->mode != MODE_PUZZLE) return false;
@@ -2530,10 +2570,15 @@ static bool puzzle_human_move(Gui *g, Move m)
 
     Move want;
     if (!uci_to_move(&g->board, g->puzzle_moves[g->puzzle_step], &want)) return false;
-    if (MOVE_FROM(m) != MOVE_FROM(want) || MOVE_TO(m) != MOVE_TO(want) || MOVE_PROMO(m)!=MOVE_PROMO(want))
+    if (MOVE_FROM(m) != MOVE_FROM(want) || MOVE_TO(m) != MOVE_TO(want) || MOVE_PROMO(m)!=MOVE_PROMO(want)){
+        push_move(g,m);g->puzzle_wrong=true;g->puzzle_had_error=true;
+        if(g->ui&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].had_error=true;
+        g->puzzle_badge_sq=MOVE_TO(m);g->puzzle_badge_kind=-1;g->puzzle_feedback_at=SDL_GetTicks();
         return false;
+    }
 
     push_move(g, want);
+    g->puzzle_wrong=false;g->puzzle_badge_sq=MOVE_TO(want);g->puzzle_badge_kind=1;g->puzzle_feedback_at=SDL_GetTicks();
     g->puzzle_step++;
     if (g->puzzle_step < g->puzzle_nmoves) {
         Move r;
@@ -2552,6 +2597,7 @@ static bool puzzle_human_move(Gui *g, Move m)
 
 static void puzzle_hint(Gui *g)
 {
+    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
     if(g->ui&&!g->ui->reviewing&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].hint=true;
     if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
     if (g->puzzle_step < g->puzzle_nmoves)
@@ -2560,20 +2606,18 @@ static void puzzle_hint(Gui *g)
 
 static void puzzle_reveal(Gui *g)
 {
+    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
     if(g->ui&&!g->ui->reviewing&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].reveal=true;
     if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
-    char line[160];
-    line[0] = '\0';
-    for (int i = g->puzzle_step; i < g->puzzle_nmoves; i++) {
-        if (line[0]) strncat(line, " ", sizeof line - strlen(line) - 1);
-        strncat(line, g->puzzle_moves[i], sizeof line - strlen(line) - 1);
+    g->puzzle_failed = true;g->puzzle_solution_visible=true;
+    if (!g->puzzle_counted) {g->puzzle_counted = true;puzzle_score(g, false);}
+    /* Show the full legal solution as SAN rows, with no answer text overlay. */
+    while(g->puzzle_step<g->puzzle_nmoves){
+        Move move;if(!uci_to_move(&g->board,g->puzzle_moves[g->puzzle_step],&move))break;
+        push_move(g,move);g->puzzle_step++;
     }
-    g->puzzle_failed = true;
-    if (!g->puzzle_counted) {
-        g->puzzle_counted = true;
-        puzzle_score(g, false);
-    }
-    set_msg(g, "Answer: %s", line);
+    clear_anims(g);g->puzzle_badge_kind=0;g->move_scroll=0;g->move_hit_count=0;g->msg[0]=0;
+    if(g->ui&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].step=g->puzzle_step;
 }
 
 static void puzzle_setup_rects(const Gui *g, SDL_Rect bands[PUZZLE_BAND_COUNT],
@@ -3524,7 +3568,7 @@ static void render_online(Gui *g, SDL_Renderer *ren)
 static void ape_tab_rect(const Gui *g, int i, SDL_Rect *r)
 {
     int tw = 170, th = 40, gap = 20;
-    int x0 = (g->win_w - (3 * tw + 2 * gap)) / 2;
+    int x0 = 208+(g->win_w-208-(4*tw+3*gap))/2;
     r->x = x0 + i * (tw + gap);
     r->y = 96;
     r->w = tw;
@@ -3557,7 +3601,7 @@ static int appearance_count(Gui *g, int tab)
 {
     if (tab == 0) return g->boards.count;
     if (tab == 1) return g->pieces.count;
-    return ANIM_STYLE_COUNT;
+    return tab==2?ANIM_STYLE_COUNT:2;
 }
 
 static void open_appearance(Gui *g, Scene return_to)
@@ -3567,7 +3611,8 @@ static void open_appearance(Gui *g, Scene return_to)
     g->ape_sel[0] = g->board_index;
     g->ape_sel[1] = g->piece_index;
     g->ape_sel[2] = (int)g->anim_style;
-    for(int i=0;i<3;i++)g->ape_page[i]=g->ape_sel[i]/APE_PER_PAGE;
+    g->ape_sel[3]=g->font_index;
+    for(int i=0;i<4;i++)g->ape_page[i]=g->ape_sel[i]/APE_PER_PAGE;
     g->ape_started = SDL_GetTicks();
     g->scene = SCENE_APPEARANCE;
 }
@@ -3577,7 +3622,8 @@ static void appearance_apply(Gui *g)
     switch (g->ape_tab) {
         case 0: g->board_index = g->ape_sel[0]; load_board_style(g); break;
         case 1: g->piece_index = g->ape_sel[1]; load_piece_style(g); break;
-        default: g->anim_style = (AnimStyle)g->ape_sel[2]; clear_anims(g); break;
+        case 2: g->anim_style = (AnimStyle)g->ape_sel[2]; clear_anims(g); break;
+        default: g->font_index=g->ape_sel[3];rebuild_fonts(g);break;
     }
     g->config_dirty = true;
 }
@@ -3596,7 +3642,7 @@ static void appearance_move(Gui *g, int delta)
 
 static void appearance_page_move(Gui *g, int direction)
 {
-    if(g->ape_tab==2)return;
+    if(g->ape_tab>=2)return;
     int count=appearance_count(g,g->ape_tab),last=count>0?(count-1)/APE_PER_PAGE:0;
     g->ape_page[g->ape_tab]=clampi(g->ape_page[g->ape_tab]+direction,0,last);
 }
@@ -3614,8 +3660,8 @@ static void handle_appearance_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     if (k == SDLK_RIGHT) { appearance_move(g, 1); return; }
     if (k == SDLK_UP)    { appearance_move(g, -APE_COLS); return; }
     if (k == SDLK_DOWN)  { appearance_move(g, APE_COLS); return; }
-    if (k == SDLK_TAB)   { g->ape_tab = (g->ape_tab + 1) % 3; return; }
-    if (k == SDLK_1 || k == SDLK_2 || k == SDLK_3) {
+    if (k == SDLK_TAB)   { g->ape_tab = (g->ape_tab + 1) % 4; return; }
+    if (k >= SDLK_1 && k <= SDLK_4) {
         g->ape_tab = (int)(k - SDLK_1);
         return;
     }
@@ -3629,7 +3675,7 @@ static void handle_appearance_mousedown(Gui *g)
 {
     SDL_Point p = g->mouse;
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         SDL_Rect r;
         ape_tab_rect(g, i, &r);
         if (pt_in(&r, p.x, p.y)) { g->ape_tab = i; return; }
@@ -4341,6 +4387,7 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     }
 
     if (g->mode == MODE_PUZZLE && !ctrl) {
+        if(k==SDLK_LEFT){puzzle_rewind(g,g->puzzle_wrong?g->puzzle_step:g->puzzle_step-2);return;}
         if (k == SDLK_h) { puzzle_hint(g); return; }
         if (k == SDLK_r) { puzzle_reveal(g); return; }
         if (k == SDLK_n) { open_puzzle(g); return; }
@@ -4476,6 +4523,12 @@ static void handle_game_mousedown(Gui *g)
 
     if (g->pgn_prompt) return;   /* modal: keyboard only */
 
+    if(g->mode==MODE_PUZZLE){
+        for(int i=0;i<g->move_hit_count;i++)if(pt_in(&g->move_hit_rect[i],p.x,p.y)){
+            int ply=g->move_hit_ply[i];if(ply>0)puzzle_rewind(g,ply%2?ply:ply-1);return;
+        }
+        if(g->puzzle_wrong&&sq_from_pos(g,p.x,p.y)>=0)puzzle_rewind(g,g->puzzle_step);
+    }
     /* Click a previous move (or a variation) to jump to that position. */
     if (g->mode == MODE_ANALYSIS && !g->pgn_import_open) {
         for (int i = 0; i < 2; i++) {
@@ -5127,6 +5180,7 @@ void gui_tick(Gui *g, Uint32 now)
         else online_lobby_tick(g);
     }
     ui_tick(g,now);
+    if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->puzzle_wrong&&now-g->puzzle_feedback_at>=1100)puzzle_rewind(g,g->puzzle_step);
     if (g->scene == SCENE_HOSTJOIN) {
         hostjoin_tick(g);
         return;
@@ -6665,7 +6719,7 @@ typedef struct {
     ReviewClass cls;      /* for the glyph / badge */
     char        text[28];
     bool        mainline;
-    int         x, y, w;
+    int         x, y, w, ply;
 } MvTok;
 
 typedef struct {
@@ -6700,6 +6754,7 @@ static void mv_push(MvLayout *L, MoveNode *node, ReviewClass cls, const char *te
     if (L->n >= MVTOK_MAX) return;
     MvTok *t = &L->toks[L->n++];
     t->node = node;
+    t->ply=0;
     t->cls = cls;
     snprintf(t->text, sizeof t->text, "%s", text);
     t->x = x;
@@ -6728,8 +6783,8 @@ static void mv_emit_line(Gui *g, MvLayout *L, MoveNode *first, int guard);
 static void mv_emit_move(Gui *g, MvLayout *L, MoveNode *m, bool force_num)
 {
     int ply = mt_depth(m);
-    bool white = (ply % 2) == 1;
-    int num = (ply + 1) / 2;
+    bool white = m->parent?m->parent->board.side==WHITE:(ply%2)==1;
+    int num = m->parent?m->parent->board.fullmove_number:(ply+1)/2;
     char label[32];
     if (white)
         snprintf(label, sizeof label, "%d.%s", num, m->san);
@@ -6774,6 +6829,7 @@ static void move_box_rect(const Gui *g, SDL_Rect *r)
 static void render_move_list(Gui *g)
 {
     SDL_Renderer *ren = g->ren;
+    bool use_tree=g->mode==MODE_ANALYSIS&&g->pgntree;
     SDL_Rect box;
     move_box_rect(g, &box);
     g->move_box = box;
@@ -6787,7 +6843,7 @@ static void render_move_list(Gui *g)
     /* mainline chain */
     MoveNode *main[MAX_PLY];
     int mcount = 0;
-    if (g->pgntree)
+    if (use_tree)
         for (MoveNode *n = g->pgntree->first; n && mcount < MAX_PLY; n = n->first)
             main[mcount++] = n;
 
@@ -6800,15 +6856,24 @@ static void render_move_list(Gui *g)
     int bcell = box.x + 232;
     int y = 8;
 
-    int total = g->pgntree ? mcount : g->ply;
-    int nrows = (total + 1) / 2;
+    bool solution_visible=g->mode==MODE_PUZZLE&&g->puzzle_solution_visible;
+    char solution_san[32][8]={{0}};
+    if(solution_visible){Board board;if(fen_parse(g->puzzle_cur.fen,&board))for(int k=0;k<g->puzzle_nmoves;k++){
+        Move move;if(!uci_to_move(&board,g->puzzle_moves[k],&move))break;
+        move_to_san(&board,move,solution_san[k],sizeof solution_san[k]);make_move_plumb(&board,move);
+    }}
+    int total = use_tree ? mcount : solution_visible?g->puzzle_nmoves:g->ply;
+    const Board *initial=use_tree?&g->pgntree->board:g->ply?&g->before[0]:&g->board;
+    int offset=initial->side==BLACK?1:0;
+    int first_number=initial->fullmove_number>0?initial->fullmove_number:1;
+    int nrows = (total + offset + 1) / 2;
 
     for (int mvi = 0; mvi < nrows; mvi++) {
-        int wi = mvi * 2, bi = wi + 1;
-        bool split = g->pgntree && wi < mcount && main[wi]->next && bi < mcount;
+        int wi = mvi * 2-offset, bi = wi + 1;
+        bool split = use_tree && wi>=0 && wi < mcount && main[wi]->next && bi < mcount;
 
         char num[16];
-        snprintf(num, sizeof num, "%d.", mvi + 1);
+        snprintf(num, sizeof num, "%d.", mvi + first_number);
         mv_push(&mv, NULL, RC_NONE, num, num_x, y, true);
 
         for (int k = 0; k < 2; k++) {
@@ -6822,14 +6887,16 @@ static void render_move_list(Gui *g)
             ReviewClass cls = RC_NONE;
             char text[28] = "";
             bool have = false;
-            if (g->pgntree) {
-                if (idx < mcount) {
+            if (use_tree) {
+                if (idx>=0 && idx < mcount) {
                     node = main[idx];
                     cls = (ReviewClass)node->cls;
                     snprintf(text, sizeof text, "%s", node->san);
                     have = true;
                 }
-            } else if (idx < g->ply) {
+            } else if(solution_visible&&idx>=0&&idx<g->puzzle_nmoves){
+                snprintf(text,sizeof text,"%s",solution_san[idx]);have=solution_san[idx][0]!=0;
+            } else if (idx>=0 && idx < g->ply) {
                 snprintf(text, sizeof text, "%s", g->move_san[idx]);
                 cls = (ReviewClass)g->review_cls[idx];
                 have = true;
@@ -6837,15 +6904,16 @@ static void render_move_list(Gui *g)
             if (have) {
                 mv_push(&mv, node, cls, text, cx + 24, y, true);
                 mv.toks[mv.n - 1].w = move_width(g, text) + 28;
+                mv.toks[mv.n - 1].ply=idx+1;
                 mv.toks[mv.n - 1].x = cx;   /* rect starts at the badge slot */
             }
         }
         y += mv.row_h;
 
-        if (g->pgntree) {
+        if (use_tree) {
             for (int k = 0; k < 2; k++) {
                 int idx = (k == 0) ? wi : bi;
-                if (idx >= mcount) continue;
+                if (idx<0 || idx >= mcount) continue;
                 if (k == 1 && split) {
                     mv_push(&mv, NULL, RC_NONE, num, num_x, y, true);
                     mv_push(&mv, NULL, RC_NONE, "...", wcell + 24, y, true);
@@ -6924,7 +6992,7 @@ static void render_move_list(Gui *g)
         Uint8 r = 195, gg = 194, b = 193;
         review_badge_color(t->cls, &r, &gg, &b);
         SDL_Color mv_c = { r, gg, b, 255 };
-        if (t->node && t->node == g->tree_cur) {
+        if ((t->node && t->node == g->tree_cur)||(g->mode==MODE_PUZZLE&&t->ply>0&&t->ply==g->ply)) {
             SDL_Rect hl = { t->x - 3, ty - 2, t->w + 6, mv.row_h };
             ui_move_background(g,hl,true);
             mv_c = (SDL_Color){255, 255, 255, 255};
@@ -6937,9 +7005,10 @@ static void render_move_list(Gui *g)
             if (!t->node && t->w == 0) mv_c = (SDL_Color){147, 146, 145, 255};
             render_text(g, g->font_move, t->text,
                         t->x + (t->w > 0 ? 24 : 0), ty, mv_c);
-            if (t->node && g->move_hit_count < MAX_PLY + 64) {
+            if ((t->node||(g->mode==MODE_PUZZLE&&t->ply>0)) && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x, ty - 2, t->w, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
+                g->move_hit_ply[g->move_hit_count]=t->ply;
                 g->move_hit_node[g->move_hit_count++] = t->node;
             }
         } else {
@@ -6947,9 +7016,10 @@ static void render_move_list(Gui *g)
             if (badge_w)
                 draw_badge_circle(g, ren, t->x + 10, ty + 10, 9, t->cls);
             render_text(g, g->font_move, t->text, t->x + badge_w, ty, mv_c);
-            if (t->node && g->move_hit_count < MAX_PLY + 64) {
+            if ((t->node||(g->mode==MODE_PUZZLE&&t->ply>0)) && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x - 2, ty - 2, t->w + 4, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
+                g->move_hit_ply[g->move_hit_count]=t->ply;
                 g->move_hit_node[g->move_hit_count++] = t->node;
             }
         }
@@ -7205,7 +7275,8 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &restart, restart_label);
     const char *styles_label = (g->mode == MODE_PUZZLE) ? "Next"
                              : (g->mode == MODE_ANALYSIS) ? "Import" : "Styles";
-    if(g->mode==MODE_PUZZLE||g->mode==MODE_ANALYSIS)render_text_centered_rect(g, ren, &styles, styles_label);
+    if(g->mode==MODE_PUZZLE&&!g->puzzle_done&&!g->puzzle_failed&&!g->puzzle_solution_visible)ui_disabled_button(g,styles,ui_old_text(g,"Next"));
+    else if(g->mode==MODE_PUZZLE||g->mode==MODE_ANALYSIS)render_text_centered_rect(g, ren, &styles, styles_label);
     render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
     const char *legend;
@@ -7417,7 +7488,7 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
 {
     bool active = (tab == 0) ? (idx == g->board_index)
                 : (tab == 1) ? (idx == g->piece_index)
-                             : (idx == (int)g->anim_style);
+                             : tab==2 ? (idx == (int)g->anim_style) : idx==g->font_index;
 
     draw_rect(ren, cell, selected ? 60 : 36, selected ? 70 : 40,
               selected ? 85 : 48, true);
@@ -7453,6 +7524,10 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
                                  inner.x + side / 2, inner.y + 8,
                                  (SDL_Color){ 235, 235, 235, 255 });
         }
+    } else if(tab==3){
+        if(!g->font_preview[idx]){char path[1200];const char *file=ui_font_file(idx,path);if(file)g->font_preview[idx]=TTF_OpenFont(file,(int)lroundf(22*eff_scale(g)));}
+        TTF_Font *font=g->font_preview[idx];
+        if(font){render_text_centered(g,font,"Aa 棋",cell->x+cell->w/2,cell->y+30,(SDL_Color){230,230,235,255});render_text_centered(g,g->font_tiny,"e4 Nf3 O-O",cell->x+cell->w/2,cell->y+80,(SDL_Color){170,185,200,255});}
     } else {
         for (int r = 0; r < 4; r++)
             for (int f = 0; f < 4; f++) {
@@ -7473,7 +7548,7 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
         render_piece_box(g,ren,piece,x,y,side*0.20f*sc,al);
     }
 
-    const char *label = (tab == 2) ? ANIM_LABELS[idx]
+    const char *label = tab==3?UI_FONT_NAMES[idx]:(tab == 2) ? ANIM_LABELS[idx]
                       : (tab == 0) ? g->boards.items[idx].label
                                    : g->pieces.items[idx].label;
     char animation_label[80];
@@ -7494,8 +7569,8 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     render_text_centered(g, g->font_ui, "Appearance", g->win_w / 2, 30,
                          (SDL_Color){ 235, 225, 200, 255 });
 
-    static const char *tabs[3] = { "Boards", "Pieces", "Animation" };
-    for (int i = 0; i < 3; i++) {
+    static const char *tabs[4] = { "Boards", "Pieces", "Animation", "Fonts" };
+    for (int i = 0; i < 4; i++) {
         SDL_Rect r;
         ape_tab_rect(g, i, &r);
         bool on = (i == g->ape_tab);
@@ -7537,7 +7612,7 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &back, "Back");
 
     render_text_centered(g, g->font_small,
-                         ui_tr(g,"Arrows select · PgUp/PgDn page · Tab switch · Enter apply · Esc back","方向键选择 · PgUp/PgDn 翻页 · Tab 切换 · 回车应用 · Esc 返回"),
+                         ui_tr(g,"Arrows select · PgUp/PgDn page · Tab / 1–4 switch · Enter apply · Esc back","方向键选择 · PgUp/PgDn 翻页 · Tab / 1–4 切换 · 回车应用 · Esc 返回"),
                          g->win_w / 2, g->win_h - 40,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
@@ -8302,7 +8377,8 @@ static void render_openings(Gui *g, SDL_Renderer *ren)
     if (g->selected >= 0) draw_selection_glow(g, ren, g->selected, now);
     for (int i = 0; i < g->targets.count; i++) {
         Move m = g->targets.moves[i];
-        bool cap = (MOVE_FLAGS(m) & (FLAG_CAPTURE | FLAG_EP | FLAG_PROMO)) != 0;
+        bool cap = (MOVE_FLAGS(m) & (FLAG_CAPTURE | FLAG_EP)) != 0;
+        if(MOVE_FLAGS(m)&FLAG_PROMO)cap=false;
         draw_target_dot(g, ren, MOVE_TO(m), cap);
     }
     draw_piece_layer(g, ren, SDL_GetTicks());
@@ -8524,8 +8600,9 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     if (g->selected >= 0)
         for (int i = 0; i < g->targets.count; i++) {
             Move m = g->targets.moves[i];
+            bool duplicate=false;for(int j=0;j<i;j++)if(MOVE_TO(g->targets.moves[j])==MOVE_TO(m)){duplicate=true;break;}if(duplicate)continue;
             bool cap = (MOVE_FLAGS(m) & (FLAG_CAPTURE | FLAG_EP)) ? true : false;
-            if (MOVE_FLAGS(m) & FLAG_PROMO) cap = true;
+            if (MOVE_FLAGS(m) & FLAG_PROMO) cap = false;
             draw_target_dot(g, ren, MOVE_TO(m), cap);
         }
 
@@ -8539,6 +8616,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     if (last_to >= 0 && last_cls != RC_NONE && g->anim_count == 0)
         draw_quality_badge(g, ren, last_to, last_cls);
     draw_end_overlay(g, ren, now);
+    if(g->mode==MODE_PUZZLE)ui_puzzle_feedback(g);
     draw_engine_arrows(g, ren);
     draw_annotations(g, ren);
 
