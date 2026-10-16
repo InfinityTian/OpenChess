@@ -77,6 +77,7 @@ jobs:
         run: |
           drive="$(cygpath -m "$PWD" | cut -c1)"
           mkdir -p "/${drive,,}/tmp/openchess-test-data"
+          export PATH="$PWD/.cache/p2p/bin:$PATH"
           export OPENCHESS_REQUIRE_P2P=1
           export APPDATA="$drive:/tmp/openchess-test-data"
           export OPENCHESS_ASSETS="$(cygpath -m "$PWD/assets")"
