@@ -43,7 +43,7 @@ jobs:
       publish: true
   macos:
     needs: prepare
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -65,7 +65,7 @@ jobs:
           hdiutil verify source/dist/OpenChess.dmg
           arch="$(uname -m)"
           mv source/dist/OpenChess.dmg "source/dist/OpenChess-$TAG-macOS-$arch.dmg"
-          shasum -a 256 source/dist/*.dmg > source/dist/SHA256-macOS.txt
+          (cd source/dist && shasum -a 256 *.dmg > SHA256-macOS.txt)
       - name: Upload verified macOS download
         env:
           GH_TOKEN: ${{ github.token }}
