@@ -74,6 +74,7 @@ jobs:
           # Only the tests are adapted; the release executable stays unchanged.
           python - <<'PY'
           from pathlib import Path
+          import re
           for name in ('test_gui.c', 'test_local.c', 'test_ui21.c'):
               p = Path('tests') / name
               if not p.exists():
@@ -81,7 +82,7 @@ jobs:
               s = p.read_text()
               old = 'int main(void)\n{'
               if old not in s:
-                  if 'int main(int argc, char **argv)' in s:
+                  if re.search(r'int\s+main\s*\(\s*int\s+argc\s*,\s*char\s*\*\s*\*\s*argv\s*\)', s):
                       continue
                   raise SystemExit('Unexpected test entry point: ' + name)
               p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
@@ -108,7 +109,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python ../scripts/package_windows.py . "$(cygpath -m /ucrt64/bin)" "$RELEASE_TAG"
       - name: Retain verified Windows package
-        if: ${{ !inputs.publish }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: OpenChess-Windows-x64

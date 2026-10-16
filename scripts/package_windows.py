@@ -136,7 +136,16 @@ def api(method, url, data=None, kind="application/json"):
     with urllib.request.urlopen(request, timeout=240) as response:
         return json.load(response)
 base = f"https://api.github.com/repos/{repo}"
-release = api("GET", base + "/releases/tags/" + tag)
+# GitHub's by-tag endpoint does not return draft releases. Paginate the
+# authenticated release list so both fresh drafts and published versions work.
+release = None
+page = 1
+while release is None:
+    rows = api("GET", base + f"/releases?per_page=100&page={page}")
+    release = next((row for row in rows if row["tag_name"] == tag), None)
+    if release is None and not rows:
+        raise SystemExit("Release not found: " + tag)
+    page += 1
 old_assets = [a for a in release["assets"] if a["name"] == archive.name]
 # Keep the previous download available until its replacement is verified.
 temporary_name = archive.name + ".pending-" + os.environ.get("GITHUB_RUN_ID", digest[:12])
