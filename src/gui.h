@@ -65,6 +65,7 @@ typedef enum {
     SCENE_SINGLE_SETUP,   /* choose side + difficulty */
     SCENE_PUZZLE_SETUP,   /* choose puzzle rating band + theme */
     SCENE_HOSTJOIN,       /* local multiplayer host/join */
+    SCENE_P2P,            /* invitation-based WebRTC */
     SCENE_ONLINE,         /* online lobby: room code / matchmaking */
     SCENE_OPENINGS,       /* opening book browser */
     SCENE_APPEARANCE,     /* board/piece/animation picker */
@@ -230,6 +231,15 @@ typedef struct {
     int    hj_focus;            /* host/join screen focus index */
     char   net_addr[64];
     char   net_port[8];
+
+    /* Manual signaling and connection-local P2P game state. */
+    bool p2p_started, p2p_ready, p2p_focus, p2p_vote, p2p_peer_vote;
+    bool p2p_scored, p2p_draw_sent;
+    int p2p_control, p2p_time, p2p_side, p2p_generation, p2p_base, p2p_increment;
+    int p2p_host_white, p2p_remaining[2], p2p_score[3];
+    Uint32 p2p_connected_at, p2p_last_tick, p2p_last_rx, p2p_last_ping, p2p_clock_sent;
+    char p2p_peer_name[100];
+    char p2p_ice[256], p2p_export[65536], p2p_status[256];
 
     /* online multiplayer */
     OnlineSession *online;      /* NULL until the lobby connects */

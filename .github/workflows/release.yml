@@ -52,9 +52,11 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
           path: source
       - name: Install build dependencies
-        run: brew install pkg-config sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets sqlite stockfish
+        run: brew install cmake pkg-config sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets sqlite stockfish
+      - name: Build pinned P2P dependency
+        run: if test -f source/scripts/build_p2p.sh; then cd source && ./scripts/build_p2p.sh; fi
       - name: Build and test the tagged source
-        run: make -C source -j3 all test
+        run: OPENCHESS_REQUIRE_P2P=1 make -C source -j3 all test
       - name: Build a self-contained macOS disk image
         env:
           TAG: ${{ needs.prepare.outputs.tag }}

@@ -1613,31 +1613,26 @@ int main(void)
         g->flipped = false;
     }
 
-    /* ---- welcome online/offline pill toggles ---- */
+    /* ---- home P2P entry replaces the unavailable hosted mode ---- */
     {
-        bool was = g->offline_mode;
-        g->scene = SCENE_MENU;
-        g->saved.valid = false;
-        gui_render(g, ren);
-        SDL_Rect pill = { 256, 490, 250, 34 }; /* home play card mode switch */
-        int wx, wy;
-        SDL_RenderLogicalToWindow(ren, (float)(pill.x + 20), (float)(pill.y + 17),
-                                  &wx, &wy);
-        SDL_Event md = {0};
-        md.type = SDL_MOUSEBUTTONDOWN;
-        md.button.button = SDL_BUTTON_LEFT;
-        md.button.x = wx; md.button.y = wy;
-        gui_handle_event(g, &md);
-        if (g->offline_mode == was) {
-            fprintf(stderr, "mode pill did not toggle offline mode\n");
-            return 1;
+        g->scene=SCENE_MENU;g->saved.valid=false;g->offline_mode=true;
+        gui_render(g,ren);
+        int wx,wy;SDL_RenderLogicalToWindow(ren,280,210,&wx,&wy);
+        SDL_Event md;SDL_zero(md);md.type=SDL_MOUSEBUTTONDOWN;
+        md.button.button=SDL_BUTTON_LEFT;md.button.x=wx;md.button.y=wy;
+        gui_handle_event(g,&md);
+        if(g->scene!=SCENE_P2P||!g->offline_mode||g->online){
+            fprintf(stderr,"home P2P entry attempted hosted services\n");return 1;
         }
-        gui_render(g, ren);
-        gui_handle_event(g, &md);       /* toggle back */
-        if (g->offline_mode != was) {
-            fprintf(stderr, "mode pill did not toggle back\n");
-            return 1;
+        gui_render(g,ren);
+        bool zh=g->ui->zh,dark=g->ui->dark_mode;
+        for(int lang=0;lang<2;lang++)for(int mode=0;mode<2;mode++){
+            g->ui->zh=lang;g->ui->dark_mode=mode;gui_render(g,ren);
         }
+        g->ui->zh=zh;g->ui->dark_mode=dark;
+        SDL_Event key;SDL_zero(key);key.type=SDL_KEYDOWN;key.key.keysym.sym=SDLK_ESCAPE;
+        gui_handle_event(g,&key);
+        if(g->scene!=SCENE_MENU){fprintf(stderr,"P2P cancel did not return home\n");return 1;}
     }
 
     /* ---- browser flip toggles ---- */

@@ -39,3 +39,6 @@ tests/test_movetree
 
 /tests/test_workspace
 /tests/test_ui21
+
+/.cache/
+/tests/test_p2p

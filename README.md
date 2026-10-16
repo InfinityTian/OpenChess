@@ -1,5 +1,8 @@
 # OpenChess
 
+> **V3.0.0:** Internet play now uses built-in, invitation-based WebRTC P2P, without an OpenChess game or signaling server. Hosted matchmaking/account/social services are retired in the application. [P2P setup and build guide](docs/P2P.md). Build the optional dependency first with `make p2p-deps`; official macOS/Windows releases include it.
+
+
 Version 2.1 adds the unified workspace, analysis setup, social services, smart
 practice and permanent unrated daily archives. See [V2.1 guide](docs/V2.1.md)
 for usage, protocol v3 and server migration notes. SQLite is required.

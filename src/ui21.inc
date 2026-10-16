@@ -163,7 +163,7 @@ static void ui_tooltip_render(Gui *g)
     if(!g->ui||!g->ui->tooltip[0])return;int w=0,h=0;TTF_SizeUTF8(g->font_small,g->ui->tooltip,&w,&h);w=(int)(w/eff_scale(g))+24;h=(int)(h/eff_scale(g))+16;
     SDL_Rect anchor=g->ui->tooltip_anchor,box={clampi(anchor.x,212,g->win_w-w-12),anchor.y-h-8,w,h};if(box.y<8)box.y=anchor.y+anchor.h+8;ui_card(g,box);bool legacy=g->ui->legacy_paint;g->ui->legacy_paint=false;ui_text(g,g->ui->tooltip,box.x+12,box.y+8,ui_ink);g->ui->legacy_paint=legacy;
 }
-static bool ui_active_game(Gui *g){return g->online&&online_state(g->online)==ONLINE_PLAYING&&!g->online_over&&!online_spectating(g->online);}
+static bool ui_active_game(Gui *g){return p2p_active(g)||(g->online&&online_state(g->online)==ONLINE_PLAYING&&!g->online_over&&!online_spectating(g->online));}
 static void ui_background(Gui *g,SDL_Renderer *r)
 {
     SDL_SetRenderDrawColor(r,ui_bg.r,ui_bg.g,ui_bg.b,255);SDL_RenderClear(r);
@@ -239,7 +239,7 @@ static void ui_assets(Gui *g)
 static void ui_home(Gui *g)
 {
     if(g->mode==MODE_ANALYSIS&&g->pgntree)ui_save_analysis(g,"last");
-    if(ui_active_game(g)){g->scene=SCENE_MENU;return;}
+    if(ui_active_game(g)||(g->mode==MODE_LOCAL&&g->p2p_started)){g->scene=SCENE_MENU;return;}
     /* Account sessions must survive navigation so social updates keep flowing. */
     if(g->mode!=MODE_ONLINE)save_game(g);g->menu_index=g->saved.valid?0:MENU_ANALYSIS;clear_selection(g);g->scene=SCENE_MENU;g->ui->input_focus=false;
 }
@@ -385,23 +385,24 @@ static void ui_receive(Gui *g,cJSON *r)
 }
 static void ui_local_history(Gui *g)
 {
-    Ui21 *u=g->ui;if(g->scene!=SCENE_GAME||(g->mode!=MODE_SINGLE&&g->mode!=MODE_LOCAL))return;
+    Ui21 *u=g->ui;if((g->scene!=SCENE_GAME&&!net_is_p2p(g->net))||(g->mode!=MODE_SINGLE&&g->mode!=MODE_LOCAL))return;
     if(g->state==NO_GAME_OVER&&!g->override_result[0]){u->local_game_saved=false;return;}
     if(u->local_game_saved||!g->ply)return;u->local_game_saved=true;
     const char *result=g->override_result[0]?g->override_result:pgn_result(&g->board,g->state);
     FILE *file=tmpfile();if(!file)return;pgn_write(file,(const char (*)[8])g->move_san,g->ply,"OpenChess","Local","????.??.??",1,g->white_name,g->black_name,result);long size=ftell(file);rewind(file);char *pgn=calloc((size_t)size+1,1);if(!pgn){fclose(file);return;}fread(pgn,1,(size_t)size,file);fclose(file);
     unsigned char random[16];sqlite3_randomness(16,random);char id[40];for(int k=0;k<16;k++)snprintf(id+k*2,3,"%02x",random[k]);
-    sqlite3_stmt *q=workspace_stmt(u->store,"INSERT OR IGNORE INTO oc_games VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");const char *text[]={id,u->owner,"local-opponent",g->white_name,g->black_name,result,pgn};for(int k=0;k<7;k++)sqlite3_bind_text(q,k+1,text[k],-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,8,0);sqlite3_bind_int(q,9,0);sqlite3_bind_int(q,10,0);sqlite3_bind_int64(q,11,time(NULL));sqlite3_bind_int(q,12,0);sqlite3_bind_text(q,13,id,-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,14,g->ply);sqlite3_step(q);sqlite3_finalize(q);free(pgn);cJSON_Delete(u->games);u->games=NULL;
+    sqlite3_stmt *q=workspace_stmt(u->store,"INSERT OR IGNORE INTO oc_games VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");const char *text[]={id,u->owner,"local-opponent",g->white_name,g->black_name,result,pgn};for(int k=0;k<7;k++)sqlite3_bind_text(q,k+1,text[k],-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,8,g->p2p_started?g->p2p_base:0);sqlite3_bind_int(q,9,g->p2p_started?g->p2p_increment:0);sqlite3_bind_int(q,10,0);sqlite3_bind_int64(q,11,time(NULL));sqlite3_bind_int(q,12,0);sqlite3_bind_text(q,13,id,-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,14,g->ply);sqlite3_step(q);sqlite3_finalize(q);free(pgn);cJSON_Delete(u->games);u->games=NULL;
 }
 static bool ui_finished_game(Gui *g)
 {
     if(g->mode!=MODE_SINGLE&&g->mode!=MODE_LOCAL&&g->mode!=MODE_ONLINE)return false;
-    return g->state!=NO_GAME_OVER||(g->mode==MODE_ONLINE&&g->online_over)||(g->override_result[0]&&strcmp(g->override_result,"*"));
+    return (g->mode==MODE_LOCAL&&g->p2p_started&&g->override_result[0])||g->state!=NO_GAME_OVER||(g->mode==MODE_ONLINE&&g->online_over)||(g->override_result[0]&&strcmp(g->override_result,"*"));
 }
 static void ui_game_analyse(Gui *g)
 {
     if(!ui_finished_game(g))return;
     ui_local_history(g);
+    if(net_is_p2p(g->net)){transport_send(g->net,"BYE");transport_close(g->net);g->net=NULL;g->p2p_started=false;}
     Board initial=g->ply?g->before[0]:g->board;
     play_sync(g);MoveNode *root=g->play_tree,*last=g->play_live;
     if(!root){root=mt_new_root(&initial);last=root;if(!root)return;for(int k=0;k<g->ply;k++){last=mt_add_child(last,g->history[k],g->move_san[k]);if(!last){mt_free(root);return;}}}
@@ -422,7 +423,7 @@ static void ui_game_history_open(Gui *g,const char *id)
 static void ui_tick(Gui *g,Uint32 now)
 {
     if(!g->ui)return;
-    if(!g->offline_mode&&!g->account_local&&g->account_token[0]&&!g->online)online_ensure(g);
+    /* P2P uses local profiles; never auto-connect to retired hosted services. */
     ui_owner(g);Ui21 *u=g->ui;ui_local_history(g);
     bool active_puzzle=g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&!u->reviewing&&u->current_entry>=0;
     if(active_puzzle&&!u->entry_started)u->entry_started=now;
@@ -440,18 +441,18 @@ static void ui_nav_action(Gui *g,int group,int item)
 {
     Ui21 *u=g->ui;if(g->mode==MODE_ANALYSIS&&g->pgntree&&g->scene==SCENE_GAME)ui_save_analysis(g,"last");u->nav_hover=-1;u->input_focus=false;
     if(ui_active_game(g)&&(group==1||group==2||(group==0&&(item==1||item==2)))){snprintf(u->status,256,"%s",ui_tr(g,"Finish the active game before opening another board.","请先完成当前对局，再打开其他棋盘。"));return;}
-    if(group==0){if(item==0){g->scene=SCENE_ONLINE;g->online_ui=1;online_ensure(g);}else if(item==1)g->scene=SCENE_SINGLE_SETUP;else if(item==2)g->scene=SCENE_HOSTJOIN;else {g->scene=SCENE_LIBRARY;ui_request(g,"games",NULL);}}
+    if(group==0){if(item==0){p2p_open(g);}else if(item==1)g->scene=SCENE_SINGLE_SETUP;else if(item==2)g->scene=SCENE_HOSTJOIN;else {g->scene=SCENE_LIBRARY;ui_request(g,"games",NULL);}}
     else if(group==1){if(item==1){ui_open_daily(g,workspace_today());return;}u->smart=item==2;u->page=0;g->scene=SCENE_PUZZLE_SETUP;}
     else if(group==2){if(item==0)ui_open_analysis(g);else if(item==1)open_openings(g);else{g->scene=SCENE_LIBRARY;u->page=1;ui_analysis_list(g);}}
-    else if(group==3){g->scene=SCENE_ONLINE;g->online_ui=0;online_ensure(g);}
-    else if(group==4){if(item==2){g->scene=SCENE_PROFILE;ui_request(g,"profile.get",NULL);ui_request(g,"ratings.history",ui_args_int("category",u->rating_class));}else{g->scene=SCENE_SOCIAL;u->social_tab=item==0?0:1;ui_request(g,ui_social_op(u),NULL);}}
+    else if(group==3){p2p_open(g);}
+    else if(group==4){if(item==0){if(ui_active_game(g))return;open_account(g);}else if(item==1){g->scene=SCENE_LIBRARY;u->page=0;ui_request(g,"games",NULL);}else if(item==2){g->scene=SCENE_PROFILE;ui_request(g,"profile.get",NULL);ui_request(g,"ratings.history",ui_args_int("category",u->rating_class));}else{g->scene=SCENE_SOCIAL;u->social_tab=item==0?0:1;ui_request(g,ui_social_op(u),NULL);}}
     else if(item==0)g->scene=SCENE_PREFERENCES;else if(item==1)open_settings_scene(g,SCENE_MENU);else if(item==2)open_appearance(g,SCENE_MENU);else open_account(g);
 }
-static const char *ui_nav_name(Gui *g,int group){static const char *en[]={"Play","Puzzles","Learn","Watch","Community","More"},*zh[]={"对弈","解题","学习","观战","社区","更多"};return g->ui->zh?zh[group]:en[group];}
+static const char *ui_nav_name(Gui *g,int group){static const char *en[]={"Play","Puzzles","Learn","Connect","Profile","More"},*zh[]={"对弈","解题","学习","联机","个人","更多"};return g->ui->zh?zh[group]:en[group];}
 static const char *ui_sub_name(Gui *g,int group,int item)
 {
-    static const char *en[6][4]={{"Play Online","Play Computer","Local Multiplayer","Game History"},{"Practice","Daily Puzzle","Smart Practice",NULL},{"Analysis","Opening Explorer","Saved Analysis",NULL},{"Spectate by Room Code",NULL},{"Friends & Messages","Online Players","My Profile",NULL},{"Preferences","Engine & Game Settings","Appearance","Account"}};
-    static const char *zh[6][4]={{"在线对弈","电脑对战","局域网对战","历史对局"},{"普通练习","每日题","智能练习",NULL},{"分析","开局浏览","已保存分析",NULL},{"输入房间号观战",NULL},{"好友与私信","在线玩家","个人主页",NULL},{"偏好设置","引擎与对局设置","棋盘外观","账号"}};
+    static const char *en[6][4]={{"P2P with a friend","Play Computer","Local Multiplayer","Game History"},{"Practice","Daily Puzzle","Smart Practice",NULL},{"Analysis","Opening Explorer","Saved Analysis",NULL},{"P2P invitation",NULL},{"Local profile","Game History","My Profile",NULL},{"Preferences","Engine & Game Settings","Appearance","Account"}};
+    static const char *zh[6][4]={{"P2P 好友对弈","电脑对战","局域网对战","历史对局"},{"普通练习","每日题","智能练习",NULL},{"分析","开局浏览","已保存分析",NULL},{"P2P 邀请",NULL},{"离线档案","历史对局","个人主页",NULL},{"偏好设置","引擎与对局设置","棋盘外观","账号"}};
     return g->ui->zh?zh[group][item]:en[group][item];
 }
 static void ui_shell(Gui *g)
@@ -465,11 +466,11 @@ static void ui_shell(Gui *g)
     render_piece_box(g,g->ren,(Piece)(WP+u->avatar%12),36,g->win_h-120,32,1);
     SDL_Rect clip={62,g->win_h-143,134,47};SDL_RenderSetClipRect(g->ren,&clip);ui_text(g,u->nickname,64,g->win_h-136,ui_ink);SDL_RenderSetClipRect(g->ren,NULL);
     ui_text(g,ui_tr(g,g->offline_mode?"Offline":"Online",g->offline_mode?"离线模式":"在线模式"),24,g->win_h-87,ui_muted);
-    const char *icons_en[]={"Friends","Chat","Invites","Prefs"},*icons_zh[]={"好友","私信","约战","设置"};int icons[]={7,6,9,8};
+    const char *icons_en[]={"P2P","Profile","History","Prefs"},*icons_zh[]={"联机","个人","历史","设置"};int icons[]={9,7,12,8};
     for(int k=0;k<4;k++){SDL_Rect hit={8+k*49,g->win_h-58,45,44};if(ui_hit(g,hit))ui_round(g->ren,hit,(SDL_Color){192,216,240,255},8);ui_icon(g,icons[k],hit.x+12,hit.y+3,ui_ink);render_text_centered(g,g->font_tiny,u->zh?icons_zh[k]:icons_en[k],hit.x+hit.w/2,hit.y+27,ui_muted);
         int badge=k==0?u->friend_requests:k==1?u->unread_messages:k==2?cJSON_GetArraySize(cJSON_GetObjectItem(u->invitations,"rows")):0;if(badge){ui_round(g->ren,(SDL_Rect){hit.x+29,hit.y-4,18,18},(SDL_Color){202,71,78,255},9);char n[8];snprintf(n,8,"%d",badge>99?99:badge);render_text(g,g->font_tiny,n,hit.x+32,hit.y-4,(SDL_Color){255,255,255,255});}}
     if(g->scene==SCENE_MENU&&g->saved.valid&&!ui_active_game(g))ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},ui_tr(g,"Continue game","继续上次对局"),-1,true);
-    if(ui_active_game(g)){int white,black;online_clocks(g->online,&white,&black);char label[100];snprintf(label,sizeof label,u->zh?"返回对局 %d:%02d / %d:%02d":"Return %d:%02d / %d:%02d",white/60000,(white/1000)%60,black/60000,(black/1000)%60);ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},label,-1,true);}
+    if(ui_active_game(g)||(g->p2p_started&&g->mode==MODE_LOCAL)){int white,black;if(g->p2p_started&&g->mode==MODE_LOCAL){white=g->p2p_remaining[0];black=g->p2p_remaining[1];}else online_clocks(g->online,&white,&black);char label[100];snprintf(label,sizeof label,u->zh?"返回对局 %d:%02d / %d:%02d":"Return %d:%02d / %d:%02d",white/60000,(white/1000)%60,black/60000,(black/1000)%60);ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},label,-1,true);}
     if(u->composition[0])ui_text(g,u->composition,240,g->win_h-60,ui_ink);
     if(u->status[0]){SDL_Rect status={230,g->win_h-30,g->win_w-250,26};SDL_RenderSetClipRect(g->ren,&status);ui_text(g,u->status,status.x,status.y,ui_muted);SDL_RenderSetClipRect(g->ren,NULL);}
     int group=u->nav_hover;if(group>=0){int count=0;while(count<4&&ui_sub_name(g,group,count))count++;SDL_Rect pop={204,112+group*58,272,count*50+12};ui_card(g,pop);for(int k=0;k<count;k++)ui_button(g,(SDL_Rect){212,pop.y+6+k*50,256,44},ui_sub_name(g,group,k),k%5,false);}
@@ -489,12 +490,12 @@ static void ui_home_render(Gui *g)
 {
     Ui21 *u=g->ui;HomeLayout layout=ui_home_layout(g);u->home_scroll=clampi(u->home_scroll,0,layout.height-g->win_h);SDL_Rect viewport;SDL_RenderGetViewport(g->ren,&viewport);SDL_Rect content=viewport;content.y-=u->home_scroll;content.h+=u->home_scroll;SDL_RenderSetViewport(g->ren,&content);SDL_RenderSetScale(g->ren,eff_scale(g),eff_scale(g));int left=240,top=112;
     render_text(g,g->font_ui,ui_tr(g,"Your chess workspace","你的国际象棋空间"),left,32,ui_ink);
-    ui_card(g,(SDL_Rect){left,top,282,424});ui_text(g,ui_tr(g,g->offline_mode?"Play offline":"Play online",g->offline_mode?"离线对弈":"在线对弈"),left+18,top+18,ui_ink);
-    static const int times[][2]={{60000,0},{120000,1000},{180000,0},{180000,2000},{300000,0},{300000,3000},{600000,0},{600000,5000},{900000,10000},{1800000,0}};
-    if(!g->offline_mode){for(int k=0;k<10;k++){char label[24];snprintf(label,24,"%d + %d",times[k][0]/60000,times[k][1]/1000);ui_button(g,(SDL_Rect){left+16+(k%2)*126,top+58+(k/2)*51,118,42},label,-1,false);}
-        ui_button(g,(SDL_Rect){left+16,top+326,250,44},ui_tr(g,"Challenge a player","约战在线玩家"),0,true);
-    }else{ui_button(g,(SDL_Rect){left+16,top+75,250,50},ui_tr(g,"Play computer","电脑对战"),0,true);ui_button(g,(SDL_Rect){left+16,top+145,250,50},ui_tr(g,"Local multiplayer","局域网对战"),-1,false);}
-    ui_button(g,(SDL_Rect){left+16,top+378,250,34},ui_tr(g,g->offline_mode?"Switch online":"Switch offline",g->offline_mode?"切换在线模式":"切换离线模式"),-1,false);
+    ui_card(g,(SDL_Rect){left,top,282,424});ui_text(g,ui_tr(g,"Play chess","开始对弈"),left+18,top+18,ui_ink);
+    ui_button(g,(SDL_Rect){left+16,top+75,250,50},ui_tr(g,"P2P with a friend","P2P 好友对弈"),0,true);
+    ui_button(g,(SDL_Rect){left+16,top+145,250,50},ui_tr(g,"Play computer","电脑对战"),-1,false);
+    ui_button(g,(SDL_Rect){left+16,top+215,250,50},ui_tr(g,"Local multiplayer","局域网对战"),-1,false);
+    ui_text(g,ui_tr(g,"Invite · Connect · Play","邀请 · 连接 · 开局"),left+18,top+300,ui_muted);
+    ui_text(g,ui_tr(g,"No game server required","无需游戏服务器"),left+18,top+332,ui_muted);
     for(int k=0;k<3;k++){
         SDL_Rect card=layout.cards[k];int width=card.w+6,cx=card.x;top=card.y;ui_card(g,card);
         Board b;board_reset(&b);if(k==0&&u->preview_valid)ui_preview_position(&u->preview,&b);
@@ -747,7 +748,7 @@ static void ui_social_action(Gui *g,const char *action)
 typedef struct {const char *en,*zh;int icon;SDL_Keycode key;Uint16 mod;} UiAction;
 static bool ui_action_buttons(Gui *g,bool click)
 {
-    if(!g->ui||ui_new_scene(g->scene)||g->account_open||g->ui->metadata_open||g->ui->challenge_open)return false;
+    if(!g->ui||g->scene==SCENE_P2P||ui_new_scene(g->scene)||g->account_open||g->ui->metadata_open||g->ui->challenge_open)return false;
     UiAction actions[10];int count=0,x=g->panel_x,y=g->win_h-68;
 #define ACTION(en,zh,icon,key,mod) actions[count++]=(UiAction){en,zh,icon,key,mod}
     if(g->pgn_prompt){x=(g->win_w-460)/2+350;y=(g->win_h-150)/2+112;ACTION("Save PGN","保存棋谱",3,SDLK_RETURN,0);ACTION("Cancel","取消",24,SDLK_ESCAPE,0);}
@@ -755,6 +756,7 @@ static bool ui_action_buttons(Gui *g,bool click)
         if(g->pgn_import_open)return false;
         ACTION("Previous move","上一步",15,SDLK_LEFT,0);ACTION("Next move","下一步",16,SDLK_RIGHT,0);ACTION("Flip board","翻转棋盘",17,SDLK_f,KMOD_CTRL);
         ACTION("Move input","输入招法",4,SDLK_SPACE,0);ACTION("Settings","设置",8,SDLK_e,KMOD_CTRL);
+        if(net_is_p2p(g->net)){ACTION("Offer draw","提议和棋",12,SDLK_d,KMOD_CTRL);if(g->draw_offered){ACTION("Accept draw","接受和棋",5,SDLK_a,KMOD_CTRL);}}
         if(g->mode==MODE_ONLINE){ACTION("Message","消息",6,SDLK_t,0);ACTION("Offer draw","提议和棋",12,SDLK_d,KMOD_CTRL);if(g->draw_offered){ACTION("Accept draw","接受和棋",5,SDLK_a,KMOD_CTRL);}}
     }else if(g->scene==SCENE_OPENINGS){ACTION("Previous move","上一步",15,SDLK_LEFT,0);ACTION("Next move","下一步",16,SDLK_RIGHT,0);ACTION("Analyze","分析",2,SDLK_RETURN,0);ACTION("Previous opening","上个开局",20,SDLK_PAGEUP,0);ACTION("Next opening","下个开局",19,SDLK_PAGEDOWN,0);}
     else if(g->scene==SCENE_APPEARANCE){x=240;y=g->win_h-48;ACTION("Apply","应用",5,SDLK_RETURN,0);ACTION("Back","返回",15,SDLK_ESCAPE,0);}
@@ -778,22 +780,24 @@ static bool ui_click(Gui *g)
     if(mx<208){
         if(my<90){ui_home(g);return true;}
         if(my>=112&&my<460){u->nav_hover=(my-112)/58;return true;}
-        if(my>g->win_h-58){if(mx<155){g->scene=SCENE_SOCIAL;u->social_tab=0;u->page=0;ui_request(g,"friends",NULL);if(mx>100)online_request(g->online,"challenge.list",NULL);}else g->scene=SCENE_PREFERENCES;return true;}
+        if(my>g->win_h-58){if(mx<57)p2p_open(g);else if(mx<106){g->scene=SCENE_PROFILE;ui_profile_request(g);}else if(mx<155){g->scene=SCENE_LIBRARY;u->page=0;ui_request(g,"games",NULL);}else g->scene=SCENE_PREFERENCES;return true;}
         if(my>g->win_h-150&&my<g->win_h-90){g->scene=SCENE_PROFILE;ui_profile_request(g);return true;}return true;
     }
     if(u->nav_hover>=0){int group=u->nav_hover,top=112+group*58;if(mx>=204&&mx<484&&my>=top){int item=(my-top-6)/50;if(item>=0&&item<4&&ui_sub_name(g,group,item)){ui_nav_action(g,group,item);return true;}}u->nav_hover=-1;}
     if(g->scene==SCENE_MENU&&g->saved.valid&&my<70&&mx>g->win_w-260){resume_game(g);return true;}
-    if(ui_active_game(g)&&my<70&&mx>g->win_w-260){g->scene=SCENE_GAME;return true;}
+    if((ui_active_game(g)||(g->p2p_started&&g->mode==MODE_LOCAL))&&my<70&&mx>g->win_w-260){g->scene=SCENE_GAME;return true;}
     if(g->scene==SCENE_SETTINGS&&my>=22&&my<58){
         if(mx>=g->win_w-218&&mx<g->win_w-24){u->dark_mode=!u->dark_mode;g->config_dirty=true;return true;}
         if(mx>=g->win_w-360&&mx<g->win_w-230){g->scene=SCENE_PREFERENCES;return true;}
     }
     if(g->scene==SCENE_MENU){
         my+=u->home_scroll;
-        if(mx>=240&&mx<522&&my>=112&&my<536){if(my>=490){if(ui_active_game(g)){g->scene=SCENE_GAME;return true;}toggle_offline_mode(g);g->config_dirty=true;return true;}
-            if(g->offline_mode){g->scene=my<245?SCENE_SINGLE_SETUP:SCENE_HOSTJOIN;return true;}
-            if(my>=438){g->scene=SCENE_SOCIAL;u->social_tab=1;ui_request(g,"people",NULL);return true;}
-            if(my>=170&&my<425){int row=(my-170)/51,col=mx>=382?1:0,k=row*2+col;static const int times[][2]={{60000,0},{120000,1000},{180000,0},{180000,2000},{300000,0},{300000,3000},{600000,0},{600000,5000},{900000,10000},{1800000,0}};if(k<10&&!ui_active_game(g)&&online_ensure(g)){online_set_rated(g->online,online_logged_in(g->online));online_queue(g->online,times[k][0],times[k][1]);g->scene=SCENE_ONLINE;}return true;}
+        if(mx>=240&&mx<522&&my>=112&&my<536){
+            if(ui_active_game(g)){g->scene=SCENE_GAME;return true;}
+            if(my>=187&&my<237)p2p_open(g);
+            else if(my>=257&&my<307)g->scene=SCENE_SINGLE_SETUP;
+            else if(my>=327&&my<377)g->scene=SCENE_HOSTJOIN;
+            return true;
         }
         HomeLayout layout=ui_home_layout(g);
         for(int k=0;k<3;k++)if(pt_in(&layout.cards[k],mx,my)){if(k==0){u->page=0;if(u->preview_valid){int index=ui_entry_add(g,&u->preview,"preview-review",0,false);if(index>=0){u->entries[index].settled=true;ui_entry_load(g,index,true);}}else ui_next_puzzle(g,0);}else if(k==1)ui_open_analysis(g);else {open_openings(g);for(int index=0;index<g->opening_match_count;index++)if(g->opening_match[index]==u->opening_preview){g->opening_sel=index;break;}openings_load_selected(g);}return true;}

@@ -111,3 +111,9 @@ DejaVu Sans）渲染字形与界面文字。
   license is bundled as assets/fonts/OFL.txt.
 - Lichess puzzle database: CC0 1.0, https://database.lichess.org/#puzzles.
   Source and subset provenance are recorded in assets/puzzles/SOURCE.txt.
+
+## WebRTC P2P (V3.0.0)
+
+- libdatachannel 0.24.2, Paul-Louis Ageneau and contributors, MPL-2.0. Source: https://github.com/paullouisageneau/libdatachannel/tree/4e4f4892dccb2a57fe3a490d0c9d958de4244e74 . Distributed unmodified as a shared library.
+- libjuice (MPL-2.0), usrsctp (BSD-3-Clause), and plog (MIT), pinned by that release's Git submodules and linked into libdatachannel. Their license texts accompany packaged applications under `licenses/libdatachannel`. Source submodule locations and revisions are available in the linked release.
+- OpenSSL remains dynamically bundled with its existing attribution. The reproducible source bootstrap is `scripts/build_p2p.sh`.

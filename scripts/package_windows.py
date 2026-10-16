@@ -31,6 +31,9 @@ for file in ("LICENSE", "ATTRIBUTIONS.md", "chess.conf.example"):
     shutil.copy2(source / file, stage / file)
 
 dlls = {p.name.lower(): p for p in bin_dir.glob("*.dll")}
+p2p_prefix = source / ".cache/p2p"
+custom_dlls = {p.name.lower(): p for p in (p2p_prefix / "bin").glob("*.dll")}
+dlls.update(custom_dlls)
 system = Path(os.environ["SystemRoot"]) / "System32"
 pending = [stage / "openchess.exe"]
 # SDL codecs may be opened dynamically and absent from the PE import table.
@@ -47,10 +50,15 @@ while pending:
     if binary.suffix.lower() == ".dll":
         shutil.copy2(binary, stage / binary.name)
         copied.add(binary.name)
+        if binary.name.lower() in custom_dlls:
+            owner = None
+        else:
+            owner = True
         posix_path = subprocess.check_output(["cygpath", "-u", str(binary)], text=True).strip()
-        owner = subprocess.run(["pacman", "-Qqo", posix_path], capture_output=True,
-                               text=True, check=True).stdout.strip()
-        packages.add(owner)
+        if owner:
+            owner = subprocess.run(["pacman", "-Qqo", posix_path], capture_output=True,
+                                   text=True, check=True).stdout.strip()
+            packages.add(owner)
     imports = subprocess.run(["objdump", "-p", str(binary)], capture_output=True,
                              text=True, check=True).stdout
     for dep in re.findall(r"DLL Name:\s*(\S+)", imports):
@@ -64,7 +72,12 @@ while pending:
         else:
             raise SystemExit(f"Missing runtime dependency: {dep}")
 
+if (source / "src/net_p2p.c").exists() and not any("datachannel" in name.lower() for name in copied):
+    raise SystemExit("P2P runtime is missing from the release package")
+
 licenses = stage / "licenses"
+if (p2p_prefix / "share/licenses").is_dir():
+    shutil.copytree(p2p_prefix / "share/licenses", licenses, dirs_exist_ok=True)
 manifest = []
 for package in sorted(packages):
     manifest.append(subprocess.run(["pacman", "-Q", package], capture_output=True,

@@ -52,6 +52,9 @@ jobs:
           update: true
           install: >-
             make
+            git
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-python
@@ -62,12 +65,19 @@ jobs:
             mingw-w64-ucrt-x86_64-SDL2_mixer
             mingw-w64-ucrt-x86_64-libwebsockets
             mingw-w64-ucrt-x86_64-sqlite3
+      - name: Build pinned P2P dependency
+        run: |
+          if test -f scripts/build_p2p.sh; then
+            ./scripts/build_p2p.sh
+            echo "$(cygpath -m "$PWD/.cache/p2p/bin")" >> "$GITHUB_PATH"
+          fi
       - name: Build Windows x64 executable
         run: make -j2 CC='gcc -pthread' OS=Windows_NT openchess.exe
       - name: Run native rules, network and GUI regression tests
         run: |
           drive="$(cygpath -m "$PWD" | cut -c1)"
           mkdir -p "/${drive,,}/tmp/openchess-test-data"
+          export OPENCHESS_REQUIRE_P2P=1
           export APPDATA="$drive:/tmp/openchess-test-data"
           export OPENCHESS_ASSETS="$(cygpath -m "$PWD/assets")"
           # SDL's Windows entry point requires argc/argv in the test mains.
@@ -97,6 +107,7 @@ jobs:
               p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
           PY
           tests='rules fen pgn ai engine_install transport proto puzzle review opening movetree net local gui'
+          if [ -f tests/test_p2p.c ]; then tests="$tests p2p"; fi
           for extra in workspace ui21; do if [ -f tests/test_$extra.c ]; then tests="$tests $extra"; fi; done
           targets=''
           for test in $tests; do targets="$targets tests/test_$test"; done

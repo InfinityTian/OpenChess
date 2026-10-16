@@ -92,7 +92,13 @@ while queue:
     if target != executable:
         subprocess.run(['install_name_tool', '-id', '@rpath/' + target.name, str(target)], check=True, capture_output=True)
 
+if (source / 'src/net_p2p.c').exists() and not any('datachannel' in name for name in names):
+    raise SystemExit('P2P runtime is missing from the release application')
+
 licenses = resources / 'licenses'
+p2p_licenses = source / '.cache/p2p/share/licenses'
+if p2p_licenses.is_dir():
+    shutil.copytree(p2p_licenses, licenses, dirs_exist_ok=True)
 for package in packages:
     destination = licenses / package.parent.name
     candidates = [p for p in package.glob('*') if p.is_file() and any(word in p.name.upper() for word in ('LICENSE', 'COPYING', 'NOTICE'))]

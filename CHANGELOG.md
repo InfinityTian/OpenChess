@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0 — 2026-10-16
+
+- Replace hosted online entry points with built-in WebRTC P2P friend games and manual invitation/response exchange. No OpenChess account, game server or signaling server is required.
+- Add encrypted reliable transport, optional configurable STUN/UDP TURN, independent move validation, generation/ply deduplication, creator-authoritative clocks and connection timeout handling.
+- Support white/black/random colors, eleven time controls, background games, resign/draw, mutual rematches with swapped colors, connection-local scores, local history and post-game analysis.
+- Preserve local training and profiles; retire hosted matchmaking, login and social entry points. P2P games are unrated.
+- Correct queued mouse clicks to use their event/window coordinates instead of a later global cursor position.
+- Build and bundle pinned WebRTC dependencies and license notices in macOS and Windows releases; add real peer connection and game lifecycle regression coverage.
+
+
 All notable changes to OpenChess. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).

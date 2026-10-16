@@ -80,6 +80,16 @@ static void ui_move_background(Gui *g,SDL_Rect rect,bool selected);
 static void ui_puzzle_rating(Gui *g);
 static void ui_caret_color(SDL_Renderer *ren);
 static bool ui_action_buttons(Gui *g,bool click);
+static void ui_local_history(Gui *g);
+static bool p2p_active(const Gui *g);
+static bool p2p_finished(const Gui *g);
+static void p2p_open(Gui *g);
+static void p2p_tick(Gui *g,Uint32 now);
+static void p2p_action(Gui *g);
+static void p2p_draw(Gui *g,bool accept);
+static bool p2p_event(Gui *g,const SDL_Event *e);
+static void p2p_render(Gui *g);
+
 
 
 /* ------------------------------------------------------------------ */
@@ -501,22 +511,12 @@ static void set_mouse(Gui *g, int ex, int ey)
         return;
     }
 
-    /* SDL's window-relative event coordinates can be stale after a macOS
-     * zoom/move (its cached window origin is not updated), which offsets the
-     * cursor. global_cursor - window_position gives the true content-relative
-     * position (they are queried live), so use that. Hidden windows
-     * (tests/headless) keep the event coordinates. */
-    int x = ex, y = ey;
-    if (!(SDL_GetWindowFlags(g->win) & SDL_WINDOW_HIDDEN)) {
-        int gx = 0, gy = 0, wx = 0, wy = 0;
-        SDL_GetGlobalMouseState(&gx, &gy);
-        SDL_GetWindowPosition(g->win, &wx, &wy);
-        g->mouse_global.x = gx;
-        g->mouse_global.y = gy;
-        g->win_pos.x = wx;
-        g->win_pos.y = wy;
-        if (gx || gy) { x = gx - wx; y = gy - wy; }
-    }
+    /* Input belongs to the event timestamp and target window. Querying the
+     * current global pointer here races with queued clicks and other windows
+     * (including synthetic input), producing clicks at a different location. */
+    int x=ex,y=ey;
+    SDL_GetGlobalMouseState(&g->mouse_global.x,&g->mouse_global.y);
+    SDL_GetWindowPosition(g->win,&g->win_pos.x,&g->win_pos.y);
     g->mouse_win.x = x;
     g->mouse_win.y = y;
 
@@ -930,6 +930,7 @@ static void play_sync(Gui *g)
 static void push_move(Gui *g, Move m)
 {
     if (g->ply >= MAX_PLY) return;
+    if(g->mode==MODE_LOCAL&&g->p2p_started&&(!g->net||!g->p2p_ready||p2p_finished(g)))return;
     Board pre = g->board;
 
     /* Did this move match the engine's best for the position before it? */
@@ -1129,7 +1130,7 @@ static bool san_can_type(const Gui *g)
     if(play_branch(g))return true;
     switch (g->mode) {
         case MODE_SINGLE: return g->board.side == g->human_color;
-        case MODE_LOCAL:  return g->board.side == g->local_color;
+        case MODE_LOCAL:  return g->board.side == g->local_color&&(!g->p2p_started||(g->net&&g->p2p_ready&&!p2p_finished(g)));
         case MODE_ONLINE: return g->online && !online_spectating(g->online) &&
                                   g->board.side == g->human_color;
         case MODE_ANALYSIS:
@@ -1352,9 +1353,10 @@ static const char *MENU_ITEMS[MENU_COUNT] = {
 /* Local Multiplayer needs SDL2_net; the online entries need libwebsockets. */
 static bool menu_enabled(const Gui *g, int i)
 {
+    (void)g;
     if (i == MENU_LOCAL) return net_available();
     if (i == MENU_ONLINE || i == MENU_MATCH)
-        return net_ws_available() && !g->offline_mode;
+        return net_p2p_available();
     return i >= 0 && i < MENU_COUNT;
 }
 
@@ -1795,6 +1797,7 @@ void gui_load_config(Gui *g, const char *path)
     if (vprofile[0]) snprintf(g->local_profile, sizeof g->local_profile, "%s", vprofile);
     if (vlocalrating[0]) { int n = atoi(vlocalrating); if (n > 0) g->local_rating = n; }
     if (vaccountlocal[0]) g->account_local = (atoi(vaccountlocal) != 0);
+    g->offline_mode=true; /* Hosted services are unavailable; P2P stays usable offline. */
 }
 
 /* Persist the current look to chess.conf (only when it changed). */
@@ -1891,6 +1894,8 @@ Gui *gui_create(void)
     if(!seeded){unsigned seed;sqlite3_randomness(sizeof seed,&seed);srand(seed);seeded=true;}
     Gui *g = calloc(1, sizeof *g);
     if (!g) return NULL;
+    g->offline_mode=true;
+    g->p2p_side=2;g->p2p_time=7;
     g->ui_scale = 1.0f;
     g->zoom = 1.0f;
     g->pref_zoom = 1.0f;
@@ -2316,20 +2321,8 @@ static void menu_activate(Gui *g)
             g->scene = SCENE_HOSTJOIN;
             break;
         case MENU_ONLINE:
-            if (!net_ws_available()) {
-                snprintf(g->menu_msg, sizeof g->menu_msg,
-                         "Online play unavailable (install libwebsockets)");
-                break;
-            }
-            open_online(g, 0);
-            break;
         case MENU_MATCH:
-            if (!net_ws_available()) {
-                snprintf(g->menu_msg, sizeof g->menu_msg,
-                         "Online play unavailable (install libwebsockets)");
-                break;
-            }
-            open_online(g, 1);
+            p2p_open(g);
             break;
         case MENU_APPEARANCE: open_appearance(g, SCENE_MENU); break;
         case MENU_SETTINGS: open_settings_scene(g, SCENE_MENU); break;
@@ -2382,13 +2375,9 @@ static void menu_mode_rect(const Gui *g, SDL_Rect *r)
 
 static void toggle_offline_mode(Gui *g)
 {
-    g->offline_mode = !g->offline_mode;
-    if (g->offline_mode && g->online) {
-        online_destroy(g->online);
-        g->online = NULL;
-    }
-    g->config_dirty = true;
-    set_msg(g, g->offline_mode ? "Offline mode" : "Online mode", NULL);
+    g->offline_mode=true;
+    if(g->online){online_destroy(g->online);g->online=NULL;}
+    set_msg(g,ui_tr(g,"Use P2P to play with a friend; no online account needed.","请通过 P2P 与好友对弈，无需在线账号。"),NULL);
 }
 
 static void handle_menu_mousedown(Gui *g)
@@ -2835,6 +2824,7 @@ static unsigned short hj_port(Gui *g)
 
 static void hj_begin_host(Gui *g)
 {
+    g->p2p_started=false;
     if (g->net) { transport_close(g->net); g->net = NULL; }
     g->net = net_host(hj_port(g));
     if (!g->net) {
@@ -2849,6 +2839,7 @@ static void hj_begin_host(Gui *g)
 
 static void hj_begin_join(Gui *g)
 {
+    g->p2p_started=false;
     if (g->net) { transport_close(g->net); g->net = NULL; }
     g->net = net_join(g->net_addr, hj_port(g));
     if (!g->net) {
@@ -2923,28 +2914,14 @@ static void online_close(Gui *g)
 
 static void open_online(Gui *g, int matchmaking)
 {
-    online_close(g);
-    g->online_ui = matchmaking ? 1 : 0;
-    g->online_focus = 0;
-    g->online_code_in[0] = 0;
-    g->menu_msg[0] = 0;
-    g->msg[0] = 0;
-    if (net_ws_available() && g->online_url[0])
-        g->online = online_create(g->online_url, g->online_nick, "", g->account_token);
-    if (g->online) online_set_rated(g->online, g->online_rated);
-    g->scene = SCENE_ONLINE;
+    (void)matchmaking;p2p_open(g);
 }
 
 /* Connect if we have no live session; rebuild one if it closed. */
 static bool online_ensure(Gui *g)
 {
-    if (!net_ws_available()) return false;
-    if (g->online && online_state(g->online) != ONLINE_CLOSED) return true;
-    online_close(g);
-    if (!g->online_url[0]) return false;
-    g->online = online_create(g->online_url, g->online_nick, "", g->account_token);
-    if (g->online) online_set_rated(g->online, g->online_rated);
-    return g->online != NULL;
+    /* Public hosted services are retired. Keep wire compatibility for old saves. */
+    (void)g;return false;
 }
 
 typedef struct { const char *label; int time_ms; int inc_ms; } OnlineTime;
@@ -4461,7 +4438,9 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         else do_undo(g);
         return;
     }
+    if(net_is_p2p(g->net)&&ctrl&&(k==SDLK_d||k==SDLK_a)){p2p_draw(g,k==SDLK_a);return;}
     if (ctrl && k == SDLK_r) {
+        if(net_is_p2p(g->net)){p2p_action(g);return;}
         if (g->mode == MODE_PUZZLE) {
             open_puzzle(g);          /* next puzzle */
         } else if (g->mode == MODE_ONLINE) {
@@ -4732,6 +4711,7 @@ static void handle_game_mousedown(Gui *g)
         return;
     }
     if (pt_in(&restart, p.x, p.y)) {
+        if(net_is_p2p(g->net)){p2p_action(g);return;}
         if (g->mode == MODE_PUZZLE) {
             puzzle_reveal(g);
         } else if (g->mode == MODE_ANALYSIS) {
@@ -4839,7 +4819,7 @@ static void handle_game_mousedown(Gui *g)
     /* In singleplayer/local the player may only move their own side. */
     bool may_move = true;
     if (g->mode == MODE_SINGLE)     may_move = (g->board.side == g->human_color);
-    else if (g->mode == MODE_LOCAL) may_move = (g->board.side == g->local_color);
+    else if (g->mode == MODE_LOCAL) may_move = (g->board.side == g->local_color)&&(!g->p2p_started||(g->net&&g->p2p_ready&&!p2p_finished(g)));
 
     Board *position=input_board(g);if(play_branch(g))may_move=true;
     Piece pc = position->board[sq];
@@ -4977,6 +4957,7 @@ static void debug_ui_log(Gui *g, int ex, int ey)
 
 void gui_handle_event(Gui *g, const SDL_Event *e)
 {
+    if(p2p_event(g,e))return;
     if(ui_event(g,e))return;
     switch (e->type) {
         case SDL_QUIT:
@@ -5271,6 +5252,7 @@ void gui_tick(Gui *g, Uint32 now)
         if(online_state(g->online)==ONLINE_PLAYING&&g->mode==MODE_ONLINE)online_tick(g);
         else online_lobby_tick(g);
     }
+    p2p_tick(g,now);
     ui_tick(g,now);
     if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->puzzle_wrong&&!g->history_browsing&&now-g->puzzle_feedback_at>=1100)puzzle_rewind(g,g->puzzle_step);
     if (g->scene == SCENE_HOSTJOIN) {
@@ -5283,7 +5265,7 @@ void gui_tick(Gui *g, Uint32 now)
     if (g->mode == MODE_SINGLE) {
         single_tick(g, now);
     } else if (g->mode == MODE_LOCAL) {
-        local_tick(g);
+        if(!net_is_p2p(g->net))local_tick(g);
     } else if (g->mode == MODE_ONLINE) {
         /* Updated by the global online pump above. */
     } else if (g->mode == MODE_ANALYSIS) {
@@ -6093,7 +6075,11 @@ static void draw_promo_chooser(Gui *g, SDL_Renderer *ren)
 static void render_status(Gui *g)
 {
     char line[64];
-    if (g->state == CHECKMATE)
+    if(g->mode==MODE_LOCAL&&g->p2p_started&&g->override_result[0])
+        snprintf(line,sizeof line,"%s",!strcmp(g->override_result,"*")?ui_tr(g,"Connection closed · game stopped","连接已断开 · 对局已停止"):
+                 !strcmp(g->override_result,"1/2-1/2")?ui_tr(g,"Game over · Draw","对局结束 · 和棋"):
+                 !strcmp(g->override_result,"1-0")?ui_tr(g,"Game over · White wins","对局结束 · 白方获胜"):ui_tr(g,"Game over · Black wins","对局结束 · 黑方获胜"));
+    else if (g->state == CHECKMATE)
         snprintf(line,sizeof line,ui_tr(g,"Checkmate - %s wins","将杀 — %s获胜"),
                  ui_old_text(g,g->board.side==WHITE?"Black":"White"));
     else if (g->state == STALEMATE)
@@ -6120,12 +6106,16 @@ static void render_status(Gui *g)
                     (SDL_Color){ 65, 102, 138, 255 });
     } else if (g->mode == MODE_LOCAL) {
         bool ok = g->net && transport_state(g->net) == NET_STATE_CONNECTED;
-        char info[96];
-        snprintf(info, sizeof info, "You: %s    %s",
-                 g->local_color == WHITE ? "White" : "Black",
-                 ok ? "opponent connected" : "opponent disconnected");
+        char info[200];
+        if(g->p2p_started){
+            int w=g->p2p_remaining[0],b=g->p2p_remaining[1];
+            if(g->p2p_base)snprintf(info,sizeof info,ui_tr(g,"P2P · %s · %d:%02d / %d:%02d","P2P · 你执%s · %d:%02d／%d:%02d"),ui_old_text(g,g->local_color==WHITE?"White":"Black"),w/60000,w/1000%60,b/60000,b/1000%60);
+            else snprintf(info,sizeof info,ui_tr(g,"P2P · You: %s · Unlimited","P2P · 你执%s · 不限时"),ui_old_text(g,g->local_color==WHITE?"White":"Black"));
+
+        }else snprintf(info,sizeof info,ui_tr(g,"You: %s · %s","你执%s · %s"),ui_old_text(g,g->local_color==WHITE?"White":"Black"),ok?ui_tr(g,"connected","已连接"):ui_tr(g,"disconnected","已断开"));
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
                     (SDL_Color){ 65, 102, 138, 255 });
+        if(g->p2p_started){char score[100];snprintf(score,sizeof score,ui_tr(g,"W/D/L %d/%d/%d%s","胜／和／负 %d／%d／%d%s"),g->p2p_score[0],g->p2p_score[1],g->p2p_score[2],g->draw_offered?ui_tr(g," · Draw offered"," · 收到和棋提议"):"");render_text(g,g->font_small,score,g->panel_x,g->board_y+49,(SDL_Color){65,102,138,255});}
     } else if (g->mode == MODE_ONLINE) {
         char info[160];
         const char *opp = g->online ? online_opponent(g->online) : "Opponent";
@@ -7409,7 +7399,8 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &undo,
                               g->mode == MODE_PUZZLE ? "Hint" : "Undo");
     const char *restart_label;
-    if (g->mode == MODE_ONLINE)
+    if(net_is_p2p(g->net))restart_label=p2p_finished(g)?"Rematch":"Resign";
+    else if (g->mode == MODE_ONLINE)
         restart_label = online_spec ? "" : (g->online_over ? "Rematch" : "Resign");
     else if (g->mode == MODE_PUZZLE)
         restart_label = "Reveal";
@@ -8925,7 +8916,9 @@ static void draw_debug_overlay(Gui *g, SDL_Renderer *ren)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+#include "p2p_game.inc"
 #include "ui21.inc"
+#include "p2p_ui.inc"
 
 void gui_render(Gui *g, SDL_Renderer *ren)
 {
@@ -8948,6 +8941,8 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         render_puzzle_setup(g, ren);
     else if (g->scene == SCENE_HOSTJOIN)
         render_hostjoin(g, ren);
+    else if (g->scene == SCENE_P2P)
+        p2p_render(g);
     else if (g->scene == SCENE_ONLINE)
         render_online(g, ren);
     else if (g->scene == SCENE_OPENINGS)

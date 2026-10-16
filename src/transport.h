@@ -6,7 +6,7 @@
 
 /*
  * Transport abstraction shared by every way OpenChess can talk to a peer: the
- * LAN TCP transport (SDL2_net, see net_tcp.c) and the online WebSocket
+ * LAN TCP transport (SDL2_net), WebRTC P2P (net_p2p.c), and legacy WebSocket
  * transport (libwebsockets, see net_ws.c). The GUI only ever talks to this
  * interface, so the two can be swapped without touching game code.
  */
