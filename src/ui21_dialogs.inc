@@ -3,9 +3,7 @@ static SDL_Rect ui_dialog_rect(Gui *g){return (SDL_Rect){208+(g->win_w-208-560)/
 static void ui_metadata_begin(Gui *g)
 {
     Ui21 *u=g->ui;u->metadata_open=true;u->dialog_field=-1;
-    const char *values[]={g->pgn_hdr.event,g->pgn_hdr.site,g->pgn_hdr.date,g->pgn_hdr.white,g->pgn_hdr.black,g->pgn_hdr.result};
-    for(int k=0;k<6;k++)snprintf(u->metadata[k],sizeof u->metadata[k],"%s",values[k]);
-    if(!u->metadata[3][0])snprintf(u->metadata[3],128,"White");if(!u->metadata[4][0])snprintf(u->metadata[4],128,"Black");if(!u->metadata[5][0])snprintf(u->metadata[5],128,"*");
+
 }
 static void ui_metadata_apply(Gui *g)
 {

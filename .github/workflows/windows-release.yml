@@ -65,13 +65,16 @@ jobs:
           from pathlib import Path
           for name in ('test_gui.c', 'test_local.c', 'test_ui21.c'):
               p = Path('tests') / name
+              if not p.exists():
+                  continue
               s = p.read_text()
               old = 'int main(void)\n{'
               if old not in s:
                   raise SystemExit('Unexpected test entry point: ' + name)
               p.write_text(s.replace(old, 'int main(int argc, char **argv)\n{\n    (void)argc; (void)argv;'))
           PY
-          tests='rules fen pgn ai engine_install transport proto puzzle review opening movetree net local workspace ui21 gui'
+          tests='rules fen pgn ai engine_install transport proto puzzle review opening movetree net local gui'
+          for extra in workspace ui21; do if [ -f tests/test_$extra.c ]; then tests="$tests $extra"; fi; done
           targets=''
           for test in $tests; do targets="$targets tests/test_$test"; done
           make -j2 CC='gcc -pthread -include ../scripts/windows-test-env.h' OS=Windows_NT $targets

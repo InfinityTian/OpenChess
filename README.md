@@ -1,5 +1,9 @@
 # OpenChess
 
+Version 2.1 adds the unified workspace, analysis setup, social services, smart
+practice and permanent unrated daily archives. See [V2.1 guide](docs/V2.1.md)
+for usage, protocol v3 and server migration notes. SQLite is required.
+
 A desktop chess program written in C with SDL2: play both sides in **Analysis**,
 battle **Stockfish** in **Singleplayer**, or play a friend over the network in
 **Local Multiplayer**. It ships with dozens of chess.com-style boards and piece

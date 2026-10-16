@@ -104,3 +104,10 @@ DejaVu Sans）渲染字形与界面文字。
 - **Stockfish** —— GPLv3。它是由 OpenChess 启动的外部程序，本项目不附带分发。
 
 源代码采用 MIT 许可证 —— 详见 [`LICENSE`](LICENSE)。
+
+## V2.1 bundled text and puzzle resources
+
+- Noto Sans CJK SC: Noto project, SIL Open Font License 1.1. The complete
+  license is bundled as assets/fonts/OFL.txt.
+- Lichess puzzle database: CC0 1.0, https://database.lichess.org/#puzzles.
+  Source and subset provenance are recorded in assets/puzzles/SOURCE.txt.

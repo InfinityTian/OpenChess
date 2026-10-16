@@ -12,8 +12,11 @@ endif
 NET_PC   := $(shell pkg-config --exists SDL2_net 2>/dev/null && echo SDL2_net)
 MIX_PC   := $(shell pkg-config --exists SDL2_mixer 2>/dev/null && echo SDL2_mixer)
 WS_PC    := $(shell pkg-config --exists libwebsockets 2>/dev/null && echo libwebsockets)
-# SQLite backs the server's account store (optional).
+# SQLite is required for persistent profiles, daily archives and accounts.
 SQLITE_PC := $(shell pkg-config --exists sqlite3 2>/dev/null && echo sqlite3)
+ifeq ($(SQLITE_PC),)
+$(error SQLite3 is required: install the sqlite3 development package)
+endif
 HAVE_SDL_NET := $(if $(NET_PC),1,0)
 HAVE_SDL_MIXER := $(if $(MIX_PC),1,0)
 HAVE_WS := $(if $(WS_PC),1,0)
@@ -28,7 +31,7 @@ WS_CFLAGS  := $(shell pkg-config --cflags $(WS_PC) 2>/dev/null) $(SSL_CFLAGS)
 WS_LIBS    := $(shell pkg-config --libs $(WS_PC) 2>/dev/null) $(SSL_LIBS)
 
 SDL_PKGS   := sdl2 SDL2_ttf SDL2_image $(NET_PC) $(MIX_PC) $(WS_PC)
-SDL_CFLAGS := $(shell pkg-config --cflags $(SDL_PKGS) 2>/dev/null) $(SSL_CFLAGS)
+SDL_CFLAGS := $(shell pkg-config --cflags $(SDL_PKGS) 2>/dev/null) $(SSL_CFLAGS) $(SQLITE_CFLAGS)
 SDL_LIBS   := $(shell pkg-config --libs $(SDL_PKGS) 2>/dev/null) $(SSL_LIBS) $(SQLITE_LIBS) -lm
 
 CFLAGS += -DHAVE_SDL_NET=$(HAVE_SDL_NET) -DHAVE_SDL_MIXER=$(HAVE_SDL_MIXER) -DHAVE_WS=$(HAVE_WS) -DHAVE_ACCOUNTS=$(HAVE_ACCOUNTS)
@@ -125,7 +128,8 @@ tests/test_engine_install: tests/test_engine_install.c $(OBJ_CORE)
 tests/test_ai: tests/test_ai.c $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(filter %.c %.o,$^) -o $@$(EXE) -lm
 
-test: tests/test_workspace tests/test_rules tests/test_fen tests/test_pgn tests/test_ai tests/test_engine_install tests/test_transport tests/test_proto tests/test_puzzle tests/test_review tests/test_opening tests/test_movetree tests/test_net tests/test_local tests/test_gui $(TEST_ONLINE) $(SERVER_TARGET)
+test: tests/test_ui21 tests/test_workspace tests/test_rules tests/test_fen tests/test_pgn tests/test_ai tests/test_engine_install tests/test_transport tests/test_proto tests/test_puzzle tests/test_review tests/test_opening tests/test_movetree tests/test_net tests/test_local tests/test_gui $(TEST_ONLINE) $(SERVER_TARGET)
+	./tests/test_ui21$(EXE)
 	./tests/test_workspace$(EXE)
 	./tests/test_rules$(EXE)
 	./tests/test_fen$(EXE)
@@ -165,7 +169,7 @@ dmg: $(BIN)
 	./scripts/make_dmg.sh
 
 clean:
-	rm -f $(BIN) chess $(SERVER) tests/test_rules$(EXE) tests/test_fen$(EXE) tests/test_pgn$(EXE) tests/test_ai$(EXE) tests/test_engine_install$(EXE) tests/test_transport$(EXE) tests/test_proto$(EXE) tests/test_puzzle$(EXE) tests/test_review$(EXE) tests/test_opening$(EXE) tests/test_movetree$(EXE) tests/test_net$(EXE) tests/test_local$(EXE) tests/test_online$(EXE) tests/test_gui$(EXE) gui_smoke.bmp $(OBJ_CORE)
+	rm -f $(BIN) chess $(SERVER) tests/test_rules$(EXE) tests/test_fen$(EXE) tests/test_pgn$(EXE) tests/test_ai$(EXE) tests/test_engine_install$(EXE) tests/test_transport$(EXE) tests/test_proto$(EXE) tests/test_puzzle$(EXE) tests/test_review$(EXE) tests/test_opening$(EXE) tests/test_movetree$(EXE) tests/test_net$(EXE) tests/test_local$(EXE) tests/test_online$(EXE) tests/test_gui$(EXE) tests/test_workspace$(EXE) tests/test_ui21$(EXE) gui_smoke.bmp $(OBJ_CORE)
 	rm -rf dist
 
 .PHONY: all test run clean install uninstall app dmg

@@ -6,6 +6,29 @@ All notable changes to OpenChess. The format follows
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-16
+
+### Added
+- Unified pale-blue workspace, home mini-boards, hover/keyboard navigation,
+  Chinese language/font, custom background images and responsive home cards.
+- Analysis launcher, saved variation trees and full-FEN position setup with
+  palette, undo/redo, castling controls and game metadata.
+- Protocol v3 social services: friends, blocking, private messages, invitations,
+  persistent game history and head-to-head/rematch-series scores.
+- Separate Bullet, Blitz, Rapid and Classical ELO histories and puzzle graphs.
+- Smart training, rated/unrated session history and 6,000 validated CC0 puzzles.
+- Permanent daily archives with Beijing-day publication, historical completion,
+  hint/reveal rules, calendar and streak recalculation; daily puzzles never score.
+
+### Changed
+- Legal-move white dots now use a soft edge shadow and subtle lighting.
+- Move trails are more visible; animation cadence is consistently 380 ms.
+- Online connections and clocks remain active when navigating home.
+- Server-authoritative puzzle settlement deduplicates attempts and repeat puzzles.
+- Fixed black promotion piece mapping and preserved large FEN move counters.
+- SQLite is required by desktop persistence; migrations retain existing accounts.
+
+
 ## [2.0.1] - 2026-10-14
 
 ### Changed

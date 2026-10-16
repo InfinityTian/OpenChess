@@ -2454,7 +2454,8 @@ static void puzzle_mistake(Gui *g)
 
 static void open_puzzle(Gui *g)
 {
-    if(g->ui){ui_next_puzzle(g,0);return;}
+    if(g->ui){int day=0;if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->ui->current_entry>=0)day=g->ui->entries[g->ui->current_entry].day;
+        if(day){int next=day<workspace_today()?day+1:day;g->ui->selected_day=g->ui->month_day=next;ui_next_puzzle(g,next);}else ui_next_puzzle(g,0);return;}
     if (!g->puzzles) return;
     const PuzzleBand *b = &PUZZLE_BANDS[g->puzzle_band];
     int rmin = b->rmin, rmax = b->rmax;
@@ -3984,15 +3985,15 @@ static bool pick_pgn_file(char *out, size_t n)
     out[0] = '\0';
 #if defined(__APPLE__)
     FILE *p = popen("osascript -e 'POSIX path of (choose file with prompt "
-                    "\"Open PGN\")' 2>/dev/null", "r");
+                    "\"Open PGN or FEN\")' 2>/dev/null", "r");
 #elif defined(__linux__)
     FILE *p = popen("zenity --file-selection --title='Open PGN' "
-                    "--file-filter='PGN | *.pgn' 2>/dev/null", "r");
+                    "--file-filter='Chess files | *.pgn *.fen *.txt' 2>/dev/null", "r");
 #elif defined(_WIN32)
     FILE *p = popen("powershell -NoProfile -Command \"Add-Type -AssemblyName "
                     "System.Windows.Forms; $d=New-Object "
                     "System.Windows.Forms.OpenFileDialog; "
-                    "$d.Filter='PGN (*.pgn)|*.pgn'; "
+                    "$d.Filter='PGN or FEN|*.pgn;*.fen;*.txt'; "
                     "if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
                     "{$d.FileName}\" 2>NUL", "r");
 #else

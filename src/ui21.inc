@@ -169,13 +169,14 @@ static void ui_load_analysis(Gui *g,const char *name)
 }
 static void ui_position_open(Gui *g)
 {
+    const char *tags[]={g->pgn_hdr.event,g->pgn_hdr.site,g->pgn_hdr.date,g->pgn_hdr.white,g->pgn_hdr.black,g->pgn_hdr.result};for(int k=0;k<6;k++)snprintf(g->ui->metadata[k],sizeof g->ui->metadata[k],"%s",tags[k]);
     position_begin(&g->ui->position,&g->ui->analysis_preview);fen_generate(&g->ui->position.board,g->ui->setup_fen,sizeof g->ui->setup_fen);g->scene=SCENE_POSITION_SETUP;g->ui->input_focus=false;g->ui->setup_fen_focus=false;
 }
 static void ui_position_sync(Gui *g){fen_generate(&g->ui->position.board,g->ui->setup_fen,sizeof g->ui->setup_fen);}
 static void ui_entry_load(Gui *g,int index,bool review)
 {
     Ui21 *u=g->ui;if(index<0||index>=u->entry_count)return;PuzzleEntry *e=&u->entries[index];
-    if(u->current_entry>=0&&!u->reviewing){PuzzleEntry *old=&u->entries[u->current_entry];old->step=g->puzzle_step;old->elapsed+=(int)(SDL_GetTicks()-u->entry_started);}
+    if(u->current_entry>=0&&!u->reviewing&&u->entry_started){PuzzleEntry *old=&u->entries[u->current_entry];old->step=g->puzzle_step;old->elapsed+=(int)(SDL_GetTicks()-u->entry_started);}
     if(review&&!u->reviewing)u->suspended_entry=u->current_entry;
     u->current_entry=index;u->reviewing=review;u->entry_started=SDL_GetTicks();g->puzzle_cur=e->puzzle;puzzle_split_moves(g);g->mode=MODE_PUZZLE;g->scene=SCENE_GAME;
     fen_parse(e->puzzle.fen,&g->board);g->ply=0;reset_board_state(g);g->puzzle_step=0;
@@ -208,16 +209,17 @@ static void ui_next_puzzle(Gui *g,int day)
     else ok=workspace_pick(u->store,g->puzzles,u->owner,g->puzzle_rating,u->smart,g->puzzle_theme>0?PUZZLE_THEMES[g->puzzle_theme]:NULL,&p,reason);
     if(!ok){snprintf(u->status,256,"%s",ui_tr(g,"Puzzle unavailable.","该日期或条件下没有题目。"));return;}
     unsigned char bytes[16];sqlite3_randomness(16,bytes);char id[40];for(int k=0;k<16;k++)snprintf(id+2*k,3,"%02x",bytes[k]);
-    workspace_issue(u->store,u->owner,id,&p,u->rated,day);int index=ui_entry_add(g,&p,id,day,u->rated);if(index>=0)ui_entry_load(g,index,false);snprintf(u->status,256,"%s",reason);
+    bool rated=u->rated&&!day&&strncmp(reason,"Review:",7);workspace_issue(u->store,u->owner,id,&p,rated,day);int index=ui_entry_add(g,&p,id,day,rated);if(index>=0)ui_entry_load(g,index,false);snprintf(u->status,256,"%s",reason);
 }
+static void ui_calendar_refresh(Gui *g);
 static void ui_puzzle_settle(Gui *g,bool solved)
 {
     Ui21 *u=g->ui;if(!u||u->reviewing||u->current_entry<0)return;PuzzleEntry *e=&u->entries[u->current_entry];if(e->settled||e->pending)return;
     if(e->day&&!solved&&!e->reveal)return;
     e->played[0]=0;if(solved)for(int k=0;k<g->puzzle_step&&k<g->puzzle_nmoves;k++){if(k)strncat(e->played," ",sizeof e->played-strlen(e->played)-1);strncat(e->played,g->puzzle_moves[k],sizeof e->played-strlen(e->played)-1);}
-    e->elapsed+=(int)(SDL_GetTicks()-u->entry_started);u->entry_started=SDL_GetTicks();e->step=g->puzzle_step;
-    if(ui_connected(g)){cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"attempt",e->attempt);cJSON_AddStringToObject(q,"moves",e->played);cJSON_AddBoolToObject(q,"hint",e->hint);cJSON_AddBoolToObject(q,"reveal",e->reveal);cJSON_AddNumberToObject(q,"elapsed",e->elapsed);e->pending=true;online_request(g->online,"puzzle.submit",q);}
-    else{cJSON *r=workspace_submit(u->store,u->owner,e->attempt,e->played,e->hint,e->reveal,e->elapsed);const cJSON *v=cJSON_GetObjectItem(r,"error");if(!v){e->settled=true;e->solved=cJSON_IsTrue(cJSON_GetObjectItem(r,"solved"));e->delta=cJSON_GetObjectItem(r,"delta")->valueint;g->puzzle_rating=cJSON_GetObjectItem(r,"rating")->valueint;g->puzzle_delta=e->delta;}cJSON_Delete(r);}
+    if(u->entry_started)e->elapsed+=(int)(SDL_GetTicks()-u->entry_started);u->entry_started=SDL_GetTicks();e->step=g->puzzle_step;
+    if(!strncmp(u->owner,"online:",7)){cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"attempt",e->attempt);cJSON_AddStringToObject(q,"moves",e->played);cJSON_AddBoolToObject(q,"hint",e->hint);cJSON_AddBoolToObject(q,"reveal",e->reveal);cJSON_AddNumberToObject(q,"elapsed",e->elapsed);e->pending=true;if(ui_connected(g))online_request(g->online,"puzzle.submit",q);else cJSON_Delete(q);}
+    else{cJSON *r=workspace_submit(u->store,u->owner,e->attempt,e->played,e->hint,e->reveal,e->elapsed);const cJSON *v=cJSON_GetObjectItem(r,"error");if(!v){e->settled=true;e->rated=cJSON_IsTrue(cJSON_GetObjectItem(r,"rated"));e->solved=cJSON_IsTrue(cJSON_GetObjectItem(r,"solved"));e->delta=cJSON_GetObjectItem(r,"delta")->valueint;g->puzzle_rating=cJSON_GetObjectItem(r,"rating")->valueint;g->puzzle_delta=e->delta;}cJSON_Delete(r);if(e->day)ui_calendar_refresh(g);}
 }
 static void ui_calendar_refresh(Gui *g)
 {
@@ -232,7 +234,7 @@ static void ui_open_daily(Gui *g,int day)
 }
 static void ui_receive(Gui *g,cJSON *r)
 {
-    Ui21 *u=g->ui;const cJSON *opj=cJSON_GetObjectItem(r,"op");const char *op=cJSON_IsString(opj)?opj->valuestring:"";
+    Ui21 *u=g->ui;const cJSON *actor=cJSON_GetObjectItem(r,"actor");if(cJSON_IsString(actor)&&strcmp(actor->valuestring,g->account_user))return;const cJSON *opj=cJSON_GetObjectItem(r,"op");const char *op=cJSON_IsString(opj)?opj->valuestring:"";
     const cJSON *peer=cJSON_GetObjectItem(r,"peer");if((!strcmp(op,"messages")||!strcmp(op,"message.send")||!strcmp(op,"message.read"))&&cJSON_IsNumber(peer)&&peer->valueint!=u->peer)return;
     if(cJSON_IsFalse(cJSON_GetObjectItem(r,"ok"))){const cJSON *err=cJSON_GetObjectItem(r,"error");snprintf(u->status,256,"%s",cJSON_IsString(err)?err->valuestring:"Request failed");return;}
     cJSON **target=NULL;
@@ -256,21 +258,41 @@ static void ui_receive(Gui *g,cJSON *r)
         const cJSON *row=NULL;cJSON_ArrayForEach(row,u->calendar){sqlite3_stmt *q=workspace_stmt(u->cache,"INSERT INTO oc_daily_progress(owner,day,completed,practiced) VALUES(?,?,?,?) ON CONFLICT(owner,day) DO UPDATE SET completed=excluded.completed,practiced=excluded.practiced");sqlite3_bind_text(q,1,u->owner,-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,2,cJSON_GetObjectItem(row,"day")->valueint);sqlite3_bind_int(q,3,cJSON_GetObjectItem(row,"completed")->valueint);sqlite3_bind_int(q,4,cJSON_GetObjectItem(row,"practiced")->valueint);sqlite3_step(q);sqlite3_finalize(q);}
     }
     if(!strcmp(op,"daily.get")){Puzzle p;const cJSON *day=cJSON_GetObjectItem(r,"day");if(cJSON_IsNumber(day)&&workspace_puzzle_parse(cJSON_GetObjectItem(r,"puzzle"),&p))ui_cache_puzzle(g,day->valueint,&p);}
-    if(!strcmp(op,"puzzle.next")){Puzzle p;const cJSON *a=cJSON_GetObjectItem(r,"attempt"),*d=cJSON_GetObjectItem(r,"day");if(workspace_puzzle_parse(cJSON_GetObjectItem(r,"puzzle"),&p)&&cJSON_IsString(a)){int day=cJSON_IsNumber(d)?d->valueint:0;if(day)ui_cache_puzzle(g,day,&p);int idx=ui_entry_add(g,&p,a->valuestring,day,u->rated);if(idx>=0)ui_entry_load(g,idx,false);}}
-    if(!strcmp(op,"puzzle.submit")){const cJSON *result=cJSON_GetObjectItem(r,"result"),*a=cJSON_GetObjectItem(result,"attempt");if(cJSON_IsString(a))for(int k=0;k<u->entry_count;k++){PuzzleEntry *e=&u->entries[k];if(strcmp(e->attempt,a->valuestring))continue;e->pending=false;if(cJSON_GetObjectItem(result,"error"))break;e->settled=true;e->solved=cJSON_IsTrue(cJSON_GetObjectItem(result,"solved"));e->delta=cJSON_GetObjectItem(result,"delta")->valueint;g->puzzle_rating=cJSON_GetObjectItem(result,"rating")->valueint;g->puzzle_delta=e->delta;break;}ui_calendar_refresh(g);}
+    if(!strcmp(op,"puzzle.next")){Puzzle p;const cJSON *a=cJSON_GetObjectItem(r,"attempt"),*d=cJSON_GetObjectItem(r,"day");if(workspace_puzzle_parse(cJSON_GetObjectItem(r,"puzzle"),&p)&&cJSON_IsString(a)){int day=cJSON_IsNumber(d)?d->valueint:0;if(day)ui_cache_puzzle(g,day,&p);int idx=ui_entry_add(g,&p,a->valuestring,day,cJSON_IsTrue(cJSON_GetObjectItem(r,"rated")));if(idx>=0)ui_entry_load(g,idx,false);}}
+    if(!strcmp(op,"puzzle.submit")){const cJSON *result=cJSON_GetObjectItem(r,"result"),*a=cJSON_GetObjectItem(result,"attempt");if(cJSON_IsString(a))for(int k=0;k<u->entry_count;k++){PuzzleEntry *e=&u->entries[k];if(strcmp(e->attempt,a->valuestring))continue;e->pending=false;if(cJSON_GetObjectItem(result,"error"))break;e->settled=true;e->rated=cJSON_IsTrue(cJSON_GetObjectItem(result,"rated"));e->solved=cJSON_IsTrue(cJSON_GetObjectItem(result,"solved"));e->delta=cJSON_GetObjectItem(result,"delta")->valueint;g->puzzle_rating=cJSON_GetObjectItem(result,"rating")->valueint;g->puzzle_delta=e->delta;break;}ui_calendar_refresh(g);}
     if(!strcmp(op,"game.get")){const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(r,"rows"),0),*pgn=cJSON_GetObjectItem(row,"pgn");if(cJSON_IsString(pgn)){snprintf(g->pgn_text,sizeof g->pgn_text,"%s",pgn->valuestring);pgn_import_load(g);}}
     if(!strcmp(op,"friend.action"))online_request(g->online,ui_social_op(u),NULL);
     if(!strcmp(op,"profile.get")){const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(r,"rows"),0),*nick=cJSON_GetObjectItem(row,"nickname"),*av=cJSON_GetObjectItem(row,"avatar");if(cJSON_IsString(nick)&&*nick->valuestring)snprintf(u->nickname,sizeof u->nickname,"%s",nick->valuestring);if(cJSON_IsNumber(av))u->avatar=av->valueint;}
     if(!strcmp(op,"profile.get")){sqlite3_stmt *q=workspace_stmt(u->store,"UPDATE oc_profiles SET nickname=?,avatar=? WHERE owner=?");sqlite3_bind_text(q,1,u->nickname,-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,2,u->avatar);sqlite3_bind_text(q,3,u->owner,-1,SQLITE_TRANSIENT);sqlite3_step(q);sqlite3_finalize(q);}
 
 }
+static void ui_local_history(Gui *g)
+{
+    Ui21 *u=g->ui;if(g->scene!=SCENE_GAME||(g->mode!=MODE_SINGLE&&g->mode!=MODE_LOCAL))return;
+    if(g->state==NO_GAME_OVER&&!g->override_result[0]){u->local_game_saved=false;return;}
+    if(u->local_game_saved||!g->ply)return;u->local_game_saved=true;
+    const char *result=g->override_result[0]?g->override_result:pgn_result(&g->board,g->state);
+    FILE *file=tmpfile();if(!file)return;pgn_write(file,(const char (*)[8])g->move_san,g->ply,"OpenChess","Local","????.??.??",1,g->white_name,g->black_name,result);long size=ftell(file);rewind(file);char *pgn=calloc((size_t)size+1,1);if(!pgn){fclose(file);return;}fread(pgn,1,(size_t)size,file);fclose(file);
+    unsigned char random[16];sqlite3_randomness(16,random);char id[40];for(int k=0;k<16;k++)snprintf(id+k*2,3,"%02x",random[k]);
+    sqlite3_stmt *q=workspace_stmt(u->store,"INSERT OR IGNORE INTO oc_games VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)");const char *text[]={id,u->owner,"local-opponent",g->white_name,g->black_name,result,pgn};for(int k=0;k<7;k++)sqlite3_bind_text(q,k+1,text[k],-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,8,0);sqlite3_bind_int(q,9,0);sqlite3_bind_int(q,10,0);sqlite3_bind_int64(q,11,time(NULL));sqlite3_bind_int(q,12,0);sqlite3_bind_text(q,13,id,-1,SQLITE_TRANSIENT);sqlite3_bind_int(q,14,g->ply);sqlite3_step(q);sqlite3_finalize(q);free(pgn);cJSON_Delete(u->games);u->games=NULL;
+}
+static void ui_game_history_open(Gui *g,const char *id)
+{
+    if(!strncmp(g->ui->owner,"online:",7)){cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"id",id);ui_request(g,"game.get",q);return;}
+    sqlite3_stmt *q=workspace_stmt(g->ui->store,"SELECT pgn FROM oc_games WHERE id=? AND (white=? OR black=?)");sqlite3_bind_text(q,1,id,-1,SQLITE_TRANSIENT);sqlite3_bind_text(q,2,g->ui->owner,-1,SQLITE_TRANSIENT);sqlite3_bind_text(q,3,g->ui->owner,-1,SQLITE_TRANSIENT);bool found=sqlite3_step(q)==SQLITE_ROW;if(found)snprintf(g->pgn_text,sizeof g->pgn_text,"%s",sqlite3_column_text(q,0));sqlite3_finalize(q);if(found)pgn_import_load(g);
+}
 static void ui_tick(Gui *g,Uint32 now)
 {
     if(!g->ui)return;
     if(!g->offline_mode&&!g->account_local&&g->account_token[0]&&!g->online)online_ensure(g);
-    ui_owner(g);Ui21 *u=g->ui;
+    ui_owner(g);Ui21 *u=g->ui;ui_local_history(g);
+    bool active_puzzle=g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&!u->reviewing&&u->current_entry>=0;
+    if(active_puzzle&&!u->entry_started)u->entry_started=now;
+    if(!active_puzzle&&u->entry_started){if(u->current_entry>=0&&!u->reviewing)u->entries[u->current_entry].elapsed+=(int)(now-u->entry_started);u->entry_started=0;}
     bool connected=ui_connected(g);
-    if(connected&&!u->connected_before){online_request(g->online,"profile.get",NULL);online_request(g->online,"games",NULL);online_request(g->online,"daily.get",NULL);ui_calendar_refresh(g);}
+    if(connected&&!u->connected_before){online_request(g->online,"profile.get",NULL);online_request(g->online,"games",NULL);online_request(g->online,"daily.get",NULL);ui_calendar_refresh(g);
+        for(int k=0;k<u->entry_count;k++){PuzzleEntry *entry=&u->entries[k];if(!entry->pending)continue;cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"attempt",entry->attempt);cJSON_AddStringToObject(q,"moves",entry->played);cJSON_AddBoolToObject(q,"hint",entry->hint);cJSON_AddBoolToObject(q,"reveal",entry->reveal);cJSON_AddNumberToObject(q,"elapsed",entry->elapsed);online_request(g->online,"puzzle.submit",q);}
+    }
     u->connected_before=connected;
     if(g->online){cJSON *r;while((r=online_take_response(g->online))){ui_receive(g,r);cJSON_Delete(r);}}
     if(g->online&&online_logged_in(g->online)&&now-u->last_refresh>5000){u->last_refresh=now;online_request(g->online,"challenge.list",NULL);online_request(g->online,"friends",NULL);if(!workspace_daily(u->cache,workspace_today(),&(Puzzle){0}))online_request(g->online,"daily.get",NULL);if(g->scene==SCENE_SOCIAL){cJSON *args=ui_args_int("offset",u->offset);cJSON_AddStringToObject(args,"search",u->search);online_request(g->online,ui_social_op(u),args);if(u->peer)online_request(g->online,"messages",ui_args_int("peer",u->peer));}}
@@ -310,12 +332,24 @@ static void ui_shell(Gui *g)
         int badge=k==0?u->friend_requests:k==1?u->unread_messages:k==2?cJSON_GetArraySize(cJSON_GetObjectItem(u->invitations,"rows")):0;if(badge){ui_round(g->ren,(SDL_Rect){hit.x+29,hit.y-4,18,18},(SDL_Color){202,71,78,255},9);char n[8];snprintf(n,8,"%d",badge>99?99:badge);render_text(g,g->font_tiny,n,hit.x+32,hit.y-4,(SDL_Color){255,255,255,255});}}
     if(g->scene==SCENE_MENU&&g->saved.valid&&!ui_active_game(g))ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},ui_tr(g,"Continue game","继续上次对局"),-1,true);
     if(ui_active_game(g)){int white,black;online_clocks(g->online,&white,&black);char label[100];snprintf(label,sizeof label,u->zh?"返回对局 %d:%02d / %d:%02d":"Return %d:%02d / %d:%02d",white/60000,(white/1000)%60,black/60000,(black/1000)%60);ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},label,-1,true);}
+    if(u->composition[0])ui_text(g,u->composition,240,g->win_h-60,ui_ink);
     if(u->status[0]){SDL_Rect status={230,g->win_h-30,g->win_w-250,26};SDL_RenderSetClipRect(g->ren,&status);ui_text(g,u->status,status.x,status.y,ui_muted);SDL_RenderSetClipRect(g->ren,NULL);}
     int group=u->nav_hover;if(group>=0){int count=0;while(count<4&&ui_sub_name(g,group,count))count++;SDL_Rect pop={204,112+group*58,272,count*50+12};ui_card(g,pop);for(int k=0;k<count;k++)ui_button(g,(SDL_Rect){212,pop.y+6+k*50,256,44},ui_sub_name(g,group,k),k%5,false);}
 }
+typedef struct {SDL_Rect match,cards[3],history,daily;int height;bool compact;} HomeLayout;
+static HomeLayout ui_home_layout(Gui *g)
+{
+    int width=WIN_W,height=WIN_H;if(g->win)SDL_GetWindowSize(g->win,&width,&height);(void)height;
+    HomeLayout l={0};l.compact=width<1200;l.match=(SDL_Rect){240,112,282,424};
+    int columns=l.compact?2:3,cardw=(g->win_w-542-28)/columns;
+    for(int k=0;k<3;k++)l.cards[k]=(SDL_Rect){542+(k%columns)*(cardw+6),112+(k/columns)*454,cardw-6,424};
+    l.history=l.compact?(SDL_Rect){240,1020,g->win_w-268,280}:(SDL_Rect){240,566,800,280};
+    l.daily=l.compact?(SDL_Rect){l.cards[1].x,566,l.cards[1].w,424}:(SDL_Rect){1060,566,g->win_w-1088,280};
+    l.height=l.compact?1340:900;return l;
+}
 static void ui_home_render(Gui *g)
 {
-    Ui21 *u=g->ui;int left=240,top=112;
+    Ui21 *u=g->ui;HomeLayout layout=ui_home_layout(g);u->home_scroll=clampi(u->home_scroll,0,layout.height-g->win_h);SDL_Rect viewport;SDL_RenderGetViewport(g->ren,&viewport);SDL_Rect content=viewport;content.y-=u->home_scroll;content.h+=u->home_scroll;SDL_RenderSetViewport(g->ren,&content);SDL_RenderSetScale(g->ren,eff_scale(g),eff_scale(g));int left=240,top=112;
     render_text(g,g->font_ui,ui_tr(g,"Your chess workspace","你的国际象棋空间"),left,32,ui_ink);
     ui_card(g,(SDL_Rect){left,top,282,424});ui_text(g,ui_tr(g,g->offline_mode?"Play offline":"Play online",g->offline_mode?"离线对弈":"在线对弈"),left+18,top+18,ui_ink);
     static const int times[][2]={{60000,0},{120000,1000},{180000,0},{180000,2000},{300000,0},{300000,3000},{600000,0},{600000,5000},{900000,10000},{1800000,0}};
@@ -323,24 +357,24 @@ static void ui_home_render(Gui *g)
         ui_button(g,(SDL_Rect){left+16,top+326,250,44},ui_tr(g,"Challenge a player","约战在线玩家"),0,true);
     }else{ui_button(g,(SDL_Rect){left+16,top+75,250,50},ui_tr(g,"Play computer","电脑对战"),0,true);ui_button(g,(SDL_Rect){left+16,top+145,250,50},ui_tr(g,"Local multiplayer","局域网对战"),-1,false);}
     ui_button(g,(SDL_Rect){left+16,top+378,250,34},ui_tr(g,g->offline_mode?"Switch online":"Switch offline",g->offline_mode?"切换在线模式":"切换离线模式"),-1,false);
-    int x=542;
     for(int k=0;k<3;k++){
-        int width=(g->win_w-x-28)/3;int cx=x+k*(width+6);ui_card(g,(SDL_Rect){cx,top,width-6,424});
+        SDL_Rect card=layout.cards[k];int width=card.w+6,cx=card.x;top=card.y;ui_card(g,card);
         Board b;board_reset(&b);if(k==0&&u->preview_valid)ui_preview_position(&u->preview,&b);
         if(k==2&&g->book){char eco[12],name[128],moves[2048];if(opening_line_at(g->book,u->opening_preview,eco,sizeof eco,name,sizeof name,moves,sizeof moves)){char *save=NULL;int ply=0;for(char *t=strtok_r(moves," ",&save);t&&ply<12;t=strtok_r(NULL," ",&save))if(san_apply(&b,t))ply++;}}
-        int size=((width-34)/8)*8;ui_mini_board(g,&b,(SDL_Rect){cx+12,top+16,size,size},false);
+        int size=((width-34)/8)*8;if(size>256)size=256;ui_mini_board(g,&b,(SDL_Rect){cx+12,top+16,size,size},false);
         const char *en[]={"Puzzles","Analysis","Opening"},*zh[]={"战术解题","棋局分析","开局探索"};render_text(g,g->font_ui,u->zh?zh[k]:en[k],cx+14,top+size+42,ui_ink);
         ui_button(g,(SDL_Rect){cx+12,top+354,width-30,48},ui_tr(g,"Open","打开"),k==1?2:0,k==0);
     }
-    int lower=566;ui_card(g,(SDL_Rect){left,lower,800,280});ui_text(g,ui_tr(g,"Game History","历史对局"),left+20,lower+18,ui_ink);
+    int lower=layout.history.y;ui_card(g,layout.history);ui_text(g,ui_tr(g,"Game History","历史对局"),left+20,lower+18,ui_ink);
     const cJSON *rows=u->games?cJSON_GetObjectItem(u->games,"rows"):NULL;
     if(!rows){sqlite3_stmt *s=workspace_stmt(u->store,"SELECT id,white_name,black_name,result,base,inc,created,plies FROM oc_games WHERE white=? OR black=? ORDER BY created DESC LIMIT 4");sqlite3_bind_text(s,1,u->owner,-1,SQLITE_TRANSIENT);sqlite3_bind_text(s,2,u->owner,-1,SQLITE_TRANSIENT);cJSON *j=workspace_rows(s);cJSON_Delete(u->games);u->games=cJSON_CreateObject();cJSON_AddItemToObject(u->games,"rows",j);rows=j;}
     int count=cJSON_GetArraySize(rows);if(!count)ui_text(g,ui_tr(g,"Completed games will appear here.","完成的对局将在这里显示。"),left+20,lower+76,ui_muted);
-    for(int k=0;k<count&&k<4;k++){const cJSON *row=cJSON_GetArrayItem(rows,k);const cJSON *a=cJSON_GetObjectItem(row,"white_name"),*b=cJSON_GetObjectItem(row,"black_name"),*r=cJSON_GetObjectItem(row,"result");char label[220];snprintf(label,sizeof label,"%s  /  %s       %s",cJSON_IsString(a)?a->valuestring:"?",cJSON_IsString(b)?b->valuestring:"?",cJSON_IsString(r)?r->valuestring:"*");ui_button(g,(SDL_Rect){left+16,lower+59+k*48,768,40},label,-1,false);}
-    int dx=1060,dw=g->win_w-dx-28;ui_card(g,(SDL_Rect){dx,lower,dw,280});ui_text(g,ui_tr(g,"Daily Puzzle · Unrated","每日题 · 不计分"),dx+16,lower+15,ui_ink);
+    for(int k=0;k<count&&k<4;k++){const cJSON *row=cJSON_GetArrayItem(rows,k);const cJSON *a=cJSON_GetObjectItem(row,"white_name"),*b=cJSON_GetObjectItem(row,"black_name"),*r=cJSON_GetObjectItem(row,"result");char label[220];snprintf(label,sizeof label,"%s  /  %s       %s",cJSON_IsString(a)?a->valuestring:"?",cJSON_IsString(b)?b->valuestring:"?",cJSON_IsString(r)?r->valuestring:"*");ui_button(g,(SDL_Rect){left+16,lower+59+k*48,layout.history.w-32,40},label,-1,false);}
+    int dx=layout.daily.x,dw=layout.daily.w;lower=layout.daily.y;ui_card(g,layout.daily);ui_text(g,ui_tr(g,"Daily Puzzle · Unrated","每日题 · 不计分"),dx+16,lower+15,ui_ink);
     Puzzle daily;Board b;board_reset(&b);if(workspace_daily(ui_daily_store(g),workspace_today(),&daily))ui_preview_position(&daily,&b);
     ui_mini_board(g,&b,(SDL_Rect){dx+16,lower+48,160,160},false);char date[11];workspace_date(workspace_today(),date);ui_text(g,date,dx+190,lower+70,ui_muted);
     ui_button(g,(SDL_Rect){dx+16,lower+223,dw-32,42},ui_tr(g,"Solve & calendar","解题与历史日历"),0,true);
+    SDL_RenderSetViewport(g->ren,&viewport);SDL_RenderSetScale(g->ren,eff_scale(g),eff_scale(g));
 }
 static void ui_analysis_render(Gui *g,bool setup)
 {
@@ -425,6 +459,7 @@ static void ui_profile_render(Gui *g)
     if(count){lo-=50;hi+=50;if(last==first)last++;int px=0,py=0;SDL_SetRenderDrawColor(g->ren,48,122,202,255);
         for(int k=0;k<count;k++){const cJSON *r=cJSON_GetArrayItem(rows,k);int value=cJSON_GetObjectItem(r,"value")->valueint;int64_t t=(int64_t)cJSON_GetObjectItem(r,"created")->valuedouble;int x=graph.x+45+(int)((t-first)*(graph.w-65)/(last-first)),y=graph.y+graph.h-35-(value-lo)*(graph.h-55)/(hi-lo);if(k)SDL_RenderDrawLine(g->ren,px,py,x,y);fill_circle(g->ren,x,y,4);px=x;py=y;}
         char label[30];snprintf(label,30,"%d",hi);ui_text(g,label,graph.x,graph.y,ui_muted);snprintf(label,30,"%d",lo);ui_text(g,label,graph.x,graph.y+graph.h-40,ui_muted);
+        char from[11],to[11];workspace_date((int)((first+28800)/86400),from);workspace_date((int)((last+28800)/86400),to);ui_text(g,from,graph.x+45,graph.y+graph.h-18,ui_muted);ui_text(g,to,graph.x+graph.w-100,graph.y+graph.h-18,ui_muted);
     }else ui_text(g,ui_tr(g,"Rating history starts with your first recorded result.","评分曲线从首次记录开始。"),graph.x+40,graph.y+130,ui_muted);
     ui_text(g,ui_tr(g,"Nickname","昵称"),240,760,ui_ink);ui_button(g,(SDL_Rect){355,744,350,46},u->input[0]?u->input:u->nickname,-1,false);ui_button(g,(SDL_Rect){720,744,200,46},ui_tr(g,"Save profile","保存资料"),3,true);ui_button(g,(SDL_Rect){935,744,220,46},ui_tr(g,"Change avatar","更换头像"),-1,false);
 }
@@ -441,11 +476,12 @@ static void ui_social_render(Gui *g)
     for(int k=0;k<5;k++)ui_button(g,(SDL_Rect){716+(k%3)*218,116+(k/3)*48,202,40},u->zh?zh[k]:en[k],-1,k==4);
     const cJSON *score=cJSON_GetArrayItem(cJSON_GetObjectItem(u->headtohead,"rows"),0);
     if(score){int games=cJSON_GetObjectItem(score,"games")->valueint,wins=cJSON_GetObjectItem(score,"wins")->valueint,draws=cJSON_GetObjectItem(score,"draws")->valueint;char label[128];snprintf(label,sizeof label,u->zh?"交手比分：%d 胜 / %d 和 / %d 负":"Head to head: %d W / %d D / %d L",wins,draws,games-wins-draws);ui_text(g,label,716,214,ui_muted);}
+    const cJSON *series=cJSON_GetArrayItem(cJSON_GetObjectItem(u->headtohead,"series"),0);if(series){int total=cJSON_GetObjectItem(series,"games")->valueint,wins=cJSON_GetObjectItem(series,"wins")->valueint,draws=cJSON_GetObjectItem(series,"draws")->valueint;char label[128];snprintf(label,sizeof label,u->zh?"本轮：%d 胜 / %d 和 / %d 负":"Current series: %d W / %d D / %d L",wins,draws,total-wins-draws);ui_text(g,label,716,238,ui_muted);}
     rows=u->messages?cJSON_GetObjectItem(u->messages,"rows"):NULL;count=cJSON_GetArraySize(rows);
     char transcript[8192]="";size_t used=0;
     for(int k=0;k<count&&k<10&&used<sizeof transcript-720;k++){const cJSON *row=cJSON_GetArrayItem(rows,count-1-k),*body=cJSON_GetObjectItem(row,"body");bool mine=cJSON_GetObjectItem(row,"sender")->valueint==u->self_id;
         used+=(size_t)snprintf(transcript+used,sizeof transcript-used,"%s%s: %s\n\n",mine?"":"",mine?ui_tr(g,"You","你"):ui_tr(g,"Friend","好友"),cJSON_IsString(body)?body->valuestring:"");}
-    SDL_Rect conversation={716,248,g->win_w-760,365};SDL_RenderSetClipRect(g->ren,&conversation);
+    SDL_Rect conversation={716,270,g->win_w-760,343};SDL_RenderSetClipRect(g->ren,&conversation);
     int lines=render_wrapped_text(g,g->ren,transcript,conversation,u->message_scroll,ui_ink);SDL_RenderSetClipRect(g->ren,NULL);
     u->message_scroll_max=clampi(lines*(text_height(g,g->font_small)+3)+16-conversation.h,0,100000);u->message_scroll=clampi(u->message_scroll,0,u->message_scroll_max);
     ui_button(g,(SDL_Rect){716,638,g->win_w-870,44},u->input[0]?u->input:ui_tr(g,"Private message...","输入私信……"),-1,false);ui_button(g,(SDL_Rect){g->win_w-142,638,108,44},ui_tr(g,"Send","发送"),-1,true);
@@ -529,19 +565,21 @@ static bool ui_click(Gui *g)
     if(g->scene==SCENE_MENU&&g->saved.valid&&my<70&&mx>g->win_w-260){resume_game(g);return true;}
     if(ui_active_game(g)&&my<70&&mx>g->win_w-260){g->scene=SCENE_GAME;return true;}
     if(g->scene==SCENE_MENU){
+        my+=u->home_scroll;
         if(mx>=240&&mx<522&&my>=112&&my<536){if(my>=490){if(ui_active_game(g)){g->scene=SCENE_GAME;return true;}toggle_offline_mode(g);g->config_dirty=true;return true;}
             if(g->offline_mode){g->scene=my<245?SCENE_SINGLE_SETUP:SCENE_HOSTJOIN;return true;}
             if(my>=438){g->scene=SCENE_SOCIAL;u->social_tab=1;ui_request(g,"people",NULL);return true;}
             if(my>=170&&my<425){int row=(my-170)/51,col=mx>=382?1:0,k=row*2+col;static const int times[][2]={{60000,0},{120000,1000},{180000,0},{180000,2000},{300000,0},{300000,3000},{600000,0},{600000,5000},{900000,10000},{1800000,0}};if(k<10&&!ui_active_game(g)&&online_ensure(g)){online_set_rated(g->online,online_logged_in(g->online));online_queue(g->online,times[k][0],times[k][1]);g->scene=SCENE_ONLINE;}return true;}
         }
-        if(mx>=542&&my>=112&&my<536){int width=(g->win_w-542-28)/3,k=(mx-542)/(width+6);if(k==0){u->page=0;ui_next_puzzle(g,0);}else if(k==1)ui_open_analysis(g);else if(k==2){open_openings(g);g->opening_sel=u->opening_preview;}return true;}
-        if(mx>=1060&&my>=566){ui_open_daily(g,workspace_today());return true;}
-        if(mx>=240&&mx<1040&&my>=625&&my<840){int idx=(my-625)/48;const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->games,"rows"),idx),*id=cJSON_GetObjectItem(row,"id");if(cJSON_IsString(id)){cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"id",id->valuestring);ui_request(g,"game.get",q);}return true;}
+        HomeLayout layout=ui_home_layout(g);
+        for(int k=0;k<3;k++)if(pt_in(&layout.cards[k],mx,my)){if(k==0){u->page=0;if(u->preview_valid){int index=ui_entry_add(g,&u->preview,"preview-review",0,false);if(index>=0){u->entries[index].settled=true;ui_entry_load(g,index,true);}}else ui_next_puzzle(g,0);}else if(k==1)ui_open_analysis(g);else {open_openings(g);for(int index=0;index<g->opening_match_count;index++)if(g->opening_match[index]==u->opening_preview){g->opening_sel=index;break;}openings_load_selected(g);}return true;}
+        if(pt_in(&layout.daily,mx,my)){ui_open_daily(g,workspace_today());return true;}
+        if(pt_in(&layout.history,mx,my)&&my>=layout.history.y+59){int idx=(my-layout.history.y-59)/48;const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->games,"rows"),idx),*id=cJSON_GetObjectItem(row,"id");if(cJSON_IsString(id))ui_game_history_open(g,id->valuestring);return true;}
         return true;
     }
     if(g->scene==SCENE_ANALYSIS_HOME){int x=g->panel_x,w=g->win_w-x-24;if(mx<x)return true;
         if(my>=154&&my<230){u->input_focus=true;return true;}
-        if(my>=242&&my<286){if(mx<x+w/2)ui_import_text(g);else{char path[1200];if(pick_pgn_file(path,sizeof path)&&pgn_import_read_file(g,path))pgn_import_load(g);}return true;}
+        if(my>=242&&my<286){if(mx<x+w/2)ui_import_text(g);else{char path[1200];if(pick_pgn_file(path,sizeof path)&&pgn_import_read_file(g,path)){snprintf(u->input,sizeof u->input,"%s",g->pgn_text);ui_import_text(g);}}return true;}
         if(my>=310&&my<748){int k=(my-310)/73;if(k==0)ui_position_open(g);else if(k==1)start_analysis(g);else if(k==2){u->page=1;g->scene=SCENE_LIBRARY;ui_analysis_list(g);}else if(k==3)ui_load_analysis(g,"last");else if(k==4){u->page=0;g->scene=SCENE_LIBRARY;ui_request(g,"games",NULL);}else open_openings(g);return true;}return true;
     }
     if(g->scene==SCENE_POSITION_SETUP){int x=g->panel_x,w=g->win_w-x-24;PositionEditor *p=&u->position;
@@ -573,7 +611,7 @@ static bool ui_click(Gui *g)
         if(my>=756&&my<840&&mx>=700){int k=(my-756)/42;const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->invitations,"rows"),k);if(row){int from=cJSON_GetObjectItem(row,"from")->valueint;cJSON *q=ui_args_int("id",cJSON_GetObjectItem(row,"id")->valueint);ui_request(g,mx<855?"challenge.accept":from==u->self_id?"challenge.cancel":"challenge.decline",q);}return true;}return true;
     }
     if(g->scene==SCENE_LIBRARY){if(u->page){if(my>=100&&my<142)ui_load_analysis(g,"last");else if(my>=166&&my<736){const cJSON *row=cJSON_GetArrayItem(u->analyses,(my-166)/57),*id=cJSON_GetObjectItem(row,"id");if(cJSON_IsString(id))ui_load_analysis(g,id->valuestring);}}
-        else if(my>=120&&my<700){const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->games,"rows"),(my-120)/58),*id=cJSON_GetObjectItem(row,"id");if(cJSON_IsString(id)){cJSON *q=cJSON_CreateObject();cJSON_AddStringToObject(q,"id",id->valuestring);ui_request(g,"game.get",q);}}
+        else if(my>=120&&my<700){const cJSON *row=cJSON_GetArrayItem(cJSON_GetObjectItem(u->games,"rows"),(my-120)/58),*id=cJSON_GetObjectItem(row,"id");if(cJSON_IsString(id))ui_game_history_open(g,id->valuestring);}
         else if(my>=740&&my<784){u->offset=mx<440?clampi(u->offset-10,0,100000):u->offset+10;ui_request(g,"games",ui_args_int("offset",u->offset));}return true;
     }
     if(g->scene==SCENE_PUZZLE_SETUP&&my>=g->win_h-210&&my<g->win_h-165){u->rated=!u->rated;return true;}
@@ -596,11 +634,14 @@ static bool ui_event(Gui *g,const SDL_Event *e)
 {
     if(!g->ui||g->account_open)return false;Ui21 *u=g->ui;
     if(e->type==SDL_MOUSEMOTION||e->type==SDL_MOUSEBUTTONDOWN||e->type==SDL_MOUSEBUTTONUP){int x=e->type==SDL_MOUSEMOTION?e->motion.x:e->button.x,y=e->type==SDL_MOUSEMOTION?e->motion.y:e->button.y;set_mouse(g,x,y);}
+    if(e->type==SDL_TEXTEDITING){snprintf(u->composition,sizeof u->composition,"%s",e->edit.text);return u->input_focus||u->setup_fen_focus||u->metadata_open;}
+    if(e->type==SDL_TEXTINPUT)u->composition[0]=0;
     if(ui_modal_event(g,e))return true;
     if(e->type==SDL_MOUSEMOTION){int mx=g->mouse.x,my=g->mouse.y;if(mx<208&&my>=112&&my<460)u->nav_hover=(my-112)/58;else if(u->nav_hover>=0){int top=112+u->nav_hover*58;if(mx<204||mx>484||my<top||my>top+212)u->nav_hover=-1;}
         if(g->scene==SCENE_POSITION_SETUP)return true;return false;}
     if(e->type==SDL_MOUSEBUTTONDOWN){if(e->button.button==SDL_BUTTON_RIGHT&&g->scene==SCENE_POSITION_SETUP){int sq=sq_from_pos(g,g->mouse.x,g->mouse.y);if(sq>=0){position_place(&u->position,sq,EMPTY);ui_position_sync(g);}return true;}if(e->button.button==SDL_BUTTON_LEFT)return ui_click(g);}
     if(e->type==SDL_MOUSEBUTTONUP&&g->scene==SCENE_POSITION_SETUP){PositionEditor *p=&u->position;int sq=sq_from_pos(g,g->mouse.x,g->mouse.y);if(p->dragging==-2&&sq>=0){position_place(p,sq,p->brush);ui_position_sync(g);}else if(p->dragging>=0&&sq>=0&&sq!=p->dragging){Board b=p->board;b.board[sq]=b.board[p->dragging];b.board[p->dragging]=EMPTY;position_commit(p,&b);ui_position_sync(g);}p->dragging=-1;return true;}
+    if(e->type==SDL_MOUSEWHEEL&&g->scene==SCENE_MENU&&g->mouse.x>=208){HomeLayout l=ui_home_layout(g);u->home_scroll=clampi(u->home_scroll-e->wheel.y*64,0,l.height-g->win_h);return true;}
     if(e->type==SDL_MOUSEWHEEL&&g->scene==SCENE_SOCIAL&&g->mouse.x>698){u->message_scroll=clampi(u->message_scroll-e->wheel.y*36,0,u->message_scroll_max);return true;}
     if(e->type==SDL_MOUSEWHEEL&&g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->mouse.y>g->board_y+8*g->sq){u->history_scroll=clampi(u->history_scroll-e->wheel.y,0,u->entry_count>8?u->entry_count-8:0);return true;}
     if(e->type==SDL_TEXTINPUT&&(u->input_focus||u->setup_fen_focus)){
