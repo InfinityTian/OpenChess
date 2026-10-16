@@ -5913,7 +5913,7 @@ static void render_status(Gui *g)
                  g->board.side == WHITE ? "White" : "Black",
                  in_check(&g->board, g->board.side) ? " - CHECK" : "");
     }
-    render_text(g, g->font_ui, line, g->panel_x, g->board_y, (SDL_Color){ 240, 220, 130, 255 });
+    render_text(g, g->font_ui, line, g->panel_x, g->board_y, (SDL_Color){ 30, 54, 78, 255 });
 
     if (g->mode == MODE_SINGLE) {
         char info[96];
@@ -5922,7 +5922,7 @@ static void render_status(Gui *g)
                  AI_LEVELS[g->setup_level].label,
                  g->ai_thinking ? "   (thinking...)" : "");
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
-                    (SDL_Color){ 150, 210, 230, 255 });
+                    (SDL_Color){ 65, 102, 138, 255 });
     } else if (g->mode == MODE_LOCAL) {
         bool ok = g->net && transport_state(g->net) == NET_STATE_CONNECTED;
         char info[96];
@@ -5930,7 +5930,7 @@ static void render_status(Gui *g)
                  g->local_color == WHITE ? "White" : "Black",
                  ok ? "opponent connected" : "opponent disconnected");
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
-                    (SDL_Color){ 150, 210, 230, 255 });
+                    (SDL_Color){ 65, 102, 138, 255 });
     } else if (g->mode == MODE_ONLINE) {
         char info[160];
         const char *opp = g->online ? online_opponent(g->online) : "Opponent";
@@ -5948,7 +5948,7 @@ static void render_status(Gui *g)
                      role, spec ? online_room_code(g->online) : opp);
         }
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
-                    (SDL_Color){ 150, 210, 230, 255 });
+                    (SDL_Color){ 65, 102, 138, 255 });
         if (g->draw_offered)
             render_text(g, g->font_small, "Draw offered: Ctrl+A accept, Ctrl+D decline",
                         g->panel_x, g->board_y + 50, (SDL_Color){ 240, 200, 120, 255 });
@@ -5962,12 +5962,12 @@ static void render_status(Gui *g)
                  g->puzzle_cur.rating, g->puzzle_cur.themes,
                  g->puzzle_rating, g->puzzle_delta, st);
         render_text(g, g->font_small, info, g->panel_x, g->board_y + 30,
-                    (SDL_Color){ 150, 210, 230, 255 });
+                    (SDL_Color){ 65, 102, 138, 255 });
     } else if (g->mode == MODE_ANALYSIS) {
         if (!g->eval_ai)
             render_text(g, g->font_small, "Analysis: no engine",
                         g->panel_x, g->board_y + (g->ply > 0 ? 52 : 30),
-                        (SDL_Color){ 150, 210, 230, 255 });
+                        (SDL_Color){ 65, 102, 138, 255 });
     }
 }
 

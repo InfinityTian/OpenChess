@@ -4,7 +4,7 @@ static const char *ui_tr(Gui *g,const char *en,const char *zh){return g->ui&&g->
 static const char *ui_old_text(Gui *g,const char *s)
 {
     if(!g->ui||!g->ui->zh)return s;
-    static const char *pairs[][2]={{"White","白方"},{"Black","黑方"},{"You","你"},{"Hint","提示"},{"Reveal","查看答案"},{"Undo","悔棋"},{"Restart","重新开始"},{"Back","返回"},{"Start","开始"},{"Menu","主页"},{"Moves","步法"},{"Analysis","分析"},{"Settings","设置"},{"Engine","引擎"},{"Gameplay","对局"},{"Audio / Video","音视频"},{"Appearance","外观"},{"Save PGN","保存棋谱"},{"Load","加载"},{"Copy","复制"},{"Cancel","取消"},{"Paste","粘贴"},{"Upload","选择文件"},{"Import PGN","导入棋谱"},{"Rematch","再来一局"},{"Resign","认输"},{"Difficulty","难度"},{"Side","执子"},{"Easy","简单"},{"Medium","中等"},{"Hard","困难"},{"Expert","专家"},{"Opening Book","开局库"},{"Singleplayer","电脑对战"},{"Local Multiplayer","局域网对战"},{"Online","在线"},{"Offline","离线"},{"Register","注册"},{"Login","登录"},{"Logout","退出登录"},{"Username","账号"},{"Password","密码"},{"Next","下一题"},{"Lines","主变化"},{"Threads","线程"},{"Hash (MB)","哈希内存 (MB)"},{"Time (ms)","时间 (毫秒)"},{"Depth","深度"},{"unlimited","不限"},{"off","关闭"},{"Board","棋盘"},{"Pieces","棋子"},{"Animation","动画"},{"Mode","模式"},{"Appearance picker","外观选择"},{"Sound","音效"},{"Max FPS","帧率上限"},{"Audio & Video","音视频"},{"Any","全部主题"},{"Puzzles","战术解题"},{"Around my rating","接近我的水平"},{"Under 1000","低于 1000"},{"mateIn1","一步将杀"},{"mateIn2","两步将杀"},{"mateIn3","三步将杀"},{"fork","捉双"},{"pin","牵制"},{"skewer","串击"},{"discoveredAttack","闪击"},{"deflection","引离"},{"attraction","引入"},{"sacrifice","弃子"},{"defensiveMove","防守"},{"kingsideAttack","王翼进攻"},{"queensideAttack","后翼进攻"},{"endgame","残局"},{"Host","创建"},{"Join","加入"},{"Spectate","观战"},{"Analyze","分析"},{"Report","报告"},{"Import","导入"},{"Styles","外观"},{"White to move","白方行棋"},{"Black to move","黑方行棋"}};
+    static const char *pairs[][2]={{"Analysis: no engine","分析：未连接引擎"},{"Analyze to see the evaluation graph","运行分析以查看评分曲线"},{"Press Enter to type a move","按回车输入走子"},{"< Previous","< 上一步"},{"Next >","下一步 >"},{"Stalemate","逼和"},{"Draw (insufficient material)","和棋（子力不足）"},{"Draw (threefold repetition)","和棋（三次重复）"},{"Draw (fifty-move rule)","和棋（五十步规则）"},{"Solved!","已解出！"},{"Answer shown","已显示答案"},{"Your move","轮到你走棋"},{"Import PGN or FEN","导入 PGN 或 FEN"},{"Time control","时限"},{"Play as","执子颜色"},{"Connect","连接"},{"Disconnect","断开"},{"Room code","房间号"},{"Game Rating","对局评分"},{"Accuracy","准确率"},{"Best","最佳"},{"Brilliant","精彩"},{"Great","优秀"},{"Good","好棋"},{"Inaccuracy","不精确"},{"Mistake","失误"},{"Blunder","漏着"},{"Forced","迫招"},{"Book","定式"},{"White","白方"},{"Black","黑方"},{"You","你"},{"Hint","提示"},{"Reveal","查看答案"},{"Undo","悔棋"},{"Restart","重新开始"},{"Back","返回"},{"Start","开始"},{"Menu","主页"},{"Moves","步法"},{"Analysis","分析"},{"Settings","设置"},{"Engine","引擎"},{"Gameplay","对局"},{"Audio / Video","音视频"},{"Appearance","外观"},{"Save PGN","保存棋谱"},{"Load","加载"},{"Copy","复制"},{"Cancel","取消"},{"Paste","粘贴"},{"Upload","选择文件"},{"Import PGN","导入棋谱"},{"Rematch","再来一局"},{"Resign","认输"},{"Difficulty","难度"},{"Side","执子"},{"Easy","简单"},{"Medium","中等"},{"Hard","困难"},{"Expert","专家"},{"Opening Book","开局库"},{"Singleplayer","电脑对战"},{"Local Multiplayer","局域网对战"},{"Online","在线"},{"Offline","离线"},{"Register","注册"},{"Login","登录"},{"Logout","退出登录"},{"Username","账号"},{"Password","密码"},{"Next","下一题"},{"Lines","主变化"},{"Threads","线程"},{"Hash (MB)","哈希内存 (MB)"},{"Time (ms)","时间 (毫秒)"},{"Depth","深度"},{"unlimited","不限"},{"off","关闭"},{"Board","棋盘"},{"Pieces","棋子"},{"Animation","动画"},{"Mode","模式"},{"Appearance picker","外观选择"},{"Sound","音效"},{"Max FPS","帧率上限"},{"Audio & Video","音视频"},{"Any","全部主题"},{"Puzzles","战术解题"},{"Around my rating","接近我的水平"},{"Under 1000","低于 1000"},{"mateIn1","一步将杀"},{"mateIn2","两步将杀"},{"mateIn3","三步将杀"},{"fork","捉双"},{"pin","牵制"},{"skewer","串击"},{"discoveredAttack","闪击"},{"deflection","引离"},{"attraction","引入"},{"sacrifice","弃子"},{"defensiveMove","防守"},{"kingsideAttack","王翼进攻"},{"queensideAttack","后翼进攻"},{"endgame","残局"},{"Host","创建"},{"Join","加入"},{"Spectate","观战"},{"Analyze","分析"},{"Report","报告"},{"Import","导入"},{"Styles","外观"},{"White to move","白方行棋"},{"Black to move","黑方行棋"}};
     for(size_t k=0;k<sizeof pairs/sizeof pairs[0];k++)if(!strcmp(s,pairs[k][0]))return pairs[k][1];return s;
 }
 static void ui_text(Gui *g,const char *s,int x,int y,SDL_Color c){render_text(g,g->font_small,s,x,y,c);}
@@ -14,11 +14,19 @@ static void ui_round(SDL_Renderer *r,SDL_Rect rect,SDL_Color color,int radius)
     if(rect.w<=0||rect.h<=0)return;
     if(radius>rect.h/2)radius=rect.h/2;if(radius>rect.w/2)radius=rect.w/2;
     SDL_SetRenderDrawColor(r,color.r,color.g,color.b,color.a);
-    for(int y=0;y<rect.h;y++){
-        int dy=y<radius?radius-y:y>=rect.h-radius?y-(rect.h-radius-1):0;
-        int inset=dy?radius-(int)sqrt((double)radius*radius-dy*dy):0;
-        SDL_RenderDrawLine(r,rect.x+inset,rect.y+y,rect.x+rect.w-inset-1,rect.y+y);
-    }
+#if SDL_VERSION_ATLEAST(2,0,18)
+    /* Filled geometry survives fractional downscaling on SDL's software backend. */
+    SDL_Vertex vertices[38]={0};int indices[108],n=1;
+    vertices[0]=(SDL_Vertex){{rect.x+rect.w/2.0f,rect.y+rect.h/2.0f},color,{0,0}};
+    for(int corner=0;corner<4;corner++){float cx=corner==0||corner==1?rect.x+rect.w-radius:rect.x+radius;
+        float cy=corner==0||corner==3?rect.y+radius:rect.y+rect.h-radius;
+        for(int step=0;step<=8;step++){float angle=(-90+corner*90+step*90.0f/8)*GUI_PI/180;
+            vertices[n++]=(SDL_Vertex){{cx+radius*cosf(angle),cy+radius*sinf(angle)},color,{0,0}};}}
+    int count=0;for(int k=1;k<n;k++){indices[count++]=0;indices[count++]=k;indices[count++]=k+1<n?k+1:1;}
+    SDL_RenderGeometry(r,NULL,vertices,n,indices,count);
+#else
+    SDL_RenderFillRect(r,&rect);
+#endif
 }
 static void ui_card(Gui *g,SDL_Rect r)
 {
@@ -27,23 +35,35 @@ static void ui_card(Gui *g,SDL_Rect r)
     ui_round(g->ren,r,(SDL_Color){250,253,255,255},14);
     SDL_SetRenderDrawBlendMode(g->ren,SDL_BLENDMODE_NONE);
 }
+static void ui_line(SDL_Renderer *r,int x1,int y1,int x2,int y2)
+{
+#if SDL_VERSION_ATLEAST(2,0,18)
+    SDL_Color c;SDL_GetRenderDrawColor(r,&c.r,&c.g,&c.b,&c.a);float dx=x2-x1,dy=y2-y1,len=sqrtf(dx*dx+dy*dy);float nx=len?-dy/len*0.8f:0.8f,ny=len?dx/len*0.8f:0;
+    if(!len){x2=x1+1;y2=y1+1;}
+    SDL_Vertex v[]={{{x1+nx,y1+ny},c,{0,0}},{{x1-nx,y1-ny},c,{0,0}},{{x2-nx,y2-ny},c,{0,0}},{{x2+nx,y2+ny},c,{0,0}}};int indices[]={0,1,2,0,2,3};SDL_RenderGeometry(r,NULL,v,4,indices,6);
+#else
+    SDL_RenderDrawLine(r,x1,y1,x2,y2);
+#endif
+}
+static void ui_point(SDL_Renderer *r,int x,int y){ui_line(r,x,y,x,y);}
+static void ui_outline(SDL_Renderer *r,const SDL_Rect *box){ui_line(r,box->x,box->y,box->x+box->w,box->y);ui_line(r,box->x+box->w,box->y,box->x+box->w,box->y+box->h);ui_line(r,box->x+box->w,box->y+box->h,box->x,box->y+box->h);ui_line(r,box->x,box->y+box->h,box->x,box->y);}
 static void ui_icon(Gui *g,int kind,int x,int y,SDL_Color color)
 {
     SDL_SetRenderDrawColor(g->ren,color.r,color.g,color.b,255);
-    if(kind==6){SDL_Rect box={x,y+3,21,15};SDL_RenderDrawRect(g->ren,&box);SDL_RenderDrawLine(g->ren,x,y+3,x+10,y+12);SDL_RenderDrawLine(g->ren,x+21,y+3,x+10,y+12);}
-    else if(kind==7){for(int k=0;k<2;k++){int cx=x+5+k*11;for(int a=0;a<360;a+=20){double t=a*GUI_PI/180;SDL_RenderDrawPoint(g->ren,cx+(int)(4*cos(t)),y+5+(int)(4*sin(t)));}SDL_Rect body={cx-4,y+12,8,8};SDL_RenderDrawRect(g->ren,&body);}}
-    else if(kind==8){for(int a=0;a<360;a+=30){double t=a*GUI_PI/180;SDL_RenderDrawLine(g->ren,x+10+(int)(7*cos(t)),y+10+(int)(7*sin(t)),x+10+(int)(10*cos(t)),y+10+(int)(10*sin(t)));}SDL_Rect box={x+4,y+4,12,12};SDL_RenderDrawRect(g->ren,&box);}
-    else if(kind==9){SDL_RenderDrawLine(g->ren,x+4,y+6,x+4,y+16);SDL_RenderDrawLine(g->ren,x+16,y+6,x+16,y+16);SDL_RenderDrawLine(g->ren,x+2,y+17,x+18,y+17);SDL_RenderDrawLine(g->ren,x+7,y+20,x+13,y+20);SDL_RenderDrawLine(g->ren,x+4,y+6,x+10,y+2);SDL_RenderDrawLine(g->ren,x+10,y+2,x+16,y+6);}
+    if(kind==6){SDL_Rect box={x,y+3,21,15};ui_outline(g->ren,&box);ui_line(g->ren,x,y+3,x+10,y+12);ui_line(g->ren,x+21,y+3,x+10,y+12);}
+    else if(kind==7){for(int k=0;k<2;k++){int cx=x+5+k*11;for(int a=0;a<360;a+=20){double t=a*GUI_PI/180;ui_point(g->ren,cx+(int)(4*cos(t)),y+5+(int)(4*sin(t)));}SDL_Rect body={cx-4,y+12,8,8};ui_outline(g->ren,&body);}}
+    else if(kind==8){for(int a=0;a<360;a+=30){double t=a*GUI_PI/180;ui_line(g->ren,x+10+(int)(7*cos(t)),y+10+(int)(7*sin(t)),x+10+(int)(10*cos(t)),y+10+(int)(10*sin(t)));}SDL_Rect box={x+4,y+4,12,12};ui_outline(g->ren,&box);}
+    else if(kind==9){ui_line(g->ren,x+4,y+6,x+4,y+16);ui_line(g->ren,x+16,y+6,x+16,y+16);ui_line(g->ren,x+2,y+17,x+18,y+17);ui_line(g->ren,x+7,y+20,x+13,y+20);ui_line(g->ren,x+4,y+6,x+10,y+2);ui_line(g->ren,x+10,y+2,x+16,y+6);}
     else if(kind==1){ /* light bulb */
-        for(int a=0;a<360;a+=8){double t=a*GUI_PI/180;SDL_RenderDrawPoint(g->ren,x+9+(int)(7*cos(t)),y+8+(int)(7*sin(t)));}
-        SDL_RenderDrawLine(g->ren,x+5,y+16,x+13,y+16);SDL_RenderDrawLine(g->ren,x+6,y+19,x+12,y+19);
+        for(int a=0;a<360;a+=8){double t=a*GUI_PI/180;ui_point(g->ren,x+9+(int)(7*cos(t)),y+8+(int)(7*sin(t)));}
+        ui_line(g->ren,x+5,y+16,x+13,y+16);ui_line(g->ren,x+6,y+19,x+12,y+19);
     }else if(kind==2){ /* magnifier */
-        for(int a=0;a<360;a+=8){double t=a*GUI_PI/180;SDL_RenderDrawPoint(g->ren,x+8+(int)(7*cos(t)),y+8+(int)(7*sin(t)));}
-        SDL_RenderDrawLine(g->ren,x+13,y+13,x+20,y+20);
-    }else if(kind==3){SDL_Rect box={x+1,y+1,18,19};SDL_RenderDrawRect(g->ren,&box);SDL_RenderDrawLine(g->ren,x+5,y+1,x+5,y+8);SDL_RenderDrawLine(g->ren,x+5,y+8,x+15,y+8);}
-    else if(kind==4){for(int a=0;a<3;a++)SDL_RenderDrawLine(g->ren,x+3+a,y+17,x+17+a,y+3);}
-    else if(kind==5){SDL_RenderDrawLine(g->ren,x+3,y+10,x+8,y+15);SDL_RenderDrawLine(g->ren,x+8,y+15,x+18,y+3);}
-    else {SDL_RenderDrawLine(g->ren,x+3,y+10,x+17,y+10);SDL_RenderDrawLine(g->ren,x+10,y+3,x+10,y+17);}
+        for(int a=0;a<360;a+=8){double t=a*GUI_PI/180;ui_point(g->ren,x+8+(int)(7*cos(t)),y+8+(int)(7*sin(t)));}
+        ui_line(g->ren,x+13,y+13,x+20,y+20);
+    }else if(kind==3){SDL_Rect box={x+1,y+1,18,19};ui_outline(g->ren,&box);ui_line(g->ren,x+5,y+1,x+5,y+8);ui_line(g->ren,x+5,y+8,x+15,y+8);}
+    else if(kind==4){for(int a=0;a<3;a++)ui_line(g->ren,x+3+a,y+17,x+17+a,y+3);}
+    else if(kind==5){ui_line(g->ren,x+3,y+10,x+8,y+15);ui_line(g->ren,x+8,y+15,x+18,y+3);}
+    else {ui_line(g->ren,x+3,y+10,x+17,y+10);ui_line(g->ren,x+10,y+3,x+10,y+17);}
 }
 static bool ui_hit(Gui *g,SDL_Rect r){return pt_in(&r,g->mouse.x,g->mouse.y);}
 static void ui_button(Gui *g,SDL_Rect r,const char *label,int icon,bool primary)
@@ -327,8 +347,8 @@ static void ui_shell(Gui *g)
     render_piece_box(g,g->ren,(Piece)(WP+u->avatar%12),36,g->win_h-120,32,1);
     SDL_Rect clip={62,g->win_h-143,134,47};SDL_RenderSetClipRect(g->ren,&clip);ui_text(g,u->nickname,64,g->win_h-136,ui_ink);SDL_RenderSetClipRect(g->ren,NULL);
     ui_text(g,ui_tr(g,g->offline_mode?"Offline":"Online",g->offline_mode?"离线模式":"在线模式"),24,g->win_h-87,ui_muted);
-    const char *icons_en[]={"Friends","Messages","Invites","Settings"},*icons_zh[]={"好友","私信","约战","设置"};int icons[]={7,6,9,8};
-    for(int k=0;k<4;k++){SDL_Rect hit={8+k*49,g->win_h-58,45,44};if(ui_hit(g,hit))ui_round(g->ren,hit,(SDL_Color){192,216,240,255},8);ui_icon(g,icons[k],hit.x+12,hit.y+3,ui_ink);render_text(g,g->font_tiny,u->zh?icons_zh[k]:icons_en[k],hit.x+2,hit.y+27,ui_muted);
+    const char *icons_en[]={"Friends","Chat","Invites","Prefs"},*icons_zh[]={"好友","私信","约战","设置"};int icons[]={7,6,9,8};
+    for(int k=0;k<4;k++){SDL_Rect hit={8+k*49,g->win_h-58,45,44};if(ui_hit(g,hit))ui_round(g->ren,hit,(SDL_Color){192,216,240,255},8);ui_icon(g,icons[k],hit.x+12,hit.y+3,ui_ink);render_text_centered(g,g->font_tiny,u->zh?icons_zh[k]:icons_en[k],hit.x+hit.w/2,hit.y+27,ui_muted);
         int badge=k==0?u->friend_requests:k==1?u->unread_messages:k==2?cJSON_GetArraySize(cJSON_GetObjectItem(u->invitations,"rows")):0;if(badge){ui_round(g->ren,(SDL_Rect){hit.x+29,hit.y-4,18,18},(SDL_Color){202,71,78,255},9);char n[8];snprintf(n,8,"%d",badge>99?99:badge);render_text(g,g->font_tiny,n,hit.x+32,hit.y-4,(SDL_Color){255,255,255,255});}}
     if(g->scene==SCENE_MENU&&g->saved.valid&&!ui_active_game(g))ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},ui_tr(g,"Continue game","继续上次对局"),-1,true);
     if(ui_active_game(g)){int white,black;online_clocks(g->online,&white,&black);char label[100];snprintf(label,sizeof label,u->zh?"返回对局 %d:%02d / %d:%02d":"Return %d:%02d / %d:%02d",white/60000,(white/1000)%60,black/60000,(black/1000)%60);ui_button(g,(SDL_Rect){g->win_w-252,20,228,42},label,-1,true);}

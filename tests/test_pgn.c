@@ -162,8 +162,14 @@ static void test_chesscom_file(void)
     printf("chess.com PGN round-trip  ok\n");
 }
 
+static void test_custom_root(void)
+{
+    Board board;const char *fen="4k3/8/8/8/8/8/4P3/4K3 b - - 17 9999";CHECK(fen_parse(fen,&board));MoveNode *root=mt_new_root(&board);PgnHeaders tags={0};snprintf(tags.event,sizeof tags.event,"Setup test");snprintf(tags.result,sizeof tags.result,"*");char *text=pgn_serialize(root,&tags);CHECK(text&&strstr(text,fen)&&strstr(text,"[SetUp \"1\"]"));PgnHeaders parsed;MoveNode *copy=text?pgn_parse_text(text,&parsed):NULL;CHECK(copy!=NULL);if(copy){char actual[128];fen_generate(&copy->board,actual,sizeof actual);CHECK(!strcmp(actual,fen));CHECK(!strcmp(parsed.event,"Setup test"));mt_free(copy);}free(text);mt_free(root);puts("custom FEN root and tags round-trip  ok");
+}
+
 int main(void)
 {
+    test_custom_root();
     test_write();
     test_result();
     test_import();
