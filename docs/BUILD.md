@@ -13,6 +13,7 @@ Required:
 - A C11 compiler: `cc`, `clang`, or `gcc`
 - `make` and `pkg-config`
 - **SDL2**, **SDL2_ttf**, **SDL2_image** development packages
+- **SQLite3** development package (desktop and server persistence)
 
 Optional:
 
@@ -23,13 +24,13 @@ Optional:
 - **libwebsockets** — enables the online (internet) multiplayer transport. If
   absent, the online menu entries are disabled; LAN Local Multiplayer is
   unaffected.
-- **Stockfish** — the engine used by Singleplayer. If absent, Singleplayer
-  reports "Stockfish not found".
+- **Stockfish** — the engine used by Singleplayer. Existing installations are detected first; if none is available,
+  OpenChess offers automatic installation.
 
 ### macOS (Homebrew)
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfish sqlite
 ```
 
 ### Debian / Ubuntu
@@ -38,7 +39,7 @@ brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfis
 sudo apt update
 sudo apt install build-essential pkg-config \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
-    libsdl2-mixer-dev stockfish
+    libsdl2-mixer-dev libsqlite3-dev stockfish
 ```
 
 ### Fedora
@@ -46,7 +47,7 @@ sudo apt install build-essential pkg-config \
 ```sh
 sudo dnf install gcc make pkgconf-pkg-config \
     SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel \
-    SDL2_mixer-devel stockfish
+    SDL2_mixer-devel sqlite-devel stockfish
 ```
 
 ### Windows (native, MSYS2 / MinGW-w64)
@@ -64,7 +65,8 @@ pacman -S --needed \
     mingw-w64-ucrt-x86_64-SDL2_ttf \
     mingw-w64-ucrt-x86_64-SDL2_image \
     mingw-w64-ucrt-x86_64-SDL2_net \
-    mingw-w64-ucrt-x86_64-SDL2_mixer
+    mingw-w64-ucrt-x86_64-SDL2_mixer \
+    mingw-w64-ucrt-x86_64-sqlite3
 
 # 2. Build from the repository root
 make CC=gcc              # -> openchess.exe
@@ -85,7 +87,7 @@ Building a console binary (useful for log output): add the SDL2 libraries
 manually instead of letting `pkg-config` add `-mwindows`:
 
 ```sh
-make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer"
+make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer -lsqlite3"
 ```
 
 #### Serving online games on Windows
@@ -122,7 +124,7 @@ On Windows 11 with WSLg the Linux build runs unchanged with a GUI:
 sudo apt update
 sudo apt install build-essential pkg-config \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
-    libsdl2-mixer-dev stockfish
+    libsdl2-mixer-dev libsqlite3-dev stockfish
 make
 ./openchess
 ```
@@ -162,8 +164,8 @@ binary automatically and drives two clients.
 
 Accounts and ratings use **SQLite** (detected via `pkg-config sqlite3`,
 `HAVE_ACCOUNTS`); the store defaults to `openchess_accounts.db` and can be set
-with `OPENCHESS_ACCOUNTS_DB`. Without SQLite the server still runs, with logins
-disabled. Puzzle data and the opening book are optional extras:
+with `OPENCHESS_ACCOUNTS_DB`. SQLite is required in 2.1. The bundled puzzle pool
+provides 6,000 validated problems. Extra puzzle data and opening books can be imported:
 
 ```sh
 pip install huggingface_hub pyarrow   # for the HF source
@@ -201,6 +203,7 @@ scripts/import_assets.sh
 - C11 编译器：`cc`、`clang` 或 `gcc`
 - `make` 与 `pkg-config`
 - **SDL2**、**SDL2_ttf**、**SDL2_image** 开发包
+- **SQLite3** 开发包（客户端与服务端持久化）
 
 可选：
 
@@ -215,7 +218,7 @@ scripts/import_assets.sh
 ### macOS（Homebrew）
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfish sqlite
 ```
 
 ### Debian / Ubuntu
@@ -224,7 +227,7 @@ brew install sdl2 sdl2_ttf sdl2_image sdl2_net sdl2_mixer libwebsockets stockfis
 sudo apt update
 sudo apt install build-essential pkg-config \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
-    libsdl2-mixer-dev stockfish
+    libsdl2-mixer-dev libsqlite3-dev stockfish
 ```
 
 ### Fedora
@@ -232,7 +235,7 @@ sudo apt install build-essential pkg-config \
 ```sh
 sudo dnf install gcc make pkgconf-pkg-config \
     SDL2-devel SDL2_ttf-devel SDL2_image-devel SDL2_net-devel \
-    SDL2_mixer-devel stockfish
+    SDL2_mixer-devel sqlite-devel stockfish
 ```
 
 ### Windows（原生，MSYS2 / MinGW-w64）
@@ -249,7 +252,8 @@ pacman -S --needed \
     mingw-w64-ucrt-x86_64-SDL2_ttf \
     mingw-w64-ucrt-x86_64-SDL2_image \
     mingw-w64-ucrt-x86_64-SDL2_net \
-    mingw-w64-ucrt-x86_64-SDL2_mixer
+    mingw-w64-ucrt-x86_64-SDL2_mixer \
+    mingw-w64-ucrt-x86_64-sqlite3
 
 # 2. 在仓库根目录构建
 make CC=gcc              # -> openchess.exe
@@ -268,7 +272,7 @@ make CC=gcc              # -> openchess.exe
 如需带控制台输出日志，可手动指定 SDL2 库（避免 `pkg-config` 添加 `-mwindows`）：
 
 ```sh
-make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer"
+make CC=gcc SDL_LIBS="-L/mingw64/lib -lmingw32 -lSDL2main -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_net -lSDL2_mixer -lsqlite3"
 ```
 
 #### 在 Windows 上运行在线服务器
@@ -303,7 +307,7 @@ New-NetFirewallRule -DisplayName "OpenChess server" -Direction Inbound `
 sudo apt update
 sudo apt install build-essential pkg-config \
     libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev \
-    libsdl2-mixer-dev stockfish
+    libsdl2-mixer-dev libsqlite3-dev stockfish
 make
 ./openchess
 ```
@@ -339,8 +343,8 @@ OPENCHESS_PORT=9000 ./server/openchessd
 终结后使用 `wss://`。`test_online` 测试会自动启动该程序并驱动两个客户端。
 
 账户与评分使用 **SQLite**（通过 `pkg-config sqlite3` 检测，宏 `HAVE_ACCOUNTS`）；默认
-数据库为 `openchess_accounts.db`，可用 `OPENCHESS_ACCOUNTS_DB` 指定。未安装 SQLite 时
-服务器仍可运行，但禁用登录。谜题数据与开局库为可选项：
+数据库为 `openchess_accounts.db`，可用 `OPENCHESS_ACCOUNTS_DB` 指定。2.1 必须安装 SQLite。
+已随包提供 6000 道经过验证的题目，也可继续扩充题库和开局库：
 
 ```sh
 pip install huggingface_hub pyarrow   # HF 数据源所需

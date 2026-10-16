@@ -50,14 +50,14 @@
 ### macOS（Homebrew）
 
 ```sh
-brew install sdl2 sdl2_ttf sdl2_image sdl2_net stockfish
+brew install sdl2 sdl2_ttf sdl2_image sdl2_net stockfish sqlite
 ```
 
 ### Debian / Ubuntu
 
 ```sh
 sudo apt install build-essential pkg-config \
-    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsdl2-net-dev stockfish
+    libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev libsqlite3-dev libsdl2-net-dev stockfish
 ```
 
 ## 构建与运行

@@ -1,3 +1,10 @@
+# V2.1 implementation status
+
+Protocol v3, SQLite accounts and ratings, social APIs, game history and daily
+archives are implemented. See [the current guide](V2.1.md) for deployment,
+migration, API details and validation. The original phased design below is
+retained as historical context; its deferred-feature statements are superseded.
+
 # Online Multiplayer — Design & Implementation Plan
 
 Status: **Phases 0–3 complete, Phase 4 partly done** (draws, chat, spectators
