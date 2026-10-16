@@ -27,7 +27,7 @@ static void handle_request(Session *s,const ProtoFrame *f)
             }
         }else if(!strcmp(op,"challenge.list")){
             cJSON *rows=cJSON_AddArrayToObject(response,"rows");
-            for(int k=0;k<256;k++){Challenge *c=&challenges[k];if(c->expires<=now_ms()||(c->from!=s->user_id&&c->to!=s->user_id))continue;
+            for(int k=0;k<256;k++){Challenge *c=&challenges[k];if(c->expires<=now_ms()||(c->from!=s->user_id&&c->to!=s->user_id)||community_blocked(g_workspace,c->from,c->to))continue;
                 cJSON *j=cJSON_CreateObject();cJSON_AddNumberToObject(j,"id",c->id);cJSON_AddNumberToObject(j,"from",c->from);cJSON_AddNumberToObject(j,"to",c->to);cJSON_AddNumberToObject(j,"time",c->base);cJSON_AddNumberToObject(j,"inc",c->inc);cJSON_AddNumberToObject(j,"seconds",(double)(c->expires-now_ms())/1000);cJSON_AddItemToArray(rows,j);}
         }else{
             int id=proto_field_int(f,"id",0);Challenge *c=NULL;for(int k=0;k<256;k++)if(challenges[k].id==id&&challenges[k].expires>now_ms())c=&challenges[k];

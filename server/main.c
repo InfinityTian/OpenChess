@@ -584,6 +584,7 @@ static bool valid_clock(int base,int inc){return base>=0&&base<=10800000&&inc>=0
 
 static void handle_create(Session *s, const ProtoFrame *f)
 {
+    if(s->queued){send_reject(s,"Cancel matchmaking before entering a room");return;}
     if(account_busy(s)){send_reject(s,"Account already has an active game or queue");return;}
     if (s->room >= 0) {
         if (!rooms[s->room].over) { send_reject(s, "already in a game"); return; }
@@ -608,6 +609,7 @@ static void handle_create(Session *s, const ProtoFrame *f)
 
 static void handle_join(Session *s, const ProtoFrame *f)
 {
+    if(s->queued){send_reject(s,"Cancel matchmaking before entering a room");return;}
     if(account_busy(s)){send_reject(s,"Account already has an active game or queue");return;}
     if (s->room >= 0) {
         if (!rooms[s->room].over) { send_reject(s, "already in a game"); return; }

@@ -19,7 +19,7 @@ cJSON *community_request(Workspace *w,Puzzles *p,int uid,const char *owner,const
     sqlite3_stmt *s=NULL;
     if(!strcmp(op,"daily.get")||!strcmp(op,"daily.calendar")){
         int today=workspace_today();workspace_daily_fill(w,p,today);
-        if(!strcmp(op,"daily.calendar")){int start=integer(q,"first",today-31),end=integer(q,"last",today);if(end>today)end=today;if(end-start>366)return error(r,"Date range too large");
+        if(!strcmp(op,"daily.calendar")){int start=integer(q,"first",today-31),end=integer(q,"last",today);if(end>today)end=today;if(start<0||end<start||(int64_t)end-start>366)return error(r,"Invalid date range");
             cJSON_AddItemToObject(r,"rows",workspace_calendar(w,owner,start,end));int current,longest;workspace_streak(w,owner,today,&current,&longest);cJSON_AddNumberToObject(r,"current",current);cJSON_AddNumberToObject(r,"longest",longest);cJSON_AddNumberToObject(r,"today",today);return r;}
         int day=integer(q,"day",today);Puzzle puzzle;if(day>today||!workspace_daily(w,day,&puzzle))return error(r,"Daily puzzle unavailable for this date");
         cJSON_AddNumberToObject(r,"day",day);cJSON_AddItemToObject(r,"puzzle",workspace_puzzle_json(&puzzle));return r;
