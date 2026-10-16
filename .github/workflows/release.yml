@@ -28,8 +28,8 @@ jobs:
           TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].*)?$ ]]
-          git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
-          test "$(git show "$TAG:VERSION")" = "${TAG#v}"
+          git fetch --no-tags origin "refs/tags/$TAG"
+          test "$(git show "FETCH_HEAD:VERSION")" = "${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             gh release create "$TAG" --verify-tag --draft --title "OpenChess $TAG" --generate-notes
