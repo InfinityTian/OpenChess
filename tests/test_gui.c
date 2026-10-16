@@ -427,10 +427,11 @@ static int test_position_effects(SDL_Renderer *ren)
     }
     click.type = SDL_MOUSEBUTTONDOWN;
     gui_handle_event(g, &click);
-    if (g->selected != algebraic_to_sq("e2") || g->pick_released) {
-        fprintf(stderr, "clicking the same piece did not restart pickup\n");
+    if (g->selected >=0 || g->targets.count) {
+        fprintf(stderr, "clicking the same piece did not cancel selection\n");
         return 1;
     }
+    gui_handle_event(g, &click); /* Select again for animation checks. */
     g->anim_style = ANIM_NONE;
     g->pick_started = SDL_GetTicks() - 340;
     gui_render(g, ren);
@@ -793,9 +794,8 @@ int main(void)
         return 1;
     }
     /* click the queen button (first chooser slot, positioned above f8) */
-    SDL_Rect qr = { BOARD_X + (algebraic_to_sq("f8") % 8) * SQ_SIZE - 8,
-                    BOARD_Y + (7 - algebraic_to_sq("f8") / 8) * SQ_SIZE + SQ_SIZE + 10,
-                    50, 46 };
+    SDL_Rect qr = { BOARD_X + (algebraic_to_sq("f8") % 8) * SQ_SIZE,
+                    BOARD_Y, SQ_SIZE, SQ_SIZE };
     pc.type = SDL_MOUSEBUTTONDOWN; pc.button.button = SDL_BUTTON_LEFT;
     pc.button.x = qr.x + 25;
     pc.button.y = qr.y + 23;
@@ -819,7 +819,7 @@ int main(void)
     }
     {
         SDL_Rect nr = qr;
-        nr.x += 3 * 54;         /* slot 3 = knight */
+        nr.y += SQ_SIZE;         /* slot 1 = knight */
         SDL_Event kc = pc;
         kc.button.x = nr.x + 25;
         kc.button.y = nr.y + 23;

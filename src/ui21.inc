@@ -119,7 +119,7 @@ static void ui_result_icon(Gui *g,float x,float y,float radius,bool correct,bool
 }
 static void ui_puzzle_feedback(Gui *g)
 {
-    if(!g->puzzle_badge_kind||g->puzzle_badge_sq<0||g->puzzle_badge_sq>63)return;
+    if(g->history_browsing||!g->puzzle_badge_kind||g->puzzle_badge_sq<0||g->puzzle_badge_sq>63)return;
     /* Correct feedback waits for the automatic reply; wrong feedback follows the attempted piece. */
     if(g->anim_count)return;
     SDL_Rect square;window_sq(g,g->puzzle_badge_sq,&square);
@@ -370,11 +370,9 @@ static void ui_game_analyse(Gui *g)
     if(!ui_finished_game(g))return;
     ui_local_history(g);
     Board initial=g->ply?g->before[0]:g->board;
-    MoveNode *root=mt_new_root(&initial),*last=root;if(!root)return;
-    for(int k=0;k<g->ply;k++){
-        MoveNode *next=mt_add_child(last,g->history[k],g->move_san[k]);
-        if(!next){mt_free(root);return;}last=next;
-    }
+    play_sync(g);MoveNode *root=g->play_tree,*last=g->play_live;
+    if(!root){root=mt_new_root(&initial);last=root;if(!root)return;for(int k=0;k<g->ply;k++){last=mt_add_child(last,g->history[k],g->move_san[k]);if(!last){mt_free(root);return;}}}
+    g->play_tree=g->play_live=g->play_view=NULL;
     char result[8];snprintf(result,sizeof result,"%s",g->override_result[0]?g->override_result:pgn_result(&g->board,g->state));
     if(g->ai&&g->ai_thinking)ai_stop_search(g->ai);g->ai_thinking=false;
     clear_review_results(g);if(g->pgntree)mt_free(g->pgntree);g->pgntree=root;g->tree_cur=last;

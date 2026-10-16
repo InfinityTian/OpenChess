@@ -28,6 +28,10 @@ static void fen_refresh(Gui *g);
 static bool puzzle_human_move(Gui *g, Move m);
 static void puzzle_mistake(Gui *g);
 static void puzzle_rewind(Gui *g,int step);
+static void puzzle_prepare_input(Gui *g);
+static void history_seek(Gui *g,int ply);
+static void history_navigate(Gui *g,int delta);
+static bool history_board(Gui *g,Board *out);
 static void ui_puzzle_feedback(Gui *g);
 static void ui_result_icon(Gui *g,float x,float y,float radius,bool correct,bool disc);
 static void ui_disabled_button(Gui *g,SDL_Rect rect,const char *label);
@@ -678,6 +682,7 @@ static bool tree_synced(const Gui *g)
 /* Make the linear arrays track the tree path root..tree_cur. */
 static void sync_from_tree(Gui *g)
 {
+    g->history_browsing=false;
     MoveNode *chain[MAX_PLY];
     int d = 0;
     for (MoveNode *n = g->tree_cur; n && n->parent && d < MAX_PLY; n = n->parent)
@@ -749,6 +754,9 @@ static void san_close_box(Gui *g)
 
 static void reset_board_state(Gui *g)
 {
+    if(g->play_tree)mt_free(g->play_tree);g->play_tree=g->play_live=g->play_view=NULL;
+    g->move_hit_count=0;
+    g->history_browsing=false;
     clear_selection(g);
     ann_clear(g);
     g->promo_from = g->promo_to = -1;
@@ -886,6 +894,25 @@ static void play_move_sound(Gui *g, const Board *pre, Move m)
     audio_play(self ? SND_MOVE_SELF : SND_MOVE_OPPONENT);
 }
 
+/* Live play and local variations keep independent positions. */
+static bool play_mode(const Gui *g){return g->mode==MODE_SINGLE||g->mode==MODE_LOCAL||g->mode==MODE_ONLINE;}
+static bool play_branch(const Gui *g){return play_mode(g)&&g->history_browsing&&g->play_view;}
+static Board *input_board(Gui *g){return play_branch(g)?&g->play_view->board:&g->board;}
+static void play_sync(Gui *g)
+{
+    if(!play_mode(g))return;
+    Board *start=g->ply?&g->before[0]:&g->board;
+    if(g->play_tree&&!board_rep_equal(start,&g->play_tree->board)){mt_free(g->play_tree);g->play_tree=NULL;g->play_view=NULL;}
+    if(!g->play_tree)g->play_tree=mt_new_root(start);
+    MoveNode *n=g->play_tree;
+    for(int k=0;n&&k<g->ply;k++){
+        MoveNode *child=mt_find_child(n,g->history[k]);if(!child)child=mt_add_child(n,g->history[k],g->move_san[k]);
+        /* Actual play is always the main line, even after local exploration. */
+        if(child&&child!=n->first){if(child->prev)child->prev->next=child->next;if(child->next)child->next->prev=child->prev;else n->last=child->prev;child->prev=NULL;child->next=n->first;n->first->prev=child;n->first=child;}n=child;
+    }
+    g->play_live=n;
+    if(!g->history_browsing)g->play_view=n;
+}
 static void push_move(Gui *g, Move m)
 {
     if (g->ply >= MAX_PLY) return;
@@ -923,7 +950,17 @@ static void push_move(Gui *g, Move m)
         sync_from_tree(g);
     }
     g->move_follow = true;
+    if(play_mode(g)&&g->play_tree)play_sync(g);
     analysis_refresh(g);
+}
+
+static void user_push_move(Gui *g,Move m)
+{
+    if(!play_branch(g)){push_move(g,m);return;}
+    if(mt_depth(g->play_view)>=MAX_PLY)return;
+    MoveNode *n=mt_find_child(g->play_view,m);if(!n)n=mt_add_child(g->play_view,m,NULL);if(!n)return;
+    g->play_view=n;g->history_cursor=mt_depth(n);g->history_browsing=n!=g->play_live;
+    clear_selection(g);san_close_box(g);g->promo_from=g->promo_to=-1;g->move_follow=true;
 }
 
 static void set_msg(Gui *g, const char *fmt, const char *arg)
@@ -1048,7 +1085,8 @@ static bool apply_text_san(Gui *g)
     if (n == 0) return false;
 
     Move m;
-    if (san_find(&g->board, buf, &m)) {
+    if (g->mode==MODE_PUZZLE&&g->history_browsing)return false;
+    if (san_find(input_board(g), buf, &m)) {
         if (g->mode == MODE_PUZZLE) {
             if (!puzzle_human_move(g, m)) {
                 puzzle_mistake(g);
@@ -1057,11 +1095,11 @@ static bool apply_text_san(Gui *g)
                 return false;
             }
         } else {
-            push_move(g, m);
+            user_push_move(g, m);
         }
         g->input.len = 0;
         g->input.text[0] = 0;
-        set_msg(g, "Moved %s", g->last_san);
+        set_msg(g, "Moved %s", play_branch(g)?g->play_view->san:g->last_san);
         return true;
     }
     audio_play(SND_ILLEGAL);
@@ -1072,6 +1110,7 @@ static bool apply_text_san(Gui *g)
 /* Typed SAN is only allowed for the side you control. */
 static bool san_can_type(const Gui *g)
 {
+    if(play_branch(g))return true;
     switch (g->mode) {
         case MODE_SINGLE: return g->board.side == g->human_color;
         case MODE_LOCAL:  return g->board.side == g->local_color;
@@ -1085,8 +1124,9 @@ static bool san_can_type(const Gui *g)
 /* Reveal the SAN entry box (Enter while playing). */
 static void san_open_box(Gui *g)
 {
-    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
-    if (g->state != NO_GAME_OVER) return;
+    if(g->mode==MODE_PUZZLE)puzzle_prepare_input(g);
+    if(g->mode==MODE_PUZZLE&&g->history_browsing)return;
+    if (game_state(input_board(g)) != NO_GAME_OVER) return;
     if (!san_can_type(g)) {
         set_msg(g, "Not your turn", NULL);
         return;
@@ -1101,22 +1141,25 @@ static void san_open_box(Gui *g)
 /* Select a piece (own side) at sq, computing legal target squares. */
 static void select_square(Gui *g, int sq)
 {
-    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
+    if(g->mode==MODE_PUZZLE)puzzle_prepare_input(g);
     if (g->mode == MODE_ONLINE && g->online && online_spectating(g->online))
         return;   /* spectators are read-only */
+    if(g->mode==MODE_PUZZLE&&g->history_browsing)return;
+    if(g->selected==sq){clear_selection(g);return;}
     clear_selection(g);
-    Piece p = g->board.board[sq];
+    Board *position=input_board(g);
+    Piece p = position->board[sq];
     if (p == EMPTY) return;
-    bool my_piece = (g->board.side == WHITE) ? WHITE_PIECE(p) : BLACK_PIECE(p);
+    bool my_piece = (position->side == WHITE) ? WHITE_PIECE(p) : BLACK_PIECE(p);
     if (!my_piece) return;
-    if (g->state != NO_GAME_OVER) return;
+    if (game_state(input_board(g)) != NO_GAME_OVER) return;
 
     g->selected = sq;
     g->pick_started = SDL_GetTicks() + 1;
     g->pick_released = 0;
     g->pick_position = g->mouse;
     MoveList legal;
-    gen_legal(&g->board, &legal);
+    gen_legal(input_board(g), &legal);
     for (int i = 0; i < legal.count; i++) {
         Move m = legal.moves[i];
         if (MOVE_FROM(m) == sq && g->targets.count < MAX_MOVES)
@@ -1136,6 +1179,7 @@ static void try_move_to(Gui *g, int to)
         g->promo_from = MOVE_FROM(*m);
         g->promo_to = MOVE_TO(*m);
         g->promo_open_ms = SDL_GetTicks();
+        memset(g->promo_hover,0,sizeof g->promo_hover);g->promo_hover_at=g->promo_open_ms;
         clear_selection(g);
         return;
     }
@@ -1148,7 +1192,7 @@ static void try_move_to(Gui *g, int to)
         clear_selection(g);
         return;
     }
-    push_move(g, *m);
+    user_push_move(g, *m);
 }
 
 /* Resolve the pending promotion with the chosen piece code. */
@@ -1159,7 +1203,7 @@ static void resolve_promotion(Gui *g, Piece promo)
     int to = g->promo_to;
     g->promo_from = g->promo_to = -1;
     MoveList legal;
-    gen_legal(&g->board, &legal);
+    gen_legal(input_board(g), &legal);
     Piece w = promo; /* encoded promotions always use white piece codes */
     for (int i = 0; i < legal.count; i++) {
         Move m = legal.moves[i];
@@ -1167,7 +1211,7 @@ static void resolve_promotion(Gui *g, Piece promo)
             (MOVE_FLAGS(m) & FLAG_PROMO) && MOVE_PROMO(m) == w) {
             if(g->mode==MODE_PUZZLE){
                 if(!puzzle_human_move(g,m)){puzzle_mistake(g);audio_play(SND_ILLEGAL);set_msg(g,"Incorrect - try again",NULL);}
-            }else push_move(g,m);
+            }else user_push_move(g,m);
             return;
         }
     }
@@ -1594,15 +1638,9 @@ static void promo_rects(Gui *g, SDL_Rect out[4])
 {
     SDL_Rect sqr;
     window_sq(g, g->promo_to, &sqr);
-    int y0 = sqr.y - 90;
-    if (y0 < g->board_y) y0 = sqr.y + g->sq + 10;
-    int x0 = sqr.x - 8;
-    if (x0 < g->board_x) x0 = sqr.x;
-    if (x0 + 4 * 54 > g->board_x + 8 * g->sq) x0 = g->board_x + 8 * g->sq - 4 * 54;
-    out[0] = (SDL_Rect){x0, y0, 50, 46};
-    out[1] = (SDL_Rect){x0 + 54, y0, 50, 46};
-    out[2] = (SDL_Rect){x0 + 108, y0, 50, 46};
-    out[3] = (SDL_Rect){x0 + 162, y0, 50, 46};
+    /* Four full board squares, inward from the promotion rank. */
+    int size=g->sq, direction=sqr.y<g->board_y+4*g->sq?1:-1;
+    for(int i=0;i<4;i++)out[i]=(SDL_Rect){sqr.x,sqr.y+direction*i*size,size,size};
 }
 
 /* ------------------------------------------------------------------ */
@@ -2150,6 +2188,7 @@ void gui_destroy(Gui *g)
     opening_free(g->book);
     if (g->review_ai) ai_stop(g->review_ai);
     if (g->pgntree) mt_free(g->pgntree);
+    if(g->play_tree)mt_free(g->play_tree);
     destroy_piece_textures(g);
     for (int i = 0; i < 12; i++)
         if (g->badge_tex[i]) SDL_DestroyTexture(g->badge_tex[i]);
@@ -2567,6 +2606,43 @@ static void puzzle_rewind(Gui *g,int step)
     if(g->ui&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].step=g->puzzle_step;
 }
 
+static void history_seek(Gui *g,int ply)
+{
+    if(play_mode(g)){play_sync(g);MoveNode *n=g->play_tree;for(int i=0;n&&n->first&&i<ply;i++)n=n->first;g->play_view=n;}
+    int maximum=g->mode==MODE_PUZZLE&&g->puzzle_solution_visible?g->puzzle_nmoves:g->ply;
+    g->history_cursor=clampi(ply,0,maximum);g->history_browsing=g->history_cursor!=g->ply;
+    clear_selection(g);san_close_box(g);g->promo_from=g->promo_to=-1;g->dragging=false;g->move_follow=true;
+    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)g->puzzle_feedback_at=SDL_GetTicks();
+}
+static bool history_board(Gui *g,Board *out)
+{
+    if(!g->history_browsing)return false;
+    int ply=g->history_cursor;
+    if(play_branch(g)){*out=g->play_view->board;return true;}
+    if(g->mode==MODE_PUZZLE&&g->puzzle_solution_visible){
+        if(!fen_parse(g->puzzle_cur.fen,out))return false;
+        for(int k=0;k<ply;k++){Move move;if(!uci_to_move(out,g->puzzle_moves[k],&move))return false;make_move_plumb(out,move);}
+    }else if(ply<g->ply)*out=g->before[ply];else *out=g->board;
+    return true;
+}
+static void history_navigate(Gui *g,int delta)
+{
+    if(g->mode==MODE_ANALYSIS&&g->pgntree&&g->tree_cur){
+        for(int i=0;i<abs(delta);i++){if(delta<0)tree_go_back(g);else tree_go_forward(g);}return;
+    }
+    if(play_mode(g)){play_sync(g);MoveNode *n=g->history_browsing?g->play_view:g->play_live;
+        for(int i=0;n&&i<abs(delta);i++){MoveNode *next=delta<0?n->parent:n->first;if(!next)break;n=next;}
+        if(n){g->play_view=n;g->history_cursor=mt_depth(n);g->history_browsing=n!=g->play_live;clear_selection(g);san_close_box(g);g->promo_from=g->promo_to=-1;g->move_follow=true;}return;
+    }
+    history_seek(g,(g->history_browsing?g->history_cursor:g->ply)+delta);
+}
+static void puzzle_prepare_input(Gui *g)
+{
+    if(g->mode!=MODE_PUZZLE)return;
+    if(g->history_browsing)return;
+    if(g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
+}
+
 static bool puzzle_human_move(Gui *g, Move m)
 {
     if (g->mode != MODE_PUZZLE) return false;
@@ -2602,7 +2678,7 @@ static bool puzzle_human_move(Gui *g, Move m)
 
 static void puzzle_hint(Gui *g)
 {
-    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
+    if(g->mode==MODE_PUZZLE)puzzle_prepare_input(g);
     if(g->ui&&!g->ui->reviewing&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].hint=true;
     if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
     if (g->puzzle_step < g->puzzle_nmoves)
@@ -2611,7 +2687,7 @@ static void puzzle_hint(Gui *g)
 
 static void puzzle_reveal(Gui *g)
 {
-    if(g->mode==MODE_PUZZLE&&g->puzzle_wrong)puzzle_rewind(g,g->puzzle_step);
+    if(g->mode==MODE_PUZZLE){history_seek(g,g->ply);puzzle_prepare_input(g);}
     if(g->ui&&!g->ui->reviewing&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].reveal=true;
     if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
     g->puzzle_failed = true;g->puzzle_solution_visible=true;
@@ -4010,12 +4086,14 @@ static void pgn_save(Gui *g)
     const char *result = g->override_result[0]
                        ? g->override_result
                        : pgn_result(&g->board, g->state);
-    if (g->pgntree) {
-        PgnHeaders h = g->pgn_hdr;
+    if(play_mode(g))play_sync(g);
+    MoveNode *export_tree=play_mode(g)?g->play_tree:g->mode==MODE_ANALYSIS?g->pgntree:NULL;
+    if (export_tree) {
+        PgnHeaders h = play_mode(g)?(PgnHeaders){0}:g->pgn_hdr;
         if (!h.white[0]) snprintf(h.white, sizeof h.white, "%s", g->white_name);
         if (!h.black[0]) snprintf(h.black, sizeof h.black, "%s", g->black_name);
         if (!h.result[0]) snprintf(h.result, sizeof h.result, "%s", result);
-        char *text = pgn_serialize(g->pgntree, &h);
+        char *text = pgn_serialize(export_tree, &h);
         if (text) { fputs(text, f); free(text); }
     } else {
         pgn_write(f, (const char (*)[8])g->move_san, g->ply,
@@ -4392,7 +4470,6 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     }
 
     if (g->mode == MODE_PUZZLE && !ctrl) {
-        if(k==SDLK_LEFT){puzzle_rewind(g,g->puzzle_wrong?g->puzzle_step:g->puzzle_step-2);return;}
         if (k == SDLK_h) { puzzle_hint(g); return; }
         if (k == SDLK_r) { puzzle_reveal(g); return; }
         if (k == SDLK_n) { open_puzzle(g); return; }
@@ -4402,9 +4479,8 @@ static void handle_game_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         else                                review_start(g);
         return;
     }
-    if (g->mode == MODE_ANALYSIS && g->pgntree && g->tree_cur) {
-        if (k == SDLK_LEFT) { do_undo(g); return; }
-        if (k == SDLK_RIGHT) { tree_go_forward(g); return; }
+    if(!ctrl&&!g->san_open&&!g->fen_active&&(k==SDLK_LEFT||k==SDLK_RIGHT||k==SDLK_UP||k==SDLK_DOWN)){
+        history_navigate(g,k==SDLK_LEFT?-1:k==SDLK_RIGHT?1:k==SDLK_UP?-2:2);return;
     }
     if (ctrl && k == SDLK_b) { gui_cycle_board(g); return; }
     if (ctrl && k == SDLK_p) { gui_cycle_pieces(g); return; }
@@ -4528,11 +4604,14 @@ static void handle_game_mousedown(Gui *g)
 
     if (g->pgn_prompt) return;   /* modal: keyboard only */
 
-    if(g->mode==MODE_PUZZLE){
+    if(g->history_browsing){SDL_Rect field;input_rect(g,&field);if(pt_in(&field,p.x,p.y)){history_seek(g,g->ply);return;}}
+    if(g->mode!=MODE_ANALYSIS){
         for(int i=0;i<g->move_hit_count;i++)if(pt_in(&g->move_hit_rect[i],p.x,p.y)){
-            int ply=g->move_hit_ply[i];if(ply>0)puzzle_rewind(g,ply%2?ply:ply-1);return;
+            int ply=g->move_hit_ply[i];if(play_mode(g)&&g->move_hit_node[i]){g->play_view=g->move_hit_node[i];g->history_cursor=mt_depth(g->play_view);g->history_browsing=g->play_view!=g->play_live;clear_selection(g);san_close_box(g);g->promo_from=g->promo_to=-1;g->dragging=false;g->move_follow=true;}else if(ply>0)history_seek(g,ply);return;
         }
-        if(g->puzzle_wrong&&sq_from_pos(g,p.x,p.y)>=0)puzzle_rewind(g,g->puzzle_step);
+        if(sq_from_pos(g,p.x,p.y)>=0){
+            if(g->mode==MODE_PUZZLE){if(g->history_browsing)return;puzzle_prepare_input(g);}
+        }
     }
     /* Click a previous move (or a variation) to jump to that position. */
     if (g->mode == MODE_ANALYSIS && !g->pgn_import_open) {
@@ -4725,7 +4804,7 @@ static void handle_game_mousedown(Gui *g)
     if (g->promo_from >= 0) {
         SDL_Rect pr[4];
         promo_rects(g, pr);
-        Piece choices[4] = { WQ, WR, WB, WN };
+        Piece choices[4] = { WQ, WN, WR, WB };
         for (int i = 0; i < 4; i++)
             if (pt_in(&pr[i], p.x, p.y)) { resolve_promotion(g, choices[i]); return; }
         /* Double click on the target square: default to the queen. */
@@ -4755,10 +4834,11 @@ static void handle_game_mousedown(Gui *g)
     if (g->mode == MODE_SINGLE)     may_move = (g->board.side == g->human_color);
     else if (g->mode == MODE_LOCAL) may_move = (g->board.side == g->local_color);
 
-    Piece pc = g->board.board[sq];
-    bool my = (g->board.side == WHITE) ? WHITE_PIECE(pc) : BLACK_PIECE(pc);
-    if (pc != EMPTY && my && may_move && g->state == NO_GAME_OVER) {
-        /* Pressing the selected piece retriggers its pickup, as in Pick.mov. */
+    Board *position=input_board(g);if(play_branch(g))may_move=true;
+    Piece pc = position->board[sq];
+    bool my = (position->side == WHITE) ? WHITE_PIECE(pc) : BLACK_PIECE(pc);
+    if (pc != EMPTY && my && may_move && game_state(position) == NO_GAME_OVER) {
+        /* A second click dismisses the selection and legal targets. */
         select_square(g, sq);
     } else {
         clear_selection(g);
@@ -5185,7 +5265,7 @@ void gui_tick(Gui *g, Uint32 now)
         else online_lobby_tick(g);
     }
     ui_tick(g,now);
-    if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->puzzle_wrong&&now-g->puzzle_feedback_at>=1100)puzzle_rewind(g,g->puzzle_step);
+    if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE&&g->puzzle_wrong&&!g->history_browsing&&now-g->puzzle_feedback_at>=1100)puzzle_rewind(g,g->puzzle_step);
     if (g->scene == SCENE_HOSTJOIN) {
         hostjoin_tick(g);
         return;
@@ -5981,21 +6061,17 @@ static void draw_promo_chooser(Gui *g, SDL_Renderer *ren)
 {
     SDL_Rect pr[4];
     promo_rects(g, pr);
-    for (int i = 0; i < 4; i++) {
-        draw_rect(ren, &pr[i], 60, 40, 40, true);
-    }
-    /* Queen is the default choice (double click the target to pick it). */
-    draw_rect(ren, &pr[0], 250, 220, 120, false);
-    draw_rect(ren, &pr[0], 250, 220, 120, false);
-    for (int i = 1; i < 4; i++)
-        draw_rect(ren, &pr[i], 150, 140, 110, false);
-    Piece choices[4] = { WQ, WR, WB, WN };
-    for (int i = 0; i < 4; i++) {
-        Piece p = color_of_piece(g->board.board[g->promo_from]) ? choices[i]
-                 : (Piece)(choices[i] + (BP - WP));
-        float cx = pr[i].x + pr[i].w / 2.0f;
-        float cy = pr[i].y + pr[i].h / 2.0f;
-        render_piece_box(g, ren, p, cx, cy, (float)(pr[i].h - 8), 1.0f);
+    Uint32 now=SDL_GetTicks();float dt=(now-g->promo_hover_at)/160.0f;g->promo_hover_at=now;if(dt>1)dt=1;
+    Piece choices[4]={WQ,WN,WR,WB};
+    SDL_SetRenderDrawBlendMode(ren,SDL_BLENDMODE_BLEND);
+    for(int i=0;i<4;i++){
+        float target=pt_in(&pr[i],g->mouse.x,g->mouse.y)?1.0f:0.0f;
+        float t=g->promo_hover[i];t+=target>t?dt:-dt;t=fmaxf(0,fminf(1,t));g->promo_hover[i]=t;
+        float smooth=t*t*(3-2*t);
+        ui_round(ren,pr[i],(SDL_Color){235,235,235,140},pr[i].w/2);
+        ui_round(ren,pr[i],(SDL_Color){216,87,53,(Uint8)(240*smooth)},(int)((1-smooth)*pr[i].w/2));
+        Piece pc=color_of_piece(g->board.board[g->promo_from])?choices[i]:(Piece)(choices[i]+BP-WP);
+        render_piece_box(g,ren,pc,pr[i].x+pr[i].w/2.0f,pr[i].y+pr[i].h/2.0f,pr[i].h*(0.78f+0.20f*smooth),1.0f);
     }
 }
 
@@ -6834,7 +6910,10 @@ static void move_box_rect(const Gui *g, SDL_Rect *r)
 static void render_move_list(Gui *g)
 {
     SDL_Renderer *ren = g->ren;
-    bool use_tree=g->mode==MODE_ANALYSIS&&g->pgntree;
+    if(play_mode(g))play_sync(g);
+    MoveNode *display_root=play_mode(g)?g->play_tree:g->pgntree;
+    MoveNode *display_cur=play_mode(g)?g->play_view:g->tree_cur;
+    bool use_tree=(g->mode==MODE_ANALYSIS||play_mode(g))&&display_root;
     SDL_Rect box;
     move_box_rect(g, &box);
     g->move_box = box;
@@ -6849,7 +6928,7 @@ static void render_move_list(Gui *g)
     MoveNode *main[MAX_PLY];
     int mcount = 0;
     if (use_tree)
-        for (MoveNode *n = g->pgntree->first; n && mcount < MAX_PLY; n = n->first)
+        for (MoveNode *n = display_root->first; n && mcount < MAX_PLY; n = n->first)
             main[mcount++] = n;
 
     mv.n = 0;
@@ -6868,7 +6947,7 @@ static void render_move_list(Gui *g)
         move_to_san(&board,move,solution_san[k],sizeof solution_san[k]);make_move_plumb(&board,move);
     }}
     int total = use_tree ? mcount : solution_visible?g->puzzle_nmoves:g->ply;
-    const Board *initial=use_tree?&g->pgntree->board:g->ply?&g->before[0]:&g->board;
+    const Board *initial=use_tree?&display_root->board:g->ply?&g->before[0]:&g->board;
     int offset=initial->side==BLACK?1:0;
     int first_number=initial->fullmove_number>0?initial->fullmove_number:1;
     int nrows = (total + offset + 1) / 2;
@@ -6954,9 +7033,9 @@ static void render_move_list(Gui *g)
     if (g->move_scroll < 0) g->move_scroll = 0;
 
     /* auto-follow the current node */
-    if (g->move_follow && g->tree_cur) {
+    if (g->move_follow && (use_tree?display_cur!=NULL:true)) {
         for (int i = 0; i < mv.n; i++) {
-            if (mv.toks[i].node == g->tree_cur) {
+            if (use_tree?mv.toks[i].node == display_cur:mv.toks[i].ply==(g->history_browsing?g->history_cursor:g->ply)) {
                 int centre = mv.toks[i].y + mv.row_h / 2;
                 int want = centre - box.h / 2;
                 if (want < 0) want = 0;
@@ -6997,7 +7076,7 @@ static void render_move_list(Gui *g)
         Uint8 r = 195, gg = 194, b = 193;
         review_badge_color(t->cls, &r, &gg, &b);
         SDL_Color mv_c = { r, gg, b, 255 };
-        if ((t->node && t->node == g->tree_cur)||(g->mode==MODE_PUZZLE&&t->ply>0&&t->ply==g->ply)) {
+        if ((t->node && t->node == display_cur)||(!use_tree&&t->ply>0&&t->ply==(g->history_browsing?g->history_cursor:g->ply))) {
             SDL_Rect hl = { t->x - 3, ty - 2, t->w + 6, mv.row_h };
             ui_move_background(g,hl,true);
             mv_c = (SDL_Color){255, 255, 255, 255};
@@ -7010,8 +7089,8 @@ static void render_move_list(Gui *g)
             if (!t->node && t->w == 0) mv_c = (SDL_Color){147, 146, 145, 255};
             render_text(g, g->font_move, t->text,
                         t->x + (t->w > 0 ? 24 : 0), ty, mv_c);
-            if ((t->node||(g->mode==MODE_PUZZLE&&t->ply>0)) && g->move_hit_count < MAX_PLY + 64) {
-                SDL_Rect hr = { t->x, ty - 2, t->w, mv.row_h };
+            if ((t->node||(!use_tree&&t->ply>0)) && g->move_hit_count < MAX_PLY + 64) {
+                SDL_Rect hr = { t->x, ty - 2, (PANEL_W-60)/2, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
                 g->move_hit_ply[g->move_hit_count]=t->ply;
                 g->move_hit_node[g->move_hit_count++] = t->node;
@@ -7021,7 +7100,7 @@ static void render_move_list(Gui *g)
             if (badge_w)
                 draw_badge_circle(g, ren, t->x + 10, ty + 10, 9, t->cls);
             render_text(g, g->font_move, t->text, t->x + badge_w, ty, mv_c);
-            if ((t->node||(g->mode==MODE_PUZZLE&&t->ply>0)) && g->move_hit_count < MAX_PLY + 64) {
+            if ((t->node||(!use_tree&&t->ply>0)) && g->move_hit_count < MAX_PLY + 64) {
                 SDL_Rect hr = { t->x - 2, ty - 2, t->w + 4, mv.row_h };
                 g->move_hit_rect[g->move_hit_count] = hr;
                 g->move_hit_ply[g->move_hit_count]=t->ply;
@@ -8174,11 +8253,13 @@ static void handle_openings_keydown(Gui *g, const SDL_KeyboardEvent *ke)
         g->flipped = !g->flipped;
         return;
     }
-    if (k == SDLK_UP) { if (g->opening_sel > 0) g->opening_sel--; openings_load_selected(g); return; }
-    if (k == SDLK_DOWN) {
+    if (k == SDLK_PAGEUP) { if (g->opening_sel > 0) g->opening_sel--; openings_load_selected(g); return; }
+    if (k == SDLK_PAGEDOWN) {
         if (g->opening_sel + 1 < g->opening_match_count) g->opening_sel++;
         openings_load_selected(g); return;
     }
+    if (k == SDLK_UP) {openings_step_back(g);openings_step_back(g);return;}
+    if (k == SDLK_DOWN) {openings_step_forward(g);openings_step_forward(g);return;}
     if (k == SDLK_LEFT)  { openings_step_back(g); return; }
     if (k == SDLK_RIGHT) { openings_step_forward(g); return; }
     if (k == SDLK_BACKSPACE || k == SDLK_DELETE) {
@@ -8228,6 +8309,7 @@ static void handle_openings_mousedown(Gui *g)
             }
         }
     }
+    if(g->selected==sq){clear_selection(g);return;}
     Piece piece = g->board.board[sq];
     if (piece != EMPTY && ((g->board.side == WHITE) == WHITE_PIECE(piece))) {
         MoveList all;
@@ -8442,7 +8524,7 @@ static void render_openings(Gui *g, SDL_Renderer *ren)
     render_text(g, g->font_small, info, g->panel_x, list.y + list.h + 6,
                 (SDL_Color){ 150, 210, 230, 255 });
     render_text(g, g->font_tiny,
-                "move on board to browse  type to filter  Left/Right step  Enter analyse  Esc back",
+                ui_tr(g,"Arrows: moves · PgUp/PgDn: openings · Enter: analysis","方向键：步进 · PgUp/PgDn：开局 · 回车：分析"),
                 g->panel_x, g->board_y + 8 * g->sq + 6,
                 (SDL_Color){ 110, 120, 130, 255 });
 }
@@ -8578,6 +8660,10 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     set_render_color(ren, 30, 30, 34);
     ui_background(g,ren);
 
+    Board live_board=g->board,view_board;int live_ply=g->ply,live_selected=g->selected,live_targets=g->targets.count,live_anims=g->anim_count;
+    GameState live_state=g->state;Uint32 live_check=g->check_anim,live_end=g->end_anim;
+    bool viewing=history_board(g,&view_board);
+    if(viewing){g->board=view_board;g->ply=g->history_cursor;g->state=game_state(&view_board);if(!play_branch(g)){g->selected=-1;g->targets.count=0;}g->anim_count=0;g->check_anim=g->end_anim=0;}
     draw_board_squares(g, ren);
     draw_coordinates(g);
     draw_eval_bar(g, ren);
@@ -8586,8 +8672,10 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     int last_to = -1;
     if (g->ply > 0) {
         Move m = g->history[g->ply - 1];
+        if(viewing&&g->mode==MODE_PUZZLE&&g->puzzle_solution_visible){Board pre;if(fen_parse(g->puzzle_cur.fen,&pre)){for(int k=0;k<g->ply;k++){Move next;if(!uci_to_move(&pre,g->puzzle_moves[k],&next))break;m=next;make_move_plumb(&pre,next);}}}
+        if(viewing&&play_branch(g)&&g->play_view->parent)m=g->play_view->move;
         last_to = MOVE_TO(m);
-        last_cls = (g->tree_cur && g->tree_cur->parent)
+        last_cls = (g->mode==MODE_ANALYSIS && g->tree_cur && g->tree_cur->parent)
                        ? (ReviewClass)g->tree_cur->cls : RC_NONE;
         if (last_cls == RC_NONE) last_cls = (ReviewClass)g->review_cls[g->ply - 1];
         draw_square_highlight(g, ren, MOVE_FROM(m), 215, 215, 70);
@@ -8621,7 +8709,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 
     if (last_to >= 0 && last_cls != RC_NONE && g->anim_count == 0)
         draw_quality_badge(g, ren, last_to, last_cls);
-    draw_end_overlay(g, ren, now);
+    if(!viewing)draw_end_overlay(g, ren, now);
     if(g->mode==MODE_PUZZLE)ui_puzzle_feedback(g);
     draw_engine_arrows(g, ren);
     draw_annotations(g, ren);
@@ -8679,6 +8767,7 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
                          g->sq * pick_scale(g, now, true), 1.0f);
     }
 
+    if(viewing){g->board=live_board;g->ply=live_ply;g->state=live_state;g->selected=live_selected;g->targets.count=live_targets;g->anim_count=live_anims;g->check_anim=live_check;g->end_anim=live_end;}
     render_status(g);
     render_engine_panel(g, ren);
     render_review_bar(g, ren);
@@ -8715,7 +8804,8 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
         }
     }
     render_chat(g, ren);
-    if (!g->chat_open && !(g->mode == MODE_ANALYSIS && g->analysis_summary)) {
+    if(g->history_browsing){SDL_Rect field;input_rect(g,&field);char label[128];snprintf(label,sizeof label,ui_tr(g,"History %d/%d · Return to latest position","回看 %d/%d · 返回最新局面"),g->history_cursor,g->mode==MODE_PUZZLE&&g->puzzle_solution_visible?g->puzzle_nmoves:g->ply);ui_button(g,field,label,-1,false);}
+    else if (!g->chat_open && !(g->mode == MODE_ANALYSIS && g->analysis_summary)) {
         if (g->san_open) render_input_box(g, ren);
         else             render_san_hint(g);
     }

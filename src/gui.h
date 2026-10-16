@@ -327,6 +327,9 @@ typedef struct {
     SDL_Rect    move_hit_rect[MAX_PLY + 64];
     MoveNode   *move_hit_node[MAX_PLY + 64];
     int         move_hit_ply[MAX_PLY + 64];
+    MoveNode   *play_tree, *play_live, *play_view;
+    bool        history_browsing;
+    int         history_cursor;   /* Display-only cursor; live board/history continue updating. */
     int         move_hit_count;
 
     /* scrollable move-tree panel */
@@ -357,6 +360,8 @@ typedef struct {
 
     /* promotion chooser state */
     int    promo_from, promo_to;/* -1 when inactive */
+    float promo_hover[4];
+    Uint32 promo_hover_at;
     Uint32 promo_open_ms;       /* for double-click = queen */
     char   msg[160];
     Uint32 msg_until;

@@ -15,8 +15,10 @@ static void puzzle_fixture(Gui *g,const char *id,const char *fen,const char *mov
  u->current_entry=-1;u->entry_count=1;u->reviewing=false;g->scene=SCENE_GAME;g->mode=MODE_PUZZLE;click(g,g->board_x+30,g->board_y+8*g->sq+40);u->reviewing=false;g->puzzle_counted=false;
 }
 static void square_click(Gui *g,const char *name){int file=name[0]-'a',rank=name[1]-'1';click(g,g->board_x+(g->flipped?7-file:file)*g->sq+g->sq/2,g->board_y+(g->flipped?rank:7-rank)*g->sq+g->sq/2);}
-static void promotion_click(Gui *g,int choice){int file=g->promo_to%8,rank=g->promo_to/8;int sx=g->board_x+(g->flipped?7-file:file)*g->sq,sy=g->board_y+(g->flipped?rank:7-rank)*g->sq;int x=sx-8,y=sy-90;if(y<g->board_y)y=sy+g->sq+10;if(x<g->board_x)x=sx;if(x+216>g->board_x+8*g->sq)x=g->board_x+8*g->sq-216;click(g,x+choice*54+25,y+23);}
+static void promotion_click(Gui *g,int choice){int file=g->promo_to%8,rank=g->promo_to/8;int sx=g->board_x+(g->flipped?7-file:file)*g->sq,sy=g->board_y+(g->flipped?rank:7-rank)*g->sq;int d=sy<g->board_y+4*g->sq?1:-1;click(g,sx+g->sq/2,sy+d*choice*g->sq+g->sq/2);}
+
 static void game_fixture(Gui *g,GameMode mode,const char *fen,const char *line,const char *result){
+ if(g->play_tree)mt_free(g->play_tree);g->play_tree=g->play_live=g->play_view=NULL;g->history_browsing=false;
  fen_parse(fen,&g->board);g->ply=0;g->scene=SCENE_GAME;g->mode=mode;g->selected=-1;g->targets.count=0;g->anim_count=0;g->san_open=false;g->ui->local_game_saved=false;
  char moves[256];snprintf(moves,sizeof moves,"%s",line);char *save=NULL;
  for(char *uci=strtok_r(moves," ",&save);uci;uci=strtok_r(NULL," ",&save)){Move move;if(!uci_to_move(&g->board,uci,&move))abort();g->before[g->ply]=g->board;g->history[g->ply]=move;move_to_san(&g->board,move,g->move_san[g->ply],8);make_move_plumb(&g->board,move);g->ply++;}
@@ -72,25 +74,43 @@ int main(int argc,char **argv)
  puzzle_fixture(g,"ui-white-promotion","8/P6k/8/8/8/8/7K/8 b - - 0 1","h7h6 a7a8n");
  int old_entry=g->ui->current_entry;keypress(g,SDLK_n);if(g->ui->current_entry!=old_entry)return 28;
  square_click(g,"a7");capture(g,r,"promotion-white-dot");square_click(g,"a8");if(g->promo_from<0)return 29;capture(g,r,"puzzle-promotion-menu");
+ SDL_Event hover={0};hover.type=SDL_MOUSEMOTION;hover.motion.x=g->board_x+g->sq/2;hover.motion.y=g->flipped?g->board_y+8*g->sq-g->sq/2:g->board_y+g->sq/2;gui_handle_event(g,&hover);g->promo_hover_at=SDL_GetTicks()-200;capture(g,r,"promotion-hover-expanded");if(g->promo_hover[0]<0.99f)return 74;
+ hover.motion.x=g->board_x-10;gui_handle_event(g,&hover);g->promo_hover_at=SDL_GetTicks()-200;capture(g,r,"promotion-hover-reset");if(g->promo_hover[0]>0.01f)return 75;
  promotion_click(g,0);if(!g->puzzle_wrong||g->puzzle_badge_kind!=-1)return 30;g->anim_count=0;capture(g,r,"puzzle-incorrect-icon");
  keypress(g,SDLK_n);if(g->ui->current_entry!=old_entry)return 31;
- keypress(g,SDLK_LEFT);if(g->puzzle_wrong||g->board.board[algebraic_to_sq("a7")]!=WP||g->puzzle_step!=1)return 32;
- square_click(g,"a7");square_click(g,"a8");promotion_click(g,3);if(!g->puzzle_done||g->board.board[algebraic_to_sq("a8")]!=WN)return 33;g->anim_count=0;capture(g,r,"puzzle-correct-icon");
+ keypress(g,SDLK_LEFT);if(!g->history_browsing||g->history_cursor!=1||!g->puzzle_wrong||g->puzzle_step!=1)return 32;
+ square_click(g,"a7");if(g->selected>=0||!g->history_browsing)return 61;keypress(g,SDLK_RIGHT);if(g->history_browsing)return 62;
+ square_click(g,"a7");square_click(g,"a8");promotion_click(g,1);if(!g->puzzle_done||g->board.board[algebraic_to_sq("a8")]!=WN)return 33;g->anim_count=0;capture(g,r,"puzzle-correct-icon");
  keypress(g,SDLK_n);if(g->ui->current_entry==old_entry||g->puzzle_step!=1||g->puzzle_badge_kind)return 34;capture(g,r,"next-puzzle-clean-moves");if(g->move_hit_count!=1)return 35;
  puzzle_fixture(g,"ui-black-promotion","8/7k/8/8/8/8/p6K/8 w - - 0 1","h2h3 a2a1r");
- square_click(g,"a2");square_click(g,"a1");if(g->promo_from<0)return 36;promotion_click(g,1);if(!g->puzzle_done||g->board.board[algebraic_to_sq("a1")]!=BR)return 37;
+ square_click(g,"a2");square_click(g,"a1");if(g->promo_from<0)return 36;promotion_click(g,2);if(!g->puzzle_done||g->board.board[algebraic_to_sq("a1")]!=BR)return 37;
  puzzle_fixture(g,"ui-reveal",start_fen,"e2e4 e7e5 g1f3 b8c6");keypress(g,SDLK_r);capture(g,r,"puzzle-answer-rows");if(!g->puzzle_solution_visible||g->ply!=4||g->move_hit_count!=4||g->msg[0])return 38;
  int hit=-1;for(int i=0;i<g->move_hit_count;i++)if(g->move_hit_ply[i]==2)hit=i;if(hit<0)return 39;
- SDL_Rect row=g->move_hit_rect[hit];click(g,row.x+row.w/2,row.y+10);capture(g,r,"puzzle-answer-rewind");if(g->puzzle_step!=1||g->move_hit_count!=4)return 40;
+ SDL_Rect row=g->move_hit_rect[hit];click(g,row.x+row.w/2,row.y+10);capture(g,r,"puzzle-answer-rewind");if(!g->history_browsing||g->history_cursor!=2||g->puzzle_step!=4||g->move_hit_count!=4)return 40;
+ for(int target=1;target<=4;target++){int found=-1;for(int i=0;i<g->move_hit_count;i++)if(g->move_hit_ply[i]==target)found=i;if(found<0)return 63;SDL_Rect cell=g->move_hit_rect[found];click(g,cell.x+cell.w/2,cell.y+10);if((g->history_browsing?g->history_cursor:g->ply)!=target||g->ply!=4)return 64;}
+ keypress(g,SDLK_UP);if(g->history_cursor!=2)return 65;keypress(g,SDLK_DOWN);if(g->history_browsing)return 66;
  Board root;fen_parse(start_fen,&root);Move first;uci_to_move(&root,"e2e4",&first);make_move_plumb(&root,first);
  click(g,g->panel_x+60,g->board_y+580);if(g->mode!=MODE_ANALYSIS||g->ply||!g->pgntree||!board_rep_equal(&root,&g->pgntree->board))return 41;capture(g,r,"puzzle-to-analysis");
+ /* Live boards are immutable during local branch exploration. */
+ for(int mode=MODE_SINGLE;mode<=MODE_ONLINE;mode++){
+   if(mode!=MODE_SINGLE&&mode!=MODE_LOCAL&&mode!=MODE_ONLINE)continue;
+   game_fixture(g,(GameMode)mode,start_fen,"e2e4 e7e5 g1f3 b8c6","");Board live=g->board;
+   capture(g,r,"live-move-navigation");keypress(g,SDLK_UP);if(!g->history_browsing||g->history_cursor!=2)return 67;
+   square_click(g,"d2");if(g->selected!=algebraic_to_sq("d2"))return 68;square_click(g,"d2");if(g->selected>=0||g->targets.count)return 69;
+   square_click(g,"d2");square_click(g,"d4");if(g->ply!=4||!board_rep_equal(&live,&g->board)||!g->play_view||strcmp(g->play_view->san,"d4"))return 70;
+   capture(g,r,"live-local-variation");if(!g->play_tree->first->first->first->next)return 71;
+   keypress(g,SDLK_LEFT);keypress(g,SDLK_RIGHT);if(strcmp(g->play_view->san,"Nf3"))return 72;
+   keypress(g,SDLK_DOWN);if(g->history_browsing||!board_rep_equal(&live,&g->board))return 73;
+ }
  /* Random-side selection is resolved afresh for each computer game. */
  g->scene=SCENE_SINGLE_SETUP;g->setup_field=0;g->setup_side=1;keypress(g,SDLK_RIGHT);if(g->setup_side!=2)return 42;capture(g,r,"random-side-option");
  keypress(g,SDLK_RIGHT);if(g->setup_side!=0)return 43;keypress(g,SDLK_LEFT);if(g->setup_side!=2)return 44;
  if(g->engine_path[0]){unsigned colors=0;srand(12345);for(int k=0;k<32;k++){g->scene=SCENE_SINGLE_SETUP;g->setup_field=0;keypress(g,SDLK_RETURN);if(g->mode!=MODE_SINGLE||g->human_color<WHITE||g->human_color>BLACK||g->setup_side!=2)return 45;colors|=1u<<g->human_color;}if(colors!=3)return 46;}
  game_fixture(g,MODE_SINGLE,start_fen,"","");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_SINGLE)return 47;
  game_fixture(g,MODE_SINGLE,start_fen,"e2e4 e7e5 f1c4 b8c6 d1h5 g8f6 h5f7","");capture(g,r,"finished-game-analysis-option");
- Board final=g->board;click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=7||mt_depth(g->tree_cur)!=7||strcmp(g->pgn_hdr.result,"1-0")||!board_rep_equal(&final,&g->board))return 48;
+ Board final=g->board;keypress(g,SDLK_UP);square_click(g,"g7");square_click(g,"g6");if(!g->history_browsing||g->ply!=7||!board_rep_equal(&final,&g->board))return 76;
+ click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=7||mt_depth(g->tree_cur)!=7||strcmp(g->pgn_hdr.result,"1-0")||!board_rep_equal(&final,&g->board))return 48;
+ MoveNode *fork=g->pgntree;for(int k=0;k<5;k++)fork=fork->first;if(!fork->first->next||strcmp(fork->first->next->san,"g6"))return 77;
  keypress(g,SDLK_LEFT);if(g->ply!=6)return 49;keypress(g,SDLK_RIGHT);if(g->ply!=7)return 50;capture(g,r,"finished-game-analysis");
  game_fixture(g,MODE_ONLINE,start_fen,"e2e4 e7e5","0-1");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||strcmp(g->pgn_hdr.result,"0-1"))return 51;
  const char *custom="7k/8/8/8/8/8/R7/K7 w - - 0 23";Board initial;fen_parse(custom,&initial);
