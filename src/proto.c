@@ -23,6 +23,7 @@ static const char *const PROTO_NAMES[PROTO_MSG_COUNT] = {
     [PROTO_C2S_LOGIN]       = "login",
     [PROTO_C2S_LOGOUT]      = "logout",
     [PROTO_C2S_PUZZLE_RESULT] = "puzzle_result",
+    [PROTO_C2S_REQUEST] = "request",
     [PROTO_S2C_WELCOME]     = "welcome",
     [PROTO_S2C_QUEUED]      = "queued",
     [PROTO_S2C_ROOM]        = "room",
@@ -39,6 +40,7 @@ static const char *const PROTO_NAMES[PROTO_MSG_COUNT] = {
     [PROTO_S2C_DRAW]        = "draw",
     [PROTO_S2C_SPECTATE]    = "spectate",
     [PROTO_S2C_AUTH]        = "auth",
+    [PROTO_S2C_RESPONSE]    = "response",
 };
 
 const char *proto_msg_name(ProtoMsg m)

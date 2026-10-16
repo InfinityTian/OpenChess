@@ -1,0 +1,4 @@
+Lichess chess puzzles, CC0
+https://database.lichess.org/#puzzles
+Source mirror: https://huggingface.co/datasets/Lichess/chess-puzzles-with-games
+Subset: 600-2799, unique puzzle IDs; bundled for offline use.

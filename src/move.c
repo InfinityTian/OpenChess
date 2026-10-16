@@ -333,7 +333,7 @@ void make_move_plumb(Board *b, Move m)
 
     if (flags & FLAG_PROMO) {
         Piece pr = MOVE_PROMO(m);
-        b->board[to] = WHITE_PIECE(p) ? pr : (Piece)(pr + (BP - WN));
+        b->board[to] = WHITE_PIECE(p) ? pr : (Piece)(pr + (BP - WP));
     }
 
     b->ep_square = -1;
@@ -419,7 +419,7 @@ bool uci_to_move(const Board *b, const char *uci, Move *out)
             Piece want = (pc == 'r') ? WR : (pc == 'b') ? WB : (pc == 'n') ? WN : WQ;
             Piece got = MOVE_PROMO(m);
             if (WHITE_PIECE(got)) { if (got != want) continue; }
-            else                  { if (got != (Piece)(want + (BP - WN))) continue; }
+            else                  { if (got != (Piece)(want + (BP - WP))) continue; }
         }
         *out = m;
         return true;

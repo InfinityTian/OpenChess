@@ -10,7 +10,7 @@ static int failures = 0;
 
 int main(void)
 {
-    CHECK(PROTO_VERSION == 2);
+    CHECK(PROTO_VERSION == 3);
 
     /* every known type has a non-empty wire name */
     for (int i = 1; i < PROTO_MSG_COUNT; i++)

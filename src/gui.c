@@ -41,6 +41,26 @@ static void draw_chip(Gui *g, SDL_Renderer *ren, int x, int y, int w, int h,
                       const char *txt);
 static int  mv_width(Gui *g, const char *s);
 static float pick_scale(const Gui *g, Uint32 now, bool dragging);
+static void ui_init(Gui *g);
+static void ui_close(Gui *g);
+static void ui_assets(Gui *g);
+static void ui_background(Gui *g, SDL_Renderer *ren);
+static void ui_home(Gui *g);
+static void ui_tick(Gui *g, Uint32 now);
+static bool ui_event(Gui *g,const SDL_Event *event);
+static bool ui_render_page(Gui *g);
+static void ui_shell(Gui *g);
+static void ui_modal_render(Gui *g);
+static void ui_puzzle_strip(Gui *g);
+static void ui_daily_panel(Gui *g);
+static void ui_next_puzzle(Gui *g,int day);
+static void ui_puzzle_settle(Gui *g,bool solved);
+static void ui_save_analysis(Gui *g,const char *name);
+static const char *ui_old_text(Gui *g,const char *s);
+static void ui_round(SDL_Renderer *r,SDL_Rect rect,SDL_Color color,int radius);
+static void ui_button(Gui *g,SDL_Rect r,const char *label,int icon,bool primary);
+static const char *ui_tr(Gui *g,const char *en,const char *zh);
+
 
 /* ------------------------------------------------------------------ */
 /* style registries                                                    */
@@ -49,7 +69,7 @@ static float pick_scale(const Gui *g, Uint32 now, bool dragging);
 static const char *ANIM_KEYS[ANIM_STYLE_COUNT]   = { "arcade", "slide", "fade", "none" };
 static const char *ANIM_LABELS[ANIM_STYLE_COUNT] = { "Arcade", "Slide", "Fade", "None" };
 /* One cadence for click moves, playback, previews and reverse moves. */
-static const Uint32 ANIM_DURS[ANIM_STYLE_COUNT]  = { 320, 320, 320, 0 };
+static const Uint32 ANIM_DURS[ANIM_STYLE_COUNT]  = { 380, 380, 380, 0 };
 #define PICK_GLOW_SIZE 256
 #define PICK_GLOW_FRAMES 24
 #define PICK_GLOW_COLS 6
@@ -78,7 +98,7 @@ static void layout_base(Gui *g)
     g->board_x = BOARD_X;
     g->board_y = BOARD_Y;
     g->panel_x = g->board_x + 8 * g->sq + 24;
-    g->win_w   = g->panel_x + PANEL_W;
+    g->win_w   = WIN_W;
     g->win_h   = WIN_H;
 }
 
@@ -329,8 +349,9 @@ static void set_render_color(SDL_Renderer *ren, Uint8 r, Uint8 g, Uint8 b)
 
 static void draw_rect(SDL_Renderer *ren, SDL_Rect *rc, Uint8 r, Uint8 g, Uint8 b, bool fill)
 {
+    if(r<110&&g<130&&b<150&&fill){r=242;g=248;b=253;}
     set_render_color(ren, r, g, b);
-    if (fill) SDL_RenderFillRect(ren, rc);
+    if (fill) ui_round(ren,*rc,(SDL_Color){r,g,b,255},6);
     else SDL_RenderDrawRect(ren, rc);
 }
 
@@ -339,6 +360,8 @@ static void render_text(Gui *g, TTF_Font *font, const char *txt,
 {
     if (!font || !txt || !*txt) return;
     SDL_Renderer *ren = g->ren;
+    txt=ui_old_text(g,txt);
+    if(g->ui&&g->ui->legacy_paint&&col.r>200&&col.g>200&&col.b>200&&font!=g->font_piece[0]&&font!=g->font_piece[1])col=(SDL_Color){35,57,80,col.a};
     SDL_Surface *s = TTF_RenderUTF8_Blended(font, txt, col);
     if (!s) return;
     SDL_Texture *t = SDL_CreateTextureFromSurface(ren, s);
@@ -542,13 +565,15 @@ static void rebuild_fonts(Gui *g)
 
     const char *fpath = find_font();
     if (fpath) {
+        char ui_font[1200];snprintf(ui_font,sizeof ui_font,"%s/fonts/NotoSansCJKsc-Regular.otf",path_assets());
+        FILE *probe=fopen(ui_font,"rb");const char *ui_path=probe?ui_font:fpath;if(probe)fclose(probe);
         float sc = eff_scale(g);
         g->font_piece[0] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
         g->font_piece[1] = TTF_OpenFont(fpath, (int)lroundf(SQ_SIZE * sc));
-        g->font_ui      = TTF_OpenFont(fpath, (int)lroundf(22 * sc));
-        g->font_small   = TTF_OpenFont(fpath, (int)lroundf(15 * sc));
-        g->font_tiny    = TTF_OpenFont(fpath, (int)lroundf(12 * sc));
-        g->font_move    = TTF_OpenFont(fpath, (int)lroundf(17 * sc));
+        g->font_ui      = TTF_OpenFont(ui_path, (int)lroundf(22 * sc));
+        g->font_small   = TTF_OpenFont(ui_path, (int)lroundf(15 * sc));
+        g->font_tiny    = TTF_OpenFont(ui_path, (int)lroundf(12 * sc));
+        g->font_move    = TTF_OpenFont(ui_path, (int)lroundf(17 * sc));
         if (g->font_move) TTF_SetFontStyle(g->font_move, TTF_STYLE_BOLD);
         if (!g->font_piece[0] || !g->font_piece[1] || !g->font_ui ||
             !g->font_small || !g->font_tiny || !g->font_move)
@@ -774,7 +799,7 @@ static void enqueue_move_anim(Gui *g, const Board *pre, Move m)
     s.cursor_x = g->mouse.x;
     s.cursor_y = g->mouse.y;
     s.cursor_scale = s.fast ? pick_scale(g, SDL_GetTicks(), true) : 1.0f;
-    s.dur     = g->anim_fast ? 90 : ANIM_DURS[g->anim_style];
+    s.dur     = g->anim_fast ? 110 : ANIM_DURS[g->anim_style];
     s.started = false;
     s.start   = 0;
     g->anim_fast = false;
@@ -1105,7 +1130,7 @@ static void resolve_promotion(Gui *g, Piece promo)
     g->promo_from = g->promo_to = -1;
     MoveList legal;
     gen_legal(&g->board, &legal);
-    Piece w = color_of_piece(g->board.board[from]) ? promo : (Piece)(promo + (BP - WN));
+    Piece w = promo; /* encoded promotions always use white piece codes */
     for (int i = 0; i < legal.count; i++) {
         Move m = legal.moves[i];
         if (MOVE_FROM(m) == from && MOVE_TO(m) == to &&
@@ -1421,6 +1446,7 @@ static void resume_game(Gui *g)
 
 static void go_to_menu(Gui *g)
 {
+    if(g->ui){ui_home(g);return;}
     save_game(g);
     clear_selection(g);
     g->promo_from = g->promo_to = -1;
@@ -1614,7 +1640,12 @@ void gui_load_config(Gui *g, const char *path)
 
         lower_in_place(key);
         lower_in_place(val);
-        if (strcmp(key, "board") == 0) snprintf(vboard, sizeof vboard, "%s", val);
+        if(g->ui&&strcmp(key,"ui_language")==0)g->ui->zh=strcmp(val,"zh")==0;
+        else if(g->ui&&strcmp(key,"background_file")==0)snprintf(g->ui->background_file,sizeof g->ui->background_file,"%s",rawval);
+        else if(g->ui&&strcmp(key,"background_fit")==0)g->ui->background_fit=atoi(val)!=0;
+        else if(g->ui&&strcmp(key,"background_mask")==0)g->ui->background_mask=clampi(atoi(val),0,255);
+        else if(g->ui&&strcmp(key,"avatar")==0)g->ui->avatar=atoi(val)%12;
+        else if (strcmp(key, "board") == 0) snprintf(vboard, sizeof vboard, "%s", val);
         else if (strcmp(key, "pieces") == 0) snprintf(vpieces, sizeof vpieces, "%s", val);
         else if (strcmp(key, "animation") == 0) snprintf(vanim, sizeof vanim, "%s", val);
         else if (strcmp(key, "engine") == 0) snprintf(vengine, sizeof vengine, "%s", rawval);
@@ -1702,6 +1733,7 @@ void gui_save_config(Gui *g)
     fprintf(f, "sound = %d\n", g->sound ? 1 : 0);
     fprintf(f, "max_fps = %d\n", g->max_fps);
     fprintf(f, "puzzle_rating = %d\n", g->puzzle_rating);
+    if(g->ui)fprintf(f,"ui_language = %s\nbackground_file = %s\nbackground_fit = %d\nbackground_mask = %d\navatar = %d\n",g->ui->zh?"zh":"en",g->ui->background_file,g->ui->background_fit,g->ui->background_mask,g->ui->avatar);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     if (g->online_url[0]) fprintf(f, "online_server = %s\n", g->online_url);
     if (g->online_nick[0]) fprintf(f, "nick = %s\n", g->online_nick);
@@ -1825,6 +1857,7 @@ Gui *gui_create(void)
     board_reset(&g->board);
     recompute_state(g);
     fen_refresh(g);
+    ui_init(g);
     return g;
 }
 
@@ -1898,6 +1931,36 @@ static void load_badges(Gui *g)
 
 /* Build a high-resolution anti-aliased ring (with a soft glow) once, so the
  * capture indicator is crisp when scaled down. */
+static SDL_Texture *make_target_dot(SDL_Renderer *ren)
+{
+    const int size=128;
+    SDL_Surface *surface=SDL_CreateRGBSurfaceWithFormat(0,size,size,32,SDL_PIXELFORMAT_RGBA32);
+    if(!surface)return NULL;
+    SDL_LockSurface(surface);
+    for(int y=0;y<size;y++)for(int x=0;x<size;x++){
+        float dx=x+0.5f-size/2.0f,dy=y+0.5f-size/2.0f,radius=size*0.30f;
+        float distance=sqrtf(dx*dx+dy*dy);
+        float body=clampi((int)((radius+1.0f-distance)*255.0f),0,255)/255.0f;
+        float edge=fmaxf(0,sqrtf(dx*dx+(dy-3.0f)*(dy-3.0f))-radius);
+        float shadow=0.19f*expf(-edge*edge/48.0f);
+        float face_alpha=body*0.88f,alpha=face_alpha+shadow*(1-face_alpha);
+        float lighting=fmaxf(0,fminf(1,(dy+radius)/(2*radius)));
+        float face=255.0f-24.0f*lighting,a=shadow*(1-face_alpha);
+        Uint8 red=alpha>0?(Uint8)((face*face_alpha+28*a)/alpha):0;
+        Uint8 green=alpha>0?(Uint8)(((face+lighting)*face_alpha+43*a)/alpha):0;
+        Uint8 blue=alpha>0?(Uint8)(((face+3*lighting)*face_alpha+61*a)/alpha):0;
+        ((Uint32 *)((Uint8 *)surface->pixels+y*surface->pitch))[x]=SDL_MapRGBA(surface->format,red,green,blue,(Uint8)(alpha*255));
+    }
+    SDL_UnlockSurface(surface);
+    SDL_Texture *texture=SDL_CreateTextureFromSurface(ren,surface);SDL_FreeSurface(surface);
+    if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
+#if SDL_VERSION_ATLEAST(2,0,12)
+        SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
+#endif
+    }
+    return texture;
+}
+
 static SDL_Texture *make_ring_texture(SDL_Renderer *ren, int size,
                                       Uint8 cr, Uint8 cg, Uint8 cb)
 {
@@ -1989,13 +2052,12 @@ static SDL_Texture *make_pick_glow(SDL_Renderer *ren)
 void gui_init_assets(Gui *g, SDL_Renderer *ren)
 {
     g->ren = ren;
+    ui_assets(g);
     g->win = SDL_RenderGetWindow(ren);
 
     /* Size the window to the magnified base canvas and allow zooming out to 0.5. */
     if (g->win) {
-        SDL_SetWindowMinimumSize(g->win,
-                                 (int)lroundf(g->win_w * 0.5f),
-                                 (int)lroundf(g->win_h * 0.5f));
+        SDL_SetWindowMinimumSize(g->win,1024,720);
         SDL_SetWindowSize(g->win,
                           (int)lroundf(g->win_w * g->zoom),
                           (int)lroundf(g->win_h * g->zoom));
@@ -2017,6 +2079,7 @@ void gui_init_assets(Gui *g, SDL_Renderer *ren)
     load_badges(g);
     if (!g->capture_ring)
         g->capture_ring = make_ring_texture(ren, 256, 225, 80, 70);
+    if(!g->target_dot)g->target_dot=make_target_dot(ren);
     if (!g->pick_glow) g->pick_glow = make_pick_glow(ren);
 }
 
@@ -2032,6 +2095,7 @@ static void destroy_thumbs(SDL_Texture ***arr, int n)
 void gui_destroy(Gui *g)
 {
     if (!g) return;
+    ui_close(g);
     engine_install_free(g->engine_install);
     if (g->ai) ai_stop(g->ai);
     if (g->eval_ai) ai_stop(g->eval_ai);
@@ -2048,6 +2112,7 @@ void gui_destroy(Gui *g)
     for (int i = 0; i < 12; i++)
         if (g->badge_tex[i]) SDL_DestroyTexture(g->badge_tex[i]);
     if (g->capture_ring) SDL_DestroyTexture(g->capture_ring);
+    if (g->target_dot) SDL_DestroyTexture(g->target_dot);
     if (g->pick_glow) SDL_DestroyTexture(g->pick_glow);
     for (int i = 0; i < 3; i++)
         if (g->end_tex[i]) SDL_DestroyTexture(g->end_tex[i]);
@@ -2362,6 +2427,7 @@ static void puzzle_split_moves(Gui *g)
  * little as the rating rises so it stays responsive at low ratings. */
 static void puzzle_score(Gui *g, bool solved)
 {
+    if(g->ui){ui_puzzle_settle(g,solved);return;}
     double ur = g->puzzle_rating;
     double pr = g->puzzle_cur.rating;
     double exp = 1.0 / (1.0 + pow(10.0, (pr - ur) / 400.0));
@@ -2380,6 +2446,7 @@ static void puzzle_score(Gui *g, bool solved)
  * letting the player retry so they can learn from the mistake. */
 static void puzzle_mistake(Gui *g)
 {
+    if(g->ui&&(g->ui->reviewing||(g->ui->current_entry>=0&&g->ui->entries[g->ui->current_entry].day)))return;
     if (g->puzzle_counted) return;
     g->puzzle_counted = true;
     puzzle_score(g, false);
@@ -2387,6 +2454,7 @@ static void puzzle_mistake(Gui *g)
 
 static void open_puzzle(Gui *g)
 {
+    if(g->ui){ui_next_puzzle(g,0);return;}
     if (!g->puzzles) return;
     const PuzzleBand *b = &PUZZLE_BANDS[g->puzzle_band];
     int rmin = b->rmin, rmax = b->rmax;
@@ -2445,7 +2513,7 @@ static bool puzzle_human_move(Gui *g, Move m)
 
     Move want;
     if (!uci_to_move(&g->board, g->puzzle_moves[g->puzzle_step], &want)) return false;
-    if (MOVE_FROM(m) != MOVE_FROM(want) || MOVE_TO(m) != MOVE_TO(want))
+    if (MOVE_FROM(m) != MOVE_FROM(want) || MOVE_TO(m) != MOVE_TO(want) || MOVE_PROMO(m)!=MOVE_PROMO(want))
         return false;
 
     push_move(g, want);
@@ -2467,6 +2535,7 @@ static bool puzzle_human_move(Gui *g, Move m)
 
 static void puzzle_hint(Gui *g)
 {
+    if(g->ui&&!g->ui->reviewing&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].hint=true;
     if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
     if (g->puzzle_step < g->puzzle_nmoves)
         set_msg(g, "Hint: %s", g->puzzle_moves[g->puzzle_step]);
@@ -2474,6 +2543,7 @@ static void puzzle_hint(Gui *g)
 
 static void puzzle_reveal(Gui *g)
 {
+    if(g->ui&&!g->ui->reviewing&&g->ui->current_entry>=0)g->ui->entries[g->ui->current_entry].reveal=true;
     if (g->mode != MODE_PUZZLE || g->puzzle_done || g->puzzle_failed) return;
     char line[160];
     line[0] = '\0';
@@ -2539,7 +2609,7 @@ static void handle_puzzle_setup_mousedown(Gui *g)
 static void render_puzzle_setup(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
     render_text_centered(g, g->font_ui, "Puzzles", g->win_w / 2, 150,
                          (SDL_Color){ 235, 225, 200, 255 });
 
@@ -2988,6 +3058,7 @@ static void handle_account_keydown(Gui *g, const SDL_KeyboardEvent *ke)
     if (logged) {
         if (k == SDLK_RETURN || k == SDLK_KP_ENTER) {
             if (g->online) online_logout(g->online);
+            g->account_token[0]=g->account_user[0]=0;g->config_dirty=true;
             g->account_local = false;
             g->account_open = false;
         }
@@ -3102,6 +3173,7 @@ static void handle_account_mousedown(Gui *g)
     if (logged) {
         if (pt_in(&btn[0], p.x, p.y)) {
             if (g->online) online_logout(g->online);
+            g->account_token[0]=g->account_user[0]=0;g->config_dirty=true;
             g->account_local = false;
             g->account_open = false;
             return;
@@ -3341,7 +3413,7 @@ static void online_status_text(const Gui *g, char *buf, size_t n)
 static void render_online(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_ui,
                          g->online_ui == 1 ? "Online Matchmaking" : "Online Multiplayer",
@@ -3438,7 +3510,7 @@ static void ape_tab_rect(const Gui *g, int i, SDL_Rect *r)
 static void ape_cell_rect(const Gui *g, int j, SDL_Rect *r)
 {
     int cw = 170, ch = 150, gap = 12;
-    int x0 = (g->win_w - (APE_COLS * cw + (APE_COLS - 1) * gap)) / 2;
+    int x0 = 208 + (g->win_w - 208 - (APE_COLS * cw + (APE_COLS - 1) * gap)) / 2;
     r->x = x0 + (j % APE_COLS) * (cw + gap);
     r->y = 170 + (j / APE_COLS) * (ch + gap);
     r->w = cw;
@@ -3663,7 +3735,7 @@ static void engine_rects(const Gui *g, SDL_Rect items[ENGINE_MAX],
     if (w < 200) { x = 80; w = g->win_w - 160; }
     for (int i = 0; i < ENGINE_MAX; i++)
         items[i] = (SDL_Rect){ x, y0 + i * (h + gap), w, h };
-    custom->x = 80; custom->y = g->win_h - 150; custom->w = g->win_w - 260; custom->h = 40;
+    custom->x = 240; custom->y = g->win_h - 150; custom->w = g->win_w - 260; custom->h = 40;
     back->w = 140; back->h = 42; back->x = g->win_w - 160; back->y = g->win_h - 90;
 }
 
@@ -3672,7 +3744,7 @@ static void engine_ctrl_rects(const Gui *g,
                               SDL_Rect plus[ENG_CTRL_COUNT])
 {
     (void)g;
-    int x = 80, y0 = 170, w = 30, h = 30, gap = 8;
+    int x = 240, y0 = 170, w = 30, h = 30, gap = 8;
     for (int i = 0; i < ENG_CTRL_COUNT; i++) {
         int y = y0 + i * (h + gap);
         minus[i] = (SDL_Rect){ x + 224, y, w, h };
@@ -3762,7 +3834,7 @@ static void handle_engine_textinput(Gui *g, const SDL_TextInputEvent *te)
 
 static void handle_engine_mousedown(Gui *g)
 {
-    SDL_Rect install = {80, 380, 440, 40};
+    SDL_Rect install = {240, 380, 360, 40};
     if (!g->engine_path[0] && pt_in(&install, g->mouse.x, g->mouse.y)) {
         gui_ensure_engine(g);
         detect_engines(g);
@@ -3977,7 +4049,7 @@ static void pgn_import_load(Gui *g)
     PgnHeaders h;
     MoveNode *root = pgn_parse_text(g->pgn_text, &h);
 
-    if (!root->first) { set_msg(g, "No moves parsed", NULL); mt_free(root); return; }
+    if (!root->first && !strstr(g->pgn_text,"[FEN ")) { set_msg(g, "No moves parsed", NULL); mt_free(root); return; }
 
     /* Always clear the previous analysis tree/board and replace it. */
     if (g->pgntree) { mt_free(g->pgntree); g->pgntree = NULL; }
@@ -4713,6 +4785,7 @@ static void debug_ui_log(Gui *g, int ex, int ey)
 
 void gui_handle_event(Gui *g, const SDL_Event *e)
 {
+    if(ui_event(g,e))return;
     switch (e->type) {
         case SDL_QUIT:
             g->quit = true;
@@ -5002,14 +5075,16 @@ void gui_tick(Gui *g, Uint32 now)
                            : "Stockfish installation failed. Click to retry.");
         }
     }
+    if(g->online){
+        if(online_state(g->online)==ONLINE_PLAYING&&g->mode==MODE_ONLINE)online_tick(g);
+        else online_lobby_tick(g);
+    }
+    ui_tick(g,now);
     if (g->scene == SCENE_HOSTJOIN) {
         hostjoin_tick(g);
         return;
     }
-    if (g->scene == SCENE_ONLINE) {
-        online_lobby_tick(g);
-        return;
-    }
+    if (g->scene == SCENE_ONLINE)return;
     if (g->scene != SCENE_GAME) return;
 
     if (g->mode == MODE_SINGLE) {
@@ -5017,7 +5092,7 @@ void gui_tick(Gui *g, Uint32 now)
     } else if (g->mode == MODE_LOCAL) {
         local_tick(g);
     } else if (g->mode == MODE_ONLINE) {
-        online_tick(g);
+        /* Updated by the global online pump above. */
     } else if (g->mode == MODE_ANALYSIS) {
         if (g->review_on) { review_step(g); return; }
         if (g->eval_ai) {
@@ -5208,7 +5283,7 @@ static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
 {
     if (!WHITE_PIECE(piece) && !BLACK_PIECE(piece)) return;
     bool white = WHITE_PIECE(piece);
-    Uint8 cr = white ? 80 : 255, cg = white ? 210 : 92, cb = white ? 245 : 100;
+    Uint8 cr = white ? 64 : 244, cg = white ? 183 : 91, cb = white ? 231 : 102;
 
     float ex = tx - fx, ey = ty - fy;
     float D = sqrtf(ex * ex + ey * ey);
@@ -5228,7 +5303,7 @@ static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
     float tlx = hx - ux * L, tly = hy - uy * L;
     float hw = g->sq * 0.30f;
     float px = -uy * hw, py = ux * hw;
-    Uint8 opacity = (Uint8)(165.0f * (1.0f - t * t));
+    Uint8 opacity = (Uint8)(202.0f * (1.0f - t * t * t));
 
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
 #if SDL_VERSION_ATLEAST(2, 0, 18)
@@ -5592,8 +5667,15 @@ static void draw_target_dot(Gui *g, SDL_Renderer *ren, int sq, bool capture)
         draw_capture_ring(g, ren, cx, cy, g->sq, 225);
     } else {
         int rad = (int)(g->sq * 0.15f);
+        if(g->target_dot){
+            int size=(int)lroundf(g->sq*0.50f);
+            SDL_Rect target={cx-size/2,cy-size/2,size,size};
+            SDL_RenderCopy(ren,g->target_dot,NULL,&target);return;
+        }
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(ren, 235, 238, 242, 120);
+        SDL_SetRenderDrawColor(ren,28,43,61,18);fill_circle(ren,cx,cy+1,rad+2);
+        SDL_SetRenderDrawColor(ren,28,43,61,24);fill_circle(ren,cx,cy+1,rad+1);
+        SDL_SetRenderDrawColor(ren, 247, 249, 252, 210);
         fill_circle(ren, cx, cy, rad);
         SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
     }
@@ -5804,7 +5886,7 @@ static void draw_promo_chooser(Gui *g, SDL_Renderer *ren)
     Piece choices[4] = { WQ, WR, WB, WN };
     for (int i = 0; i < 4; i++) {
         Piece p = color_of_piece(g->board.board[g->promo_from]) ? choices[i]
-                 : (Piece)(choices[i] + (BP - WN));
+                 : (Piece)(choices[i] + (BP - WP));
         float cx = pr[i].x + pr[i].w / 2.0f;
         float cy = pr[i].y + pr[i].h / 2.0f;
         render_piece_box(g, ren, p, cx, cy, (float)(pr[i].h - 8), 1.0f);
@@ -7042,6 +7124,7 @@ static void render_fen_box(Gui *g, SDL_Renderer *ren)
 static void render_text_centered_rect_f(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
                                         TTF_Font *font, const char *label)
 {
+    if(g->ui){ui_button(g,*r,ui_old_text(g,label),!strcmp(label,"Hint")?1:-1,false);return;}
     draw_rect(ren, r, 45, 45, 50, true);
     draw_rect(ren, r, 120, 120, 130, false);
     int ty = r->y + (r->h - text_height(g, font)) / 2;
@@ -7110,7 +7193,7 @@ static void render_hud(Gui *g)
 static void render_setup(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_ui, "Singleplayer", g->win_w / 2, 150,
                          (SDL_Color){ 235, 225, 200, 255 });
@@ -7189,7 +7272,7 @@ static void hj_field(Gui *g, SDL_Renderer *ren, SDL_Rect *r,
 static void render_hostjoin(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_ui, "Local Multiplayer", g->win_w / 2, 150,
                          (SDL_Color){ 235, 225, 200, 255 });
@@ -7380,7 +7463,7 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
 static void render_appearance(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_ui, "Appearance", g->win_w / 2, 30,
                          (SDL_Color){ 235, 225, 200, 255 });
@@ -7455,7 +7538,7 @@ static const int FPS_CHOICES[] = { 0, 60, 120, 144, 240, 320 };
 static void settings_row_rect(const Gui *g, int i, SDL_Rect *r)
 {
     int h = 40, gap = 14;
-    *r = (SDL_Rect){ 120, 180 + i * (h + gap), g->win_w - 240, h };
+    *r = (SDL_Rect){ 240, 180 + i * (h + gap), g->win_w - 280, h };
 }
 
 static void settings_back_rect(const Gui *g, SDL_Rect *r)
@@ -7616,7 +7699,7 @@ static void render_settings_tabs(Gui *g, SDL_Renderer *ren)
 static void render_settings_engine(Gui *g, SDL_Renderer *ren)
 {
     if (g->engine_install_status[0] || !g->engine_path[0]) {
-        SDL_Rect install = {80, 380, 440, 40};
+        SDL_Rect install = {240, 380, 360, 40};
         draw_rect(ren, &install, 45, 65, 80, true);
         render_text(g, g->font_small,
                     g->engine_install_status[0] ? g->engine_install_status : "Install Stockfish (click)",
@@ -7625,7 +7708,7 @@ static void render_settings_engine(Gui *g, SDL_Renderer *ren)
     char cur[600];
     snprintf(cur, sizeof cur, "Current: %s",
              g->engine_path[0] ? g->engine_path : "(none)");
-    render_text(g, g->font_small, cur, 80, 126, (SDL_Color){ 150, 180, 200, 255 });
+    render_text(g, g->font_small, cur, 240, 126, (SDL_Color){ 150, 180, 200, 255 });
 
     SDL_Rect items[ENGINE_MAX], custom, back;
     engine_rects(g, items, &custom, &back);
@@ -7642,14 +7725,14 @@ static void render_settings_engine(Gui *g, SDL_Renderer *ren)
                              "No engines found on PATH - enter a path below",
                              g->win_w / 2, 190, (SDL_Color){ 200, 150, 140, 255 });
 
-    render_text(g, g->font_small, "Analysis settings", 80, 150,
+    render_text(g, g->font_small, "Analysis settings", 240, 150,
                 (SDL_Color){ 200, 200, 200, 255 });
     SDL_Rect minus[ENG_CTRL_COUNT], plus[ENG_CTRL_COUNT];
     engine_ctrl_rects(g, minus, plus);
     for (int i = 0; i < ENG_CTRL_COUNT; i++) {
         int y = minus[i].y;
         bool on = (i == g->eng_ctrl_focus);
-        render_text(g, g->font_small, ENG_CTRL_LABELS[i], 80, y + 6,
+        render_text(g, g->font_small, ENG_CTRL_LABELS[i], 240, y + 6,
                     on ? (SDL_Color){ 235, 235, 235, 255 }
                        : (SDL_Color){ 175, 185, 195, 255 });
         char val[32];
@@ -7657,7 +7740,7 @@ static void render_settings_engine(Gui *g, SDL_Renderer *ren)
         if ((i == 3 || i == 4) && v == 0) snprintf(val, sizeof val, "unlimited");
         else if (i == 0 && v == 0)        snprintf(val, sizeof val, "off");
         else                              snprintf(val, sizeof val, "%d", v);
-        render_text(g, g->font_small, val, 158, y + 6, (SDL_Color){ 220, 225, 235, 255 });
+        render_text(g, g->font_small, val, 318, y + 6, (SDL_Color){ 220, 225, 235, 255 });
         draw_rect(ren, &minus[i], on ? 90 : 55, on ? 150 : 60, on ? 200 : 75, true);
         render_text_centered(g, g->font_small, "-", minus[i].x + minus[i].w / 2, y + 6,
                              (SDL_Color){ 235, 235, 235, 255 });
@@ -7717,7 +7800,7 @@ static void render_settings_rows(Gui *g, SDL_Renderer *ren)
 static void render_settings(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_ui, "Settings", g->win_w / 2, 28,
                          (SDL_Color){ 235, 225, 200, 255 });
@@ -8086,7 +8169,7 @@ static void report_value_box(Gui *g, SDL_Renderer *ren, int x, int y,
 static void render_review_report(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_ui, "Game Report", g->win_w / 2, 22,
                          (SDL_Color){ 235, 225, 200, 255 });
@@ -8175,7 +8258,7 @@ static void render_openings(Gui *g, SDL_Renderer *ren)
 {
     Uint32 now = SDL_GetTicks();
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     draw_board_squares(g, ren);
     draw_coordinates(g);
@@ -8248,7 +8331,7 @@ static void render_openings(Gui *g, SDL_Renderer *ren)
 static void render_menu(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     render_text_centered(g, g->font_piece[0], "OpenChess", g->win_w / 2, 40,
                          (SDL_Color){ 235, 225, 200, 255 });
@@ -8374,7 +8457,7 @@ static void render_chat(Gui *g, SDL_Renderer *ren)
 static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
 {
     set_render_color(ren, 30, 30, 34);
-    SDL_RenderClear(ren);
+    ui_background(g,ren);
 
     draw_board_squares(g, ren);
     draw_coordinates(g);
@@ -8595,6 +8678,8 @@ static void draw_debug_overlay(Gui *g, SDL_Renderer *ren)
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
 }
 
+#include "ui21.inc"
+
 void gui_render(Gui *g, SDL_Renderer *ren)
 {
     Uint32 now = SDL_GetTicks();
@@ -8604,7 +8689,10 @@ void gui_render(Gui *g, SDL_Renderer *ren)
      * SDL reset it (e.g. after a window/display change). */
     apply_render_scale(g);
 
-    if (g->scene == SCENE_MENU)
+    bool new_page=ui_render_page(g);
+    if(g->ui)g->ui->legacy_paint=!new_page;
+    if(new_page){}
+    else if (g->scene == SCENE_MENU)
         render_menu(g, ren);
     else if (g->scene == SCENE_SINGLE_SETUP)
         render_setup(g, ren);
@@ -8625,6 +8713,14 @@ void gui_render(Gui *g, SDL_Renderer *ren)
     else
         render_game(g, ren, now);
 
+    if(g->ui){
+        g->ui->legacy_paint=false;
+        if(g->scene==SCENE_GAME&&g->mode==MODE_PUZZLE){ui_puzzle_strip(g);ui_daily_panel(g);}
+        if(g->scene==SCENE_GAME&&g->mode==MODE_ANALYSIS)ui_button(g,(SDL_Rect){g->board_x,g->board_y+8*g->sq+28,200,40},ui_tr(g,"Save analysis","保存分析"),3,false);
+        if(g->scene==SCENE_PUZZLE_SETUP)ui_button(g,(SDL_Rect){g->board_x,g->win_h-210,310,40},ui_tr(g,g->ui->rated?"Rated · click to switch":"Unrated · click to switch",g->ui->rated?"计分练习 · 点击切换":"不计分练习 · 点击切换"),-1,false);
+        ui_shell(g);
+        ui_modal_render(g);
+    }
     if (g->account_open && g->scene != SCENE_ONLINE) render_account(g, ren);
 
     draw_debug_overlay(g, ren);

@@ -41,7 +41,7 @@ static bool expect(Transport *t, ProtoMsg type, int timeout_ms, ProtoFrame *out)
 {
     unsigned long deadline = now_ms() + (unsigned long)timeout_ms;
     while (now_ms() < deadline) {
-        char line[1024];
+        char line[32768];
         int r = transport_poll(t, line, sizeof line);
         if (r == 1) {
             ProtoFrame f; memset(&f, 0, sizeof f);
@@ -508,16 +508,30 @@ int main(void)
         CHECK(proto_field_bool(&f, "ok", false) == true);
         proto_frame_free(&f);
 
-        /* puzzle result raises the puzzle rating above 1500 */
+        /* Legacy client-claimed results are rejected in protocol v3. */
         {
             cJSON *m = proto_new(PROTO_C2S_PUZZLE_RESULT);
             cJSON_AddNumberToObject(m, "rating", 1200);
             cJSON_AddBoolToObject(m, "solved", true);
             send_json(u1, m);
         }
-        CHECK(expect(u1, PROTO_S2C_AUTH, 2000, &f));
-        CHECK(proto_field_int(&f, "puzzle_rating", 0) > 1500);
+        CHECK(expect(u1, PROTO_S2C_REJECT, 2000, &f));
+        CHECK(strstr(proto_field_str(&f,"reason"),"validated")!=NULL);
         proto_frame_free(&f);
+
+        {
+            cJSON *q=proto_new(PROTO_C2S_REQUEST);cJSON_AddStringToObject(q,"op","puzzle.next");cJSON_AddBoolToObject(q,"rated",true);send_json(u1,q);
+            CHECK(expect(u1,PROTO_S2C_RESPONSE,3000,&f));
+            const cJSON *puzzle=cJSON_GetObjectItem(f.root,"puzzle");
+            const cJSON *attempt=cJSON_GetObjectItem(f.root,"attempt");
+            char id[80]="",moves[256]="";
+            if(cJSON_IsString(attempt))snprintf(id,sizeof id,"%s",attempt->valuestring);
+            const cJSON *line=cJSON_GetObjectItem(puzzle,"moves");if(cJSON_IsString(line))snprintf(moves,sizeof moves,"%s",line->valuestring);
+            CHECK(id[0]&&moves[0]);proto_frame_free(&f);
+            q=proto_new(PROTO_C2S_REQUEST);cJSON_AddStringToObject(q,"op","puzzle.submit");cJSON_AddStringToObject(q,"attempt",id);cJSON_AddStringToObject(q,"moves",moves);send_json(u1,q);
+            CHECK(expect(u1,PROTO_S2C_AUTH,3000,&f));CHECK(proto_field_int(&f,"puzzle_rating",0)>1500);proto_frame_free(&f);
+            CHECK(expect(u1,PROTO_S2C_RESPONSE,3000,&f));CHECK(cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetObjectItem(f.root,"result"),"solved")));proto_frame_free(&f);
+        }
 
         /* rated game: alice (White) resigns, Elo moves both ways */
         {

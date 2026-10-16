@@ -33,7 +33,7 @@ typedef struct {
     uint8_t castling;        /* bit0: WK, bit1: WQ, bit2: BK, bit3: BQ */
     int ep_square;           /* -1 if none */
     int halfmove_clock;
-    uint8_t fullmove_number;
+    int fullmove_number;
 } Board;
 
 void  board_reset(Board *b);

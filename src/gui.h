@@ -5,6 +5,7 @@
 #include "move.h"
 #include "ai.h"
 #include "engine_install.h"
+#include "ui21.h"
 #include "net.h"
 #include "online.h"
 #include "puzzle.h"
@@ -19,14 +20,14 @@
 
 /* Default layout (also used by main.c and the tests). The live values are the
  * Gui fields board_x/board_y/sq/panel_x/win_w/win_h, which change on resize. */
-#define SQ_SIZE     88
+#define SQ_SIZE     76
 #define EVAL_BAR_W  46
-#define BOARD_X     (EVAL_BAR_W + 20)
-#define BOARD_Y     28
+#define BOARD_X     248
+#define BOARD_Y     90
 #define PANEL_X     (BOARD_X + 8 * SQ_SIZE + 24)
 #define PANEL_W     436
-#define WIN_W       (PANEL_X + PANEL_W)
-#define WIN_H       760
+#define WIN_W       1440
+#define WIN_H       900
 
 #define MIN_SQ      44
 #define MAX_SQ      150
@@ -70,6 +71,13 @@ typedef enum {
     SCENE_SETTINGS,       /* settings: engine + gameplay + audio/video */
     SCENE_REVIEW,         /* post-game review summary report */
     SCENE_GAME,
+    SCENE_ANALYSIS_HOME,
+    SCENE_POSITION_SETUP,
+    SCENE_SOCIAL,
+    SCENE_PROFILE,
+    SCENE_LIBRARY,
+    SCENE_DAILY,
+    SCENE_PREFERENCES,
 } Scene;
 
 /* Active game mode once in SCENE_GAME. */
@@ -128,6 +136,7 @@ typedef struct {
 typedef struct {
     Scene    scene;
     GameMode mode;
+    Ui21 *ui;
 
     Board  board;
     Board  before[MAX_PLY];     /* position before move ply */
@@ -443,6 +452,7 @@ typedef struct {
     SDL_Texture *tex_piece[16]; /* piece textures (indexed by Piece) */
     SDL_Texture *badge_tex[12]; /* move-quality badge textures (indexed by ReviewClass) */
     SDL_Texture *capture_ring;  /* high-res anti-aliased capture ring */
+    SDL_Texture *target_dot;    /* shaded anti-aliased legal-move marker */
     SDL_Texture *pick_glow;     /* cached bloom frames with a clearing inner tail */
     SDL_Texture *end_tex[3];    /* vector winner, checkmate and draw symbols */
     bool   quit;

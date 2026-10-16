@@ -127,7 +127,7 @@ bool san_find(const Board *b, const char *san, Move *out)
 
     /* match against legal moves */
     /* stored promo pieces are always white minors (WN..WQ); normalize */
-    Piece promo_w = white ? promo : (Piece)(promo - (BP - WN));
+    Piece promo_w = white ? promo : (Piece)(promo - (BP - WP));
     MoveList ml;
     gen_legal(b, &ml);
     for (int i = 0; i < ml.count; i++) {
@@ -539,6 +539,8 @@ char *pgn_serialize(const MoveNode *root, const PgnHeaders *h)
         buf_ch(&b, '\n');
     }
 
+    if(root){Board initial;board_reset(&initial);char original[128],current[128];fen_generate(&initial,original,sizeof original);fen_generate(&root->board,current,sizeof current);
+        if(strcmp(original,current)){buf_str(&b,"[SetUp \"1\"]\n[FEN \"");buf_str(&b,current);buf_str(&b,"\"]\n\n");}}
     if (root && root->first) {
         emit_line(root->first, &b);
         buf_ch(&b, '\n');

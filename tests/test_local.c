@@ -42,6 +42,7 @@ static void click_sq(Gui *g, const char *alg, bool down)
 
 int main(void)
 {
+    SDL_setenv("XDG_DATA_HOME","/tmp/openchess-local-test-data",1);
     SDL_Init(0);
     if (!net_init() || !net_available()) {
         printf("SKIP: SDL_net unavailable\n");

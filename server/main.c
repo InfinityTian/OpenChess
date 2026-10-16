@@ -18,6 +18,7 @@
 
 #include "libwebsockets.h"
 #include "accounts.h"
+#include "community.h"
 #include "../src/proto.h"
 #include "../src/board.h"
 #include "../src/move.h"
@@ -36,8 +37,8 @@
 
 #define MAX_SESS 256
 #define MAX_ROOMS 256
-#define SRV_QLEN 32
-#define SRV_LINELEN 2048
+#define SRV_QLEN 8
+#define SRV_LINELEN 32768
 #define CODE_LEN 6
 #define MAX_PLY 1024
 
@@ -51,6 +52,9 @@ typedef struct {
 
 typedef struct {
     int          used;
+    char partial[SRV_LINELEN];
+    size_t partial_len;
+    bool compatible;
     struct lws  *wsi;
     char         token[40];
     char         nick[40];
@@ -79,6 +83,8 @@ typedef struct {
     int      used;
     char     code[CODE_LEN + 1];
     int      seat[2];                /* session slots, or -1 */
+    char owner[2][40];
+    char game_id[80],series[40];
     int      started;
     int      over;
     int      rated;                  /* rated game (both logged in) */
@@ -105,6 +111,9 @@ static int     queue_slots[MAX_SESS];
 static int     queue_count;
 static int     g_grace_ms = DEFAULT_GRACE_MS;
 static Accounts *g_accounts = NULL;
+static Workspace *g_workspace;
+static Puzzles *g_puzzles;
+static void persist_game(Room *r,const char *result);
 
 static const char CODE_ALPHABET[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
@@ -113,7 +122,7 @@ static int  srv_cb(struct lws *wsi, enum lws_callback_reasons reason,
 
 static const struct lws_protocols SRV_PROTOCOLS[] = {
     { .name = "chess", .callback = srv_cb, .per_session_data_size = sizeof(PerConn),
-      .rx_buffer_size = 2048 },
+      .rx_buffer_size = 32768 },
     { 0 }
 };
 
@@ -313,6 +322,14 @@ static void start_match(Room *r)
     int a = r->seat[0], b = r->seat[1];
     r->rated = (a >= 0 && b >= 0 && sessions[a].logged_in && sessions[b].logged_in &&
                 sessions[a].want_rated && sessions[b].want_rated);
+    for(int k=0;k<2;k++){
+        Session *player=&sessions[r->seat[k]];
+        snprintf(r->owner[k],40,"%s",player->logged_in?player->user:player->nick);
+        player->pvp_rating=workspace_rating(g_workspace,r->owner[k],workspace_time_class(r->init_time,r->inc_ms));
+    }
+    unsigned char random[16];sqlite3_randomness(16,random);
+    for(int k=0;k<16;k++)snprintf(r->game_id+2*k,3,"%02x",random[k]);
+    if(!r->series[0])snprintf(r->series,sizeof r->series,"%s",r->game_id);
     send_start(r);
 }
 
@@ -381,23 +398,7 @@ static void finish_game(Room *r, const char *result, const char *reason)
     r->over = 1;
     log_result(r, result, reason);
 
-    /* Rated game: update both Elo ratings before announcing the result. */
-    if (r->rated && g_accounts && r->seat[0] >= 0 && r->seat[1] >= 0) {
-        Session *w = &sessions[r->seat[0]], *b = &sessions[r->seat[1]];
-        if (w->logged_in && b->logged_in) {
-            double ea = 1.0 / (1.0 + pow(10.0, (b->pvp_rating - w->pvp_rating) / 400.0));
-            double sb, sw;
-            if (strcmp(result, "1-0") == 0) { sw = 1.0; sb = 0.0; }
-            else if (strcmp(result, "0-1") == 0) { sw = 0.0; sb = 1.0; }
-            else { sw = 0.5; sb = 0.5; }
-            w->pvp_rating += (int)(32.0 * (sw - ea) + 0.5);
-            b->pvp_rating += (int)(32.0 * (sb - (1.0 - ea)) + 0.5);
-            if (w->pvp_rating < 400) w->pvp_rating = 400;
-            if (b->pvp_rating < 400) b->pvp_rating = 400;
-            accounts_set_pvp(g_accounts, w->user_id, w->pvp_rating);
-            accounts_set_pvp(g_accounts, b->user_id, b->pvp_rating);
-        }
-    }
+    persist_game(r,result);
 
     for (int k = 0; k < 2; k++) {
         if (r->seat[k] < 0) continue;
@@ -491,17 +492,24 @@ static bool try_resume(Session *s, const char *tok)
 
 static void apply_account(Session *s, const Account *ac)
 {
+    bool fresh=true;
+    sqlite3_stmt *check=workspace_stmt(g_workspace,"SELECT 1 FROM oc_profiles WHERE owner=?");
+    if(check){sqlite3_bind_text(check,1,ac->name,-1,SQLITE_TRANSIENT);fresh=sqlite3_step(check)!=SQLITE_ROW;sqlite3_finalize(check);}
+    workspace_profile(g_workspace,ac->name,ac->pvp_rating);
+    if(fresh){check=workspace_stmt(g_workspace,"UPDATE oc_ratings SET value=? WHERE owner=? AND category=4");sqlite3_bind_int(check,1,ac->puzzle_rating);sqlite3_bind_text(check,2,ac->name,-1,SQLITE_TRANSIENT);sqlite3_step(check);sqlite3_finalize(check);}
     s->logged_in = true;
     s->user_id = ac->id;
     snprintf(s->user, sizeof s->user, "%s", ac->name);
     snprintf(s->auth_token, sizeof s->auth_token, "%s", ac->token);
     s->pvp_rating = ac->pvp_rating;
-    s->puzzle_rating = ac->puzzle_rating;
+    s->puzzle_rating = workspace_rating(g_workspace,ac->name,4);
     snprintf(s->nick, sizeof s->nick, "%s", ac->name);
 }
 
 static void handle_hello(Session *s, const ProtoFrame *f)
 {
+    s->compatible=proto_field_int(f,"v",0)==PROTO_VERSION;
+    if(!s->compatible){send_reject(s,"Please upgrade to OpenChess 2.1.0 (protocol v3)");return;}
     const char *nick = proto_field_str(f, "nick");
     if (nick && *nick) snprintf(s->nick, sizeof s->nick, "%s", nick);
     const char *tok = proto_field_str(f, "token");
@@ -554,21 +562,6 @@ static void handle_logout(Session *s)
     s->user[0] = '\0';
     s->auth_token[0] = '\0';
     send_auth(s, false, "logged out");
-}
-
-static void handle_puzzle_result(Session *s, const ProtoFrame *f)
-{
-    if (!s->logged_in || !g_accounts) return;
-    int pr = proto_field_int(f, "rating", 1500);
-    bool solved = proto_field_bool(f, "solved", false);
-
-    double ur = s->puzzle_rating, er = 1.0 / (1.0 + pow(10.0, (pr - ur) / 400.0));
-    ur += 32.0 * ((solved ? 1.0 : 0.0) - er);
-    if (ur < 400) ur = 400;
-    if (ur > 3000) ur = 3000;
-    s->puzzle_rating = (int)(ur + 0.5);
-    accounts_set_puzzle(g_accounts, s->user_id, s->puzzle_rating);
-    send_auth(s, true, NULL);
 }
 
 static void handle_create(Session *s, const ProtoFrame *f)
@@ -630,12 +623,15 @@ static void handle_queue(Session *s, const ProtoFrame *f)
     s->queued = 1;
     queue_slots[queue_count++] = sidx(s);
 
-    while (queue_count >= 2) {
-        int a = queue_slots[0], b = queue_slots[1];
-        memmove(&queue_slots[0], &queue_slots[2],
-                sizeof queue_slots[0] * (queue_count - 2));
-        queue_count -= 2;
-        sessions[a].queued = sessions[b].queued = 0;
+    while(queue_count>=2) {
+        int ai=-1,bi=-1;
+        for(int i=0;i<queue_count&&ai<0;i++)for(int j=i+1;j<queue_count;j++){
+            Session *a=&sessions[queue_slots[i]],*b=&sessions[queue_slots[j]];
+            if(a->want_time==b->want_time&&a->want_inc==b->want_inc&&a->want_rated==b->want_rated&&(!a->logged_in||!b->logged_in||a->user_id!=b->user_id)){ai=i;bi=j;break;}
+        }
+        if(ai<0)break;
+        int a=queue_slots[ai],b=queue_slots[bi];queue_remove(b);queue_remove(a);
+        sessions[a].queued=sessions[b].queued=0;
 
         char code[CODE_LEN + 1];
         int ri = alloc_room(code, sessions[a].want_time, sessions[a].want_inc);
@@ -903,6 +899,8 @@ static void on_closed(Session *s)
     s->wsi = NULL;
 }
 
+#include "community_runtime.inc"
+
 static int srv_cb(struct lws *wsi, enum lws_callback_reasons reason,
                   void *user, void *in, size_t len)
 {
@@ -937,14 +935,17 @@ static int srv_cb(struct lws *wsi, enum lws_callback_reasons reason,
     case LWS_CALLBACK_RECEIVE: {
         if (!s) return 0;
         s->last_rx = now_ms();
-        char text[SRV_LINELEN];
-        size_t n = len < sizeof text - 1 ? len : sizeof text - 1;
-        memcpy(text, in, n);
-        text[n] = '\0';
+        if(s->partial_len+len>=SRV_LINELEN)return -1;
+        memcpy(s->partial+s->partial_len,in,len);s->partial_len+=len;
+        if(!lws_is_final_fragment(wsi)||lws_remaining_packet_payload(wsi))return 0;
+        s->partial[s->partial_len]=0;
+        char text[SRV_LINELEN];memcpy(text,s->partial,s->partial_len+1);s->partial_len=0;
 
         ProtoFrame f;
         if (!proto_parse_dir(text, PROTO_DIR_C2S, &f)) return 0;
+        if(f.type!=PROTO_C2S_HELLO&&!s->compatible){proto_frame_free(&f);send_reject(s,"Upgrade required: protocol v3");return 0;}
         switch (f.type) {
+        case PROTO_C2S_REQUEST: handle_request(s,&f); break;
         case PROTO_C2S_HELLO:        handle_hello(s, &f); break;
         case PROTO_C2S_CREATE:       handle_create(s, &f); break;
         case PROTO_C2S_JOIN:         handle_join(s, &f); break;
@@ -961,7 +962,7 @@ static int srv_cb(struct lws *wsi, enum lws_callback_reasons reason,
         case PROTO_C2S_REGISTER:     handle_register(s, &f); break;
         case PROTO_C2S_LOGIN:        handle_login(s, &f); break;
         case PROTO_C2S_LOGOUT:       handle_logout(s); break;
-        case PROTO_C2S_PUZZLE_RESULT:handle_puzzle_result(s, &f); break;
+        case PROTO_C2S_PUZZLE_RESULT:send_reject(s,"Use validated puzzle attempts"); break;
         case PROTO_C2S_PING:         handle_ping(s, &f); break;
         case PROTO_C2S_PONG:         break;   /* heartbeat reply */
         default: break;
@@ -1081,6 +1082,10 @@ int main(int argc, char **argv)
     const char *db = getenv("OPENCHESS_ACCOUNTS_DB");
     if (!db || !*db) db = "openchess_accounts.db";
     g_accounts = accounts_open(db);
+    g_workspace=workspace_open(db);
+    const char *puzzles=getenv("OPENCHESS_PUZZLES");
+    g_puzzles=puzzles_load(puzzles&&*puzzles?puzzles:"assets/puzzles/starter.jsonl");
+    workspace_daily_fill(g_workspace,g_puzzles,workspace_today());
     if (!g_accounts)
         fprintf(stderr, "openchessd: accounts unavailable (no SQLite store)\n");
 
@@ -1110,5 +1115,6 @@ int main(int argc, char **argv)
     usleep(40000);
     lws_context_destroy(ctx);
     accounts_close(g_accounts);
+    workspace_close(g_workspace);puzzles_free(g_puzzles);
     return 0;
 }

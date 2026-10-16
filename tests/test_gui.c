@@ -379,14 +379,14 @@ static int test_position_effects(SDL_Renderer *ren)
     click.button.y -= 22;
     gui_handle_event(g, &click);
     SDL_Rect piece_area = { g->board_x + 4 * g->sq - 16,
-                            g->board_y + 5 * g->sq + 24, 120, 130 };
+                            g->board_y + 5 * g->sq + 24, g->sq + 26, 130 };
     SDL_Rect ripple = { g->board_x + 3 * g->sq, g->board_y + 5 * g->sq,
                         2 * g->sq, 2 * g->sq };
     g->pick_started = SDL_GetTicks() - 100;
     gui_render(g, ren);
     float cursor_x = black_piece_x(ren, piece_area);
     if (fabsf(cursor_x - g->mouse.x) > 2) {
-        fprintf(stderr, "off-centre pickup did not place the piece at the cursor\n");
+        fprintf(stderr, "off-centre pickup did not place the piece at the cursor: measured=%.1f pointer=%d selected=%d scale=%.2f area=%d,%d,%d,%d\n",cursor_x,g->mouse.x,g->selected,g->tf_scale,piece_area.x,piece_area.y,piece_area.w,piece_area.h);
         return 1;
     }
     uint64_t pressed = region_hash(ren, ripple);
@@ -1611,7 +1611,7 @@ int main(void)
         g->scene = SCENE_MENU;
         g->saved.valid = false;
         gui_render(g, ren);
-        SDL_Rect pill = { g->win_w - 132 - 24, 24, 132, 34 };
+        SDL_Rect pill = { 256, 490, 250, 34 }; /* home play card mode switch */
         int wx, wy;
         SDL_RenderLogicalToWindow(ren, (float)(pill.x + 20), (float)(pill.y + 17),
                                   &wx, &wy);

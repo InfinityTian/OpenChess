@@ -3,6 +3,7 @@
 
 #include "transport.h"
 #include "board.h"
+#include "cJSON.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -93,6 +94,9 @@ const char *online_username(const OnlineSession *o);
 const char *online_auth_token(const OnlineSession *o);
 int         online_pvp_rating(const OnlineSession *o);
 int         online_puzzle_rating(const OnlineSession *o);
+/* Takes ownership of args. Replies are owned by the caller after taking. */
+int online_request(OnlineSession *o,const char *operation,cJSON *args);
+cJSON *online_take_response(OnlineSession *o);
 
 /* Spectate a running game by room code (read-only). */
 void online_spectate(OnlineSession *o, const char *code);

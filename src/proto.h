@@ -11,7 +11,7 @@
  * The LAN transport keeps its own simple line protocol (HELLO/FEN/MOVE/BYE).
  */
 
-#define PROTO_VERSION 2
+#define PROTO_VERSION 3
 
 typedef enum {
     PROTO_MSG_UNKNOWN = 0,
@@ -36,6 +36,7 @@ typedef enum {
     PROTO_C2S_LOGIN,
     PROTO_C2S_LOGOUT,
     PROTO_C2S_PUZZLE_RESULT,
+    PROTO_C2S_REQUEST,
 
     /* server -> client */
     PROTO_S2C_WELCOME,
@@ -54,6 +55,7 @@ typedef enum {
     PROTO_S2C_DRAW,
     PROTO_S2C_SPECTATE,
     PROTO_S2C_AUTH,
+    PROTO_S2C_RESPONSE,
 
     PROTO_MSG_COUNT
 } ProtoMsg;

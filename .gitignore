@@ -36,3 +36,6 @@ tests/test_puzzle
 tests/test_review
 tests/test_opening
 tests/test_movetree
+
+/tests/test_workspace
+/tests/test_ui21

@@ -98,7 +98,7 @@ bool fen_parse(const char *fen, Board *out)
             char *end2;
             long fm = strtol(p, &end2, 10);
             if (fm < 1 || fm > 9999) return false;
-            b.fullmove_number = (uint8_t)(fm > 255 ? 255 : fm);
+            b.fullmove_number = (int)fm;
             p = end2;
         }
     }

@@ -19,8 +19,8 @@
 #include <unistd.h>
 #define WS_DBG(...) do { if (getenv("OPENCHESS_WS_VERBOSE")) fprintf(stderr, __VA_ARGS__); } while (0)
 
-#define WS_QLEN    64
-#define WS_LINELEN 1024
+#define WS_QLEN    32
+#define WS_LINELEN 32768
 
 typedef struct {
     Transport base;
@@ -35,6 +35,8 @@ typedef struct {
     int  port;
     int  ssl;
     char path[128];
+    char partial[WS_LINELEN];
+    size_t partial_len;
     char inq[WS_QLEN][WS_LINELEN];
     int  in_head, in_tail, in_count;
     char outq[WS_QLEN][WS_LINELEN];
@@ -45,7 +47,7 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
                  void *user, void *in, size_t len);
 
 static const struct lws_protocols WS_PROTOCOLS[] = {
-    { .name = "chess", .callback = ws_cb, .rx_buffer_size = 2048 },
+    { .name = "chess", .callback = ws_cb, .rx_buffer_size = 32768 },
     { 0 }
 };
 
@@ -144,12 +146,12 @@ static int ws_cb(struct lws *wsi, enum lws_callback_reasons reason,
 
     case LWS_CALLBACK_CLIENT_RECEIVE:
         pthread_mutex_lock(&w->mu);
-        if (w->in_count < WS_QLEN) {
-            size_t n = len < WS_LINELEN - 1 ? len : WS_LINELEN - 1;
-            memcpy(w->inq[w->in_tail], in, n);
-            w->inq[w->in_tail][n] = '\0';
-            w->in_tail = (w->in_tail + 1) % WS_QLEN;
-            w->in_count++;
+        if(w->partial_len+len>=WS_LINELEN){pthread_mutex_unlock(&w->mu);return -1;}
+        memcpy(w->partial+w->partial_len,in,len);w->partial_len+=len;
+        if(lws_is_final_fragment(wsi)&&!lws_remaining_packet_payload(wsi)) {
+            w->partial[w->partial_len]=0;
+            if(w->in_count<WS_QLEN){memcpy(w->inq[w->in_tail],w->partial,w->partial_len+1);w->in_tail=(w->in_tail+1)%WS_QLEN;w->in_count++;}
+            w->partial_len=0;
         }
         pthread_mutex_unlock(&w->mu);
         break;

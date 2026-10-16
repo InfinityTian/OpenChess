@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
     SDL_Window *win = SDL_CreateWindow(
         "OpenChess", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, WIN_W, WIN_H,
         SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_RESIZABLE);
+    if(win)SDL_SetWindowMinimumSize(win,1024,720);
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         TTF_Quit();

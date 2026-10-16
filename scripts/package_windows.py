@@ -124,6 +124,9 @@ with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as out
             out.write(file, file.relative_to(dist))
 digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 print(f"Verified portable EXE with {len(copied)} DLLs; ZIP SHA256: {digest}", flush=True)
+if os.environ.get("OPENCHESS_PACKAGE_ONLY") == "1":
+    print("ARCHIVE=" + str(archive), flush=True)
+    sys.exit(0)
 repo = os.environ["GITHUB_REPOSITORY"]
 token = os.environ["GH_TOKEN"]
 def api(method, url, data=None, kind="application/json"):

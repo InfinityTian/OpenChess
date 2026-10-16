@@ -72,6 +72,8 @@ struct OnlineSession {
 
     Ev     evq[ONLINE_EVQ];
     int    evh, evt, evc;
+    cJSON *responses[32];
+    int response_count, request_id;
 };
 
 static void apply_clocks(OnlineSession *o, const ProtoFrame *f)
@@ -152,6 +154,7 @@ OnlineSession *online_create(const char *url, const char *nick,
 
 void online_destroy(OnlineSession *o)
 {
+    if(o)for(int i=0;i<o->response_count;i++)cJSON_Delete(o->responses[i]);
     if (!o) return;
     if (o->net) transport_close(o->net);
     free(o);
@@ -161,6 +164,10 @@ static void on_frame(OnlineSession *o, ProtoFrame *f)
 {
     o->last_rx = now_ms();
     switch (f->type) {
+        case PROTO_S2C_RESPONSE:
+            if(o->response_count==32){cJSON_Delete(o->responses[0]);memmove(o->responses,o->responses+1,31*sizeof *o->responses);o->response_count--;}
+            o->responses[o->response_count++]=cJSON_Duplicate(f->root,true);
+            break;
     case PROTO_S2C_WELCOME: {
         const char *tok = proto_field_str(f, "token");
         if (tok) {
@@ -298,6 +305,7 @@ static void on_frame(OnlineSession *o, ProtoFrame *f)
         } else {
             o->logged_in = false;
             const char *r = proto_field_str(f, "reason");
+            if(r&&!strcmp(r,"logged out"))o->auth_token[0]=o->user[0]=0;
             if (r && strcmp(r, "logged out") != 0)
                 snprintf(o->error, sizeof o->error, "%s", r);
         }
@@ -327,7 +335,7 @@ void online_poll(OnlineSession *o)
     uint64_t now = now_ms();
 
     if (o->net) {
-        char line[1024];
+        char line[32768];
         int r;
         while ((r = transport_poll(o->net, line, sizeof line)) == 1) {
             ProtoFrame f;
@@ -571,4 +579,17 @@ OnlineEvent online_next_event(OnlineSession *o, char *uci, size_t cap, int *ply)
     o->evh = (o->evh + 1) % ONLINE_EVQ;
     o->evc--;
     return kind;
+}
+
+int online_request(OnlineSession *o,const char *operation,cJSON *args)
+{
+    if(!o){cJSON_Delete(args);return 0;}
+    cJSON *m=args?args:cJSON_CreateObject();
+    cJSON_AddStringToObject(m,"type","request");cJSON_AddStringToObject(m,"op",operation);
+    int id=++o->request_id;cJSON_AddNumberToObject(m,"request_id",id);send_json(o,m);return id;
+}
+cJSON *online_take_response(OnlineSession *o)
+{
+    if(!o||!o->response_count)return NULL;cJSON *r=o->responses[0];
+    memmove(o->responses,o->responses+1,(--o->response_count)*sizeof *o->responses);return r;
 }
