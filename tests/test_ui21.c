@@ -95,6 +95,10 @@ int main(int argc,char **argv)
  game_fixture(g,MODE_ONLINE,start_fen,"e2e4 e7e5","0-1");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||strcmp(g->pgn_hdr.result,"0-1"))return 51;
  const char *custom="7k/8/8/8/8/8/R7/K7 w - - 0 23";Board initial;fen_parse(custom,&initial);
  game_fixture(g,MODE_LOCAL,custom,"a2a3 h8g8","1/2-1/2");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||!board_rep_equal(&initial,&g->pgntree->board)||strcmp(g->pgn_hdr.result,"1/2-1/2"))return 52;
+ g->scene=SCENE_SOCIAL;g->ui->challenge_open=true;g->ui->dialog_field=-1;g->ui->challenge_color=-1;snprintf(g->ui->challenge_minutes,16,"5");snprintf(g->ui->challenge_increment,16,"0");
+ int dialog_x=208+(g->win_w-208-560)/2;click(g,dialog_x+104,410);if(g->ui->challenge_color!=0)return 53;
+ click(g,dialog_x+280,410);if(g->ui->challenge_color!=1)return 54;click(g,dialog_x+456,410);if(g->ui->challenge_color!=-1)return 55;
+ capture(g,r,"challenge-random-side");keypress(g,SDLK_ESCAPE);
  gui_destroy(g);SDL_DestroyRenderer(r);SDL_FreeSurface(surface);
  SDL_Window *window=SDL_CreateWindow("UI test",0,0,1024,720,SDL_WINDOW_HIDDEN);r=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);g=gui_create();gui_init_assets(g,r);SDL_SetWindowSize(window,1024,720);g->board_driven_resize=false;SDL_Event resize={0};resize.type=SDL_WINDOWEVENT;resize.window.event=SDL_WINDOWEVENT_SIZE_CHANGED;resize.window.data1=1024;resize.window.data2=720;gui_handle_event(g,&resize);g->scene=SCENE_MENU;capture(g,r,"compact-top");g->mouse.x=600;SDL_Event wheel={0};wheel.type=SDL_MOUSEWHEEL;wheel.wheel.y=-8;gui_handle_event(g,&wheel);if(g->ui->home_scroll<=0)return 6;capture(g,r,"compact-scroll");gui_destroy(g);SDL_DestroyRenderer(r);SDL_DestroyWindow(window);
  TTF_Quit();SDL_Quit();puts("V2.1 UI screens rendered and navigation passed.");return 0;}

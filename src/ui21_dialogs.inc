@@ -20,8 +20,10 @@ static void ui_modal_render(Gui *g)
     }else{
         ui_text(g,ui_tr(g,"Time in minutes","基础时间（分钟）"),box.x+24,box.y+88,ui_ink);ui_button(g,(SDL_Rect){box.x+290,box.y+72,246,44},u->challenge_minutes,-1,u->dialog_field==0);
         ui_text(g,ui_tr(g,"Increment in seconds","每步加秒"),box.x+24,box.y+152,ui_ink);ui_button(g,(SDL_Rect){box.x+290,box.y+136,246,44},u->challenge_increment,-1,u->dialog_field==1);
-        const char *color=u->challenge_color<0?ui_tr(g,"Random colour","随机颜色"):u->challenge_color==0?ui_tr(g,"Play White","执白"):ui_tr(g,"Play Black","执黑");
-        ui_button(g,(SDL_Rect){box.x+24,box.y+216,512,48},color,-1,false);ui_button(g,(SDL_Rect){box.x+24,box.y+286,512,48},ui_tr(g,u->challenge_rated?"Rated":"Unrated",u->challenge_rated?"计分对局":"不计分对局"),-1,u->challenge_rated);
+        ui_text(g,ui_old_text(g,"Play as"),box.x+24,box.y+192,ui_muted);
+        static const int colors[]={0,1,-1};static const char *labels[]={"White","Black","Random"};
+        for(int k=0;k<3;k++)ui_button(g,(SDL_Rect){box.x+24+k*176,box.y+216,160,48},ui_old_text(g,labels[k]),-1,u->challenge_color==colors[k]);
+        ui_button(g,(SDL_Rect){box.x+24,box.y+286,512,48},ui_tr(g,u->challenge_rated?"Rated":"Unrated",u->challenge_rated?"计分对局":"不计分对局"),-1,u->challenge_rated);
         ui_text(g,ui_tr(g,"Invitation expires after 60 seconds.","邀请将在 60 秒后失效。"),box.x+24,box.y+374,ui_muted);
         ui_button(g,(SDL_Rect){box.x+24,box.y+478,240,46},ui_tr(g,"Send challenge","发送约战"),0,true);ui_button(g,(SDL_Rect){box.x+284,box.y+478,252,46},ui_tr(g,"Cancel","取消"),-1,false);
     }
@@ -33,7 +35,7 @@ static bool ui_modal_event(Gui *g,const SDL_Event *e)
         if(u->metadata_open){if(my>=box.y+70&&my<box.y+430&&mx>=box.x+120&&mx<=box.x+536){u->dialog_field=(my-box.y-70)/60;if(u->dialog_field==5){const char *results[]={"*","1-0","0-1","1/2-1/2"};int n=0;while(n<4&&strcmp(u->metadata[5],results[n]))n++;snprintf(u->metadata[5],128,"%s",results[(n+1)%4]);u->dialog_field=-1;}return true;}}
         else {
             if(my>=box.y+72&&my<box.y+180&&mx>box.x+290){u->dialog_field=my<box.y+120?0:1;return true;}
-            if(my>=box.y+216&&my<box.y+264){u->challenge_color=u->challenge_color==1?-1:u->challenge_color+1;return true;}
+            if(my>=box.y+216&&my<box.y+264){int x=mx-box.x-24;if(x>=0&&x<512&&x%176<160){static const int colors[]={0,1,-1};u->challenge_color=colors[x/176];u->dialog_field=-1;}return true;}
             if(my>=box.y+286&&my<box.y+334){u->challenge_rated=!u->challenge_rated;return true;}
         }
         if(my>=box.y+478&&my<box.y+524){if(mx>=box.x+284){u->metadata_open=u->challenge_open=false;u->dialog_field=-1;return true;}
