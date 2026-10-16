@@ -13,7 +13,10 @@ typedef struct Ui21 {
     Workspace *store, *cache;
     char owner[96], nickname[100], status[256], input[8192], search[100];
     bool zh, rated, smart, reviewing, legacy_paint, input_focus, calendar_open;
-    bool background_fit;
+    bool background_fit, dark_mode;
+    int app_theme;
+    char tooltip[160];
+    SDL_Rect tooltip_anchor;
     int background_mask, avatar, nav_hover, nav_focus, page, social_tab, peer, offset;
     int selected_day, month_day, daily_current, daily_longest, rating_class, rating_span;
     int current_entry, suspended_entry, history_scroll, opening_preview;

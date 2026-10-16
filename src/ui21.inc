@@ -4,13 +4,14 @@ static const char *ui_tr(Gui *g,const char *en,const char *zh){return g->ui&&g->
 static const char *ui_old_text(Gui *g,const char *s)
 {
     if(!g->ui||!g->ui->zh)return s;
-    static const char *pairs[][2]={{"Rating","评分"},{"Theme","主题"},{"Local profile","离线档案"},{"Log out","退出登录"},{"Close","关闭"},{"Create account","创建账号"},{"User","用户"},{"Online Matchmaking","在线匹配"},{"Server","服务器"},{"Room code (to join)","房间号（加入对局）"},{"Tab/Up/Down field    Enter choose    L login    R rated    Esc back","Tab/上下键选择 · 回车确认 · L 登录 · R 计分模式 · Esc 返回"},{"Paste PGN here (Ctrl+V), or use Upload.","在此粘贴 PGN（Ctrl+V），或选择文件。"},{"Draw offered: Ctrl+A accept, Ctrl+D decline","收到和棋提议：Ctrl+A 接受，Ctrl+D 拒绝"},{"Arrows","箭头"},{"Type a move (SAN):","输入走子（SAN）："},{"e.g. e4, Nf3, O-O-O","例如 e4、Nf3、O-O-O"},{"Ctrl+B board   Ctrl+P pieces   Ctrl+M anim","Ctrl+B 棋盘 · Ctrl+P 棋子 · Ctrl+M 动画"},{"Stockfish unavailable. Open Settings > Engine to install.","Stockfish 不可用，请在设置 → 引擎中安装。"},{"Left/Right change    Up/Down field    Enter start    Esc back","左右键调整 · 上下键选择 · 回车开始 · Esc 返回"},{"Host = White, Join = Black.  Start the host first.","房主执白，加入方执黑。请先创建主机。"},{"Tab/Up/Down field    type to edit    Enter activate    Esc back","Tab/上下键选择 · 输入编辑 · 回车确认 · Esc 返回"},{"Arrows select    Tab / 1-2-3 switch tab    Enter apply    Esc back","方向键选择 · Tab / 1-2-3 切换 · 回车应用 · Esc 返回"},{"Install Stockfish (click)","安装 Stockfish（点击）"},{"No engines found on PATH - enter a path below","未找到引擎，请在下方输入路径。"},{"Analysis settings","分析设置"},{"Custom engine path (click to edit, Enter to apply):","自定义引擎路径（点击编辑，回车应用）："},{"Tab / 1-2-3 switch tab    Up/Down select    Left/Right change    Enter open    Esc back","Tab / 1-2-3 切换 · 上下键选择 · 左右键调整 · 回车打开 · Esc 返回"},{"Game Report","对局报告"},{"Avg centipawn loss","平均厘兵损失"},{"Openings","开局"},{"type to search...","输入以搜索……"},{"move on board to browse  type to filter  Left/Right step  Enter analyse  Esc back","走子浏览 · 输入筛选 · 左右键步进 · 回车分析 · Esc 返回"},{"C / SDL chess board","国际象棋桌面应用"},{"Up/Down select    Enter choose    Ctrl+Q quit","上下键选择 · 回车确认 · Ctrl+Q 退出"},{"Save PGN as:","将棋谱保存为："},{"Enter save    Esc cancel","回车保存 · Esc 取消"},{"You: White","你执白"},{"You: Black","你执黑"},{"Spectating","正在观战"},{"Analysis: no engine","分析：未连接引擎"},{"Analyze to see the evaluation graph","运行分析以查看评分曲线"},{"Press Enter to type a move","按回车输入走子"},{"< Previous","< 上一步"},{"Next >","下一步 >"},{"Stalemate","逼和"},{"Draw (insufficient material)","和棋（子力不足）"},{"Draw (threefold repetition)","和棋（三次重复）"},{"Draw (fifty-move rule)","和棋（五十步规则）"},{"Solved!","已解出！"},{"Answer shown","已显示答案"},{"Your move","轮到你走棋"},{"Import PGN or FEN","导入 PGN 或 FEN"},{"Time control","时限"},{"Play as","执子颜色"},{"Connect","连接"},{"Disconnect","断开"},{"Room code","房间号"},{"Game Rating","对局评分"},{"Accuracy","准确率"},{"Best","最佳"},{"Brilliant","精彩"},{"Great","优秀"},{"Good","好棋"},{"Inaccuracy","不精确"},{"Mistake","失误"},{"Blunder","漏着"},{"Forced","迫招"},{"Book","定式"},{"White","白方"},{"Black","黑方"},{"You","你"},{"Hint","提示"},{"Reveal","查看答案"},{"Undo","悔棋"},{"Restart","重新开始"},{"Back","返回"},{"Start","开始"},{"Menu","主页"},{"Moves","步法"},{"Analysis","分析"},{"Settings","设置"},{"Engine","引擎"},{"Gameplay","对局"},{"Audio / Video","音视频"},{"Appearance","外观"},{"Save PGN","保存棋谱"},{"Load","加载"},{"Copy","复制"},{"Cancel","取消"},{"Paste","粘贴"},{"Upload","选择文件"},{"Import PGN","导入棋谱"},{"Rematch","再来一局"},{"Resign","认输"},{"Difficulty","难度"},{"Side","执子"},{"Easy","简单"},{"Medium","中等"},{"Hard","困难"},{"Expert","专家"},{"Opening Book","开局库"},{"Singleplayer","电脑对战"},{"Local Multiplayer","局域网对战"},{"Online","在线"},{"Offline","离线"},{"Register","注册"},{"Login","登录"},{"Logout","退出登录"},{"Username","账号"},{"Password","密码"},{"Next","下一题"},{"Lines","主变化"},{"Threads","线程"},{"Hash (MB)","哈希内存 (MB)"},{"Time (ms)","时间 (毫秒)"},{"Depth","深度"},{"unlimited","不限"},{"off","关闭"},{"Board","棋盘"},{"Pieces","棋子"},{"Animation","动画"},{"Mode","模式"},{"Appearance picker","外观选择"},{"Sound","音效"},{"Max FPS","帧率上限"},{"Audio & Video","音视频"},{"Any","全部主题"},{"Puzzles","战术解题"},{"Around my rating","接近我的水平"},{"Under 1000","低于 1000"},{"mateIn1","一步将杀"},{"mateIn2","两步将杀"},{"mateIn3","三步将杀"},{"fork","捉双"},{"pin","牵制"},{"skewer","串击"},{"discoveredAttack","闪击"},{"deflection","引离"},{"attraction","引入"},{"sacrifice","弃子"},{"defensiveMove","防守"},{"kingsideAttack","王翼进攻"},{"queensideAttack","后翼进攻"},{"endgame","残局"},{"Host","创建"},{"Join","加入"},{"Spectate","观战"},{"Analyze","分析"},{"Report","报告"},{"Import","导入"},{"Styles","外观"},{"White to move","白方行棋"},{"Black to move","黑方行棋"}};
+    static const char *pairs[][2]={{"Boards","棋盘"},{"Instant","即时"},{"Very Easy","非常简单"},{"Normal","标准"},{"Very Hard","非常困难"},{"Rating","评分"},{"Theme","主题"},{"Local profile","离线档案"},{"Log out","退出登录"},{"Close","关闭"},{"Create account","创建账号"},{"User","用户"},{"Online Matchmaking","在线匹配"},{"Server","服务器"},{"Room code (to join)","房间号（加入对局）"},{"Tab/Up/Down field    Enter choose    L login    R rated    Esc back","Tab/上下键选择 · 回车确认 · L 登录 · R 计分模式 · Esc 返回"},{"Paste PGN here (Ctrl+V), or use Upload.","在此粘贴 PGN（Ctrl+V），或选择文件。"},{"Draw offered: Ctrl+A accept, Ctrl+D decline","收到和棋提议：Ctrl+A 接受，Ctrl+D 拒绝"},{"Arrows","箭头"},{"Type a move (SAN):","输入走子（SAN）："},{"e.g. e4, Nf3, O-O-O","例如 e4、Nf3、O-O-O"},{"Ctrl+B board   Ctrl+P pieces   Ctrl+M anim","Ctrl+B 棋盘 · Ctrl+P 棋子 · Ctrl+M 动画"},{"Stockfish unavailable. Open Settings > Engine to install.","Stockfish 不可用，请在设置 → 引擎中安装。"},{"Left/Right change    Up/Down field    Enter start    Esc back","左右键调整 · 上下键选择 · 回车开始 · Esc 返回"},{"Host = White, Join = Black.  Start the host first.","房主执白，加入方执黑。请先创建主机。"},{"Tab/Up/Down field    type to edit    Enter activate    Esc back","Tab/上下键选择 · 输入编辑 · 回车确认 · Esc 返回"},{"Arrows select    Tab / 1-2-3 switch tab    Enter apply    Esc back","方向键选择 · Tab / 1-2-3 切换 · 回车应用 · Esc 返回"},{"Install Stockfish (click)","安装 Stockfish（点击）"},{"No engines found on PATH - enter a path below","未找到引擎，请在下方输入路径。"},{"Analysis settings","分析设置"},{"Custom engine path (click to edit, Enter to apply):","自定义引擎路径（点击编辑，回车应用）："},{"Tab / 1-2-3 switch tab    Up/Down select    Left/Right change    Enter open    Esc back","Tab / 1-2-3 切换 · 上下键选择 · 左右键调整 · 回车打开 · Esc 返回"},{"Game Report","对局报告"},{"Avg centipawn loss","平均厘兵损失"},{"Openings","开局"},{"type to search...","输入以搜索……"},{"move on board to browse  type to filter  Left/Right step  Enter analyse  Esc back","走子浏览 · 输入筛选 · 左右键步进 · 回车分析 · Esc 返回"},{"C / SDL chess board","国际象棋桌面应用"},{"Up/Down select    Enter choose    Ctrl+Q quit","上下键选择 · 回车确认 · Ctrl+Q 退出"},{"Save PGN as:","将棋谱保存为："},{"Enter save    Esc cancel","回车保存 · Esc 取消"},{"You: White","你执白"},{"You: Black","你执黑"},{"Spectating","正在观战"},{"Analysis: no engine","分析：未连接引擎"},{"Analyze to see the evaluation graph","运行分析以查看评分曲线"},{"Press Enter to type a move","按回车输入走子"},{"< Previous","< 上一步"},{"Next >","下一步 >"},{"Stalemate","逼和"},{"Draw (insufficient material)","和棋（子力不足）"},{"Draw (threefold repetition)","和棋（三次重复）"},{"Draw (fifty-move rule)","和棋（五十步规则）"},{"Solved!","已解出！"},{"Answer shown","已显示答案"},{"Your move","轮到你走棋"},{"Import PGN or FEN","导入 PGN 或 FEN"},{"Time control","时限"},{"Play as","执子颜色"},{"Connect","连接"},{"Disconnect","断开"},{"Room code","房间号"},{"Game Rating","对局评分"},{"Accuracy","准确率"},{"Best","最佳"},{"Brilliant","精彩"},{"Great","优秀"},{"Good","好棋"},{"Inaccuracy","不精确"},{"Mistake","失误"},{"Blunder","漏着"},{"Forced","迫招"},{"Book","定式"},{"White","白方"},{"Black","黑方"},{"You","你"},{"Hint","提示"},{"Reveal","查看答案"},{"Undo","悔棋"},{"Restart","重新开始"},{"Back","返回"},{"Start","开始"},{"Menu","主页"},{"Moves","步法"},{"Analysis","分析"},{"Settings","设置"},{"Engine","引擎"},{"Gameplay","对局"},{"Audio / Video","音视频"},{"Appearance","外观"},{"Save PGN","保存棋谱"},{"Load","加载"},{"Copy","复制"},{"Cancel","取消"},{"Paste","粘贴"},{"Upload","选择文件"},{"Import PGN","导入棋谱"},{"Rematch","再来一局"},{"Resign","认输"},{"Difficulty","难度"},{"Side","执子"},{"Easy","简单"},{"Medium","中等"},{"Hard","困难"},{"Expert","专家"},{"Opening Book","开局库"},{"Singleplayer","电脑对战"},{"Local Multiplayer","局域网对战"},{"Online","在线"},{"Offline","离线"},{"Register","注册"},{"Login","登录"},{"Logout","退出登录"},{"Username","账号"},{"Password","密码"},{"Next","下一题"},{"Lines","主变化"},{"Threads","线程"},{"Hash (MB)","哈希内存 (MB)"},{"Time (ms)","时间 (毫秒)"},{"Depth","深度"},{"unlimited","不限"},{"off","关闭"},{"Board","棋盘"},{"Pieces","棋子"},{"Animation","动画"},{"Mode","模式"},{"Appearance picker","外观选择"},{"Sound","音效"},{"Max FPS","帧率上限"},{"Audio & Video","音视频"},{"Any","全部主题"},{"Puzzles","战术解题"},{"Around my rating","接近我的水平"},{"Under 1000","低于 1000"},{"mateIn1","一步将杀"},{"mateIn2","两步将杀"},{"mateIn3","三步将杀"},{"fork","捉双"},{"pin","牵制"},{"skewer","串击"},{"discoveredAttack","闪击"},{"deflection","引离"},{"attraction","引入"},{"sacrifice","弃子"},{"defensiveMove","防守"},{"kingsideAttack","王翼进攻"},{"queensideAttack","后翼进攻"},{"endgame","残局"},{"Host","创建"},{"Join","加入"},{"Spectate","观战"},{"Analyze","分析"},{"Report","报告"},{"Import","导入"},{"Styles","外观"},{"White to move","白方行棋"},{"Black to move","黑方行棋"}};
     for(size_t k=0;k<sizeof pairs/sizeof pairs[0];k++)if(!strcmp(s,pairs[k][0]))return pairs[k][1];return s;
 }
 static void ui_text(Gui *g,const char *s,int x,int y,SDL_Color c){render_text(g,g->font_small,s,x,y,c);}
-static SDL_Color ui_ink={30,54,78,255},ui_muted={89,113,136,255};
+#include "ui21_theme.inc"
 static void ui_round(SDL_Renderer *r,SDL_Rect rect,SDL_Color color,int radius)
 {
+    color=ui_surface_color(color);
     if(rect.w<=0||rect.h<=0)return;
     if(radius>rect.h/2)radius=rect.h/2;if(radius>rect.w/2)radius=rect.w/2;
     SDL_SetRenderDrawColor(r,color.r,color.g,color.b,color.a);
@@ -35,7 +36,7 @@ static void ui_card(Gui *g,SDL_Rect r)
     ui_round(g->ren,r,(SDL_Color){250,253,255,255},14);
     SDL_SetRenderDrawBlendMode(g->ren,SDL_BLENDMODE_NONE);
 }
-static void ui_line(SDL_Renderer *r,int x1,int y1,int x2,int y2)
+static void ui_line(SDL_Renderer *r,float x1,float y1,float x2,float y2)
 {
 #if SDL_VERSION_ATLEAST(2,0,18)
     SDL_Color c;SDL_GetRenderDrawColor(r,&c.r,&c.g,&c.b,&c.a);float dx=x2-x1,dy=y2-y1,len=sqrtf(dx*dx+dy*dy);float nx=len?-dy/len*0.8f:0.8f,ny=len?dx/len*0.8f:0;
@@ -45,48 +46,63 @@ static void ui_line(SDL_Renderer *r,int x1,int y1,int x2,int y2)
     SDL_RenderDrawLine(r,x1,y1,x2,y2);
 #endif
 }
-static void ui_point(SDL_Renderer *r,int x,int y){ui_line(r,x,y,x,y);}
 static void ui_outline(SDL_Renderer *r,const SDL_Rect *box){ui_line(r,box->x,box->y,box->x+box->w,box->y);ui_line(r,box->x+box->w,box->y,box->x+box->w,box->y+box->h);ui_line(r,box->x+box->w,box->y+box->h,box->x,box->y+box->h);ui_line(r,box->x,box->y+box->h,box->x,box->y);}
+static void ui_arc(SDL_Renderer *r,float cx,float cy,float radius,float from,float to)
+{
+    /* Connected vector strokes avoid the dotted outlines of the old icons. */
+    int segments=(int)ceilf(fabsf(to-from)/6);if(segments<1)segments=1;
+    for(int k=0;k<segments;k++){float a=(from+(to-from)*k/segments)*GUI_PI/180,b=(from+(to-from)*(k+1)/segments)*GUI_PI/180;ui_line(r,cx+radius*cosf(a),cy+radius*sinf(a),cx+radius*cosf(b),cy+radius*sinf(b));}
+}
 static void ui_icon(Gui *g,int kind,int x,int y,SDL_Color color)
 {
-    SDL_SetRenderDrawColor(g->ren,color.r,color.g,color.b,255);
-    if(kind==6){SDL_Rect box={x,y+3,21,15};ui_outline(g->ren,&box);ui_line(g->ren,x,y+3,x+10,y+12);ui_line(g->ren,x+21,y+3,x+10,y+12);}
-    else if(kind==7){for(int k=0;k<2;k++){int cx=x+5+k*11;for(int a=0;a<360;a+=20){double t=a*GUI_PI/180;ui_point(g->ren,cx+(int)(4*cos(t)),y+5+(int)(4*sin(t)));}SDL_Rect body={cx-4,y+12,8,8};ui_outline(g->ren,&body);}}
-    else if(kind==8){for(int a=0;a<360;a+=30){double t=a*GUI_PI/180;ui_line(g->ren,x+10+(int)(7*cos(t)),y+10+(int)(7*sin(t)),x+10+(int)(10*cos(t)),y+10+(int)(10*sin(t)));}SDL_Rect box={x+4,y+4,12,12};ui_outline(g->ren,&box);}
-    else if(kind==9){ui_line(g->ren,x+4,y+6,x+4,y+16);ui_line(g->ren,x+16,y+6,x+16,y+16);ui_line(g->ren,x+2,y+17,x+18,y+17);ui_line(g->ren,x+7,y+20,x+13,y+20);ui_line(g->ren,x+4,y+6,x+10,y+2);ui_line(g->ren,x+10,y+2,x+16,y+6);}
-    else if(kind==1){ /* light bulb */
-        for(int a=0;a<360;a+=8){double t=a*GUI_PI/180;ui_point(g->ren,x+9+(int)(7*cos(t)),y+8+(int)(7*sin(t)));}
-        ui_line(g->ren,x+5,y+16,x+13,y+16);ui_line(g->ren,x+6,y+19,x+12,y+19);
-    }else if(kind==2){ /* magnifier */
-        for(int a=0;a<360;a+=8){double t=a*GUI_PI/180;ui_point(g->ren,x+8+(int)(7*cos(t)),y+8+(int)(7*sin(t)));}
-        ui_line(g->ren,x+13,y+13,x+20,y+20);
-    }else if(kind==3){SDL_Rect box={x+1,y+1,18,19};ui_outline(g->ren,&box);ui_line(g->ren,x+5,y+1,x+5,y+8);ui_line(g->ren,x+5,y+8,x+15,y+8);}
-    else if(kind==4){for(int a=0;a<3;a++)ui_line(g->ren,x+3+a,y+17,x+17+a,y+3);}
-    else if(kind==5){ui_line(g->ren,x+3,y+10,x+8,y+15);ui_line(g->ren,x+8,y+15,x+18,y+3);}
-    else {ui_line(g->ren,x+3,y+10,x+17,y+10);ui_line(g->ren,x+10,y+3,x+10,y+17);}
+    SDL_Renderer *r=g->ren;SDL_SetRenderDrawColor(r,color.r,color.g,color.b,255);
+    if(kind==6){SDL_Rect box={x+1,y+4,20,14};ui_outline(r,&box);ui_line(r,x+1,y+4,x+11,y+12);ui_line(r,x+21,y+4,x+11,y+12);}
+    else if(kind==7){ui_arc(r,x+7,y+6,4,0,360);ui_arc(r,x+16,y+7,3,0,360);ui_arc(r,x+7,y+20,7,180,360);ui_arc(r,x+17,y+20,5,270,360);}
+    else if(kind==8){ui_arc(r,x+11,y+11,6,0,360);ui_arc(r,x+11,y+11,2,0,360);for(int k=0;k<8;k++){float a=k*GUI_PI/4;ui_line(r,x+11+7*cosf(a),y+11+7*sinf(a),x+11+10*cosf(a),y+11+10*sinf(a));}}
+    else if(kind==9){ui_arc(r,x+11,y+9,7,180,360);ui_line(r,x+4,y+9,x+4,y+16);ui_line(r,x+18,y+9,x+18,y+16);ui_line(r,x+2,y+17,x+20,y+17);ui_arc(r,x+11,y+19,2,0,180);ui_line(r,x+11,y,x+11,y+2);}
+    else if(kind==1){ui_arc(r,x+11,y+8,7,145,395);ui_line(r,x+5,y+12,x+7,y+17);ui_line(r,x+17,y+12,x+15,y+17);ui_line(r,x+7,y+17,x+15,y+17);ui_line(r,x+8,y+20,x+14,y+20);}
+    else if(kind==2){ui_arc(r,x+9,y+9,7,0,360);ui_line(r,x+14,y+14,x+21,y+21);}
+    else if(kind==3){SDL_Rect box={x+2,y+1,18,20};ui_outline(r,&box);ui_line(r,x+6,y+1,x+6,y+8);ui_line(r,x+6,y+8,x+15,y+8);ui_line(r,x+15,y+8,x+15,y+1);SDL_Rect label={x+6,y+13,10,8};ui_outline(r,&label);}
+    else if(kind==4){ui_line(r,x+3,y+17,x+16,y+3);ui_line(r,x+6,y+20,x+19,y+6);ui_line(r,x+16,y+3,x+19,y+6);ui_line(r,x+3,y+17,x+2,y+22);ui_line(r,x+2,y+22,x+6,y+20);}
+    else if(kind==5){ui_line(r,x+3,y+10,x+8,y+15);ui_line(r,x+8,y+15,x+19,y+3);}
+    else if(kind==10){SDL_Rect board={x+1,y+1,20,20};ui_outline(r,&board);for(int k=1;k<4;k++){ui_line(r,x+1+k*5,y+1,x+1+k*5,y+21);ui_line(r,x+1,y+1+k*5,x+21,y+1+k*5);}}
+    else if(kind==11){ui_line(r,x+3,y+20,x+19,y+20);ui_line(r,x+5,y+17,x+17,y+17);ui_line(r,x+6,y+17,x+8,y+10);ui_arc(r,x+11,y+7,4,0,360);ui_line(r,x+16,y+17,x+14,y+10);}
+    else if(kind==12){ui_line(r,x+11,y+4,x+11,y+21);ui_line(r,x+1,y+2,x+1,y+18);ui_line(r,x+21,y+2,x+21,y+18);ui_line(r,x+1,y+2,x+11,y+5);ui_line(r,x+21,y+2,x+11,y+5);ui_line(r,x+1,y+18,x+11,y+21);ui_line(r,x+21,y+18,x+11,y+21);}
+    else if(kind==13){ui_arc(r,x+11,y+13,11,210,330);ui_arc(r,x+11,y+7,11,30,150);ui_arc(r,x+11,y+10,3,0,360);}
+    else if(kind==14){for(int k=0;k<3;k++)ui_arc(r,x+3+k*8,y+11,1,0,360);}
+    else {ui_line(r,x+3,y+11,x+19,y+11);ui_line(r,x+11,y+3,x+11,y+19);}
 }
 static bool ui_hit(Gui *g,SDL_Rect r){return pt_in(&r,g->mouse.x,g->mouse.y);}
 static void ui_button(Gui *g,SDL_Rect r,const char *label,int icon,bool primary)
 {
-    bool hover=ui_hit(g,r);SDL_Color c=primary?(SDL_Color){42,115,206,255}:(SDL_Color){226,237,248,255};
-    if(hover){c.r=primary?33:211;c.g=primary?100:228;c.b=primary?185:245;}
-    if(g->dragging&&hover){c.r-=5;c.g-=5;c.b-=5;}
-    ui_round(g->ren,(SDL_Rect){r.x,r.y+3,r.w,r.h},(SDL_Color){166,189,211,255},10);ui_round(g->ren,r,c,10);
+    bool hover=ui_hit(g,r),icon_only=icon>=0&&(r.w<120||r.h<34);SDL_Color c=primary?ui_accent:ui_control;
+    if(hover)c=primary?ui_mix(ui_accent,(SDL_Color){0,0,0,255},0.12f):ui_hover;
+    ui_round(g->ren,(SDL_Rect){r.x,r.y+3,r.w,r.h},ui_border,10);ui_round(g->ren,r,c,10);
     SDL_Color ink=primary?(SDL_Color){255,255,255,255}:ui_ink;
-    if(icon>=0)ui_icon(g,icon,r.x+12,r.y+(r.h-20)/2,ink);
-    ui_text(g,label,r.x+(icon>=0?42:14),r.y+(r.h-20)/2,ink);
+    if(icon_only){ui_icon(g,icon,r.x+(r.w-22)/2,r.y+(r.h-22)/2,ink);if(hover){snprintf(g->ui->tooltip,sizeof g->ui->tooltip,"%s",label);g->ui->tooltip_anchor=r;}return;}
+    TTF_Font *font=g->font_small;int available=r.w-(icon>=0?48:20),w=0,h=0;if(available<1)return;
+    TTF_SizeUTF8(font,label,&w,&h);float scale=eff_scale(g);if(w/scale>available||h/scale>r.h-10){font=g->font_tiny;TTF_SizeUTF8(font,label,&w,&h);}
+    SDL_Surface *surface=TTF_RenderUTF8_Blended(font,label,ink);if(!surface)return;SDL_Texture *text=SDL_CreateTextureFromSurface(g->ren,surface);
+    float fit=fminf(1,fminf(available*scale/surface->w,(r.h-8)*scale/surface->h));int width=(int)lroundf(surface->w/scale*fit),height=(int)lroundf(surface->h/scale*fit);
+    int group=width+(icon>=0?30:0),left=r.x+(r.w-group)/2;if(icon>=0)ui_icon(g,icon,left,r.y+(r.h-22)/2,ink);
+    SDL_Rect dest={left+(icon>=0?30:0),r.y+(r.h-height)/2,width,height};SDL_RenderCopy(g->ren,text,NULL,&dest);SDL_DestroyTexture(text);SDL_FreeSurface(surface);
+}
+static void ui_tooltip_render(Gui *g)
+{
+    if(!g->ui||!g->ui->tooltip[0])return;int w=0,h=0;TTF_SizeUTF8(g->font_small,g->ui->tooltip,&w,&h);w=(int)(w/eff_scale(g))+24;h=(int)(h/eff_scale(g))+16;
+    SDL_Rect anchor=g->ui->tooltip_anchor,box={clampi(anchor.x,212,g->win_w-w-12),anchor.y-h-8,w,h};if(box.y<8)box.y=anchor.y+anchor.h+8;ui_card(g,box);bool legacy=g->ui->legacy_paint;g->ui->legacy_paint=false;ui_text(g,g->ui->tooltip,box.x+12,box.y+8,ui_ink);g->ui->legacy_paint=legacy;
 }
 static bool ui_active_game(Gui *g){return g->online&&online_state(g->online)==ONLINE_PLAYING&&!g->online_over&&!online_spectating(g->online);}
 static void ui_background(Gui *g,SDL_Renderer *r)
 {
-    SDL_SetRenderDrawColor(r,234,243,251,255);SDL_RenderClear(r);
+    SDL_SetRenderDrawColor(r,ui_bg.r,ui_bg.g,ui_bg.b,255);SDL_RenderClear(r);
     if(!g->ui||!g->ui->background)return;
     int w,h;SDL_QueryTexture(g->ui->background,NULL,NULL,&w,&h);if(w<=0||h<=0)return;
     float sx=(float)g->win_w/w,sy=(float)g->win_h/h;
     float scale=g->ui->background_fit?fminf(sx,sy):fmaxf(sx,sy);
     SDL_Rect dst={(g->win_w-(int)(w*scale))/2,(g->win_h-(int)(h*scale))/2,(int)(w*scale),(int)(h*scale)};
     SDL_RenderCopy(r,g->ui->background,NULL,&dst);
-    SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(r,234,243,251,(Uint8)g->ui->background_mask);SDL_Rect all={0,0,g->win_w,g->win_h};SDL_RenderFillRect(r,&all);SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_NONE);
+    SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_BLEND);SDL_SetRenderDrawColor(r,ui_bg.r,ui_bg.g,ui_bg.b,(Uint8)g->ui->background_mask);SDL_Rect all={0,0,g->win_w,g->win_h};SDL_RenderFillRect(r,&all);SDL_SetRenderDrawBlendMode(r,SDL_BLENDMODE_NONE);
 }
 static void ui_mini_board(Gui *g,const Board *board,SDL_Rect r,bool flipped)
 {
@@ -220,14 +236,15 @@ static void ui_cache_puzzle(Gui *g,int day,const Puzzle *p)
 static void ui_next_puzzle(Gui *g,int day)
 {
     Ui21 *u=g->ui;if(ui_active_game(g)){snprintf(u->status,256,"%s",ui_tr(g,"Return to your active game first.","请先完成当前对局。"));return;}
-    if(ui_connected(g)){cJSON *args=cJSON_CreateObject();cJSON_AddNumberToObject(args,"day",day);cJSON_AddBoolToObject(args,"smart",u->smart);cJSON_AddBoolToObject(args,"rated",u->rated);online_request(g->online,"puzzle.next",args);return;}
+    if(ui_connected(g)){cJSON *args=cJSON_CreateObject();cJSON_AddNumberToObject(args,"day",day);cJSON_AddBoolToObject(args,"smart",u->smart);cJSON_AddBoolToObject(args,"rated",u->rated);cJSON_AddNumberToObject(args,"difficulty",g->puzzle_band);if(g->puzzle_theme>0)cJSON_AddStringToObject(args,"theme",PUZZLE_THEMES[g->puzzle_theme]);online_request(g->online,"puzzle.next",args);return;}
     if(!strncmp(u->owner,"online:",7)){
         Puzzle cached;if(!day||!workspace_daily(u->cache,day,&cached)){snprintf(u->status,256,"%s",ui_tr(g,"Connect to load this official puzzle.","请联网获取这道官方每日题。"));return;}
         int idx=ui_entry_add(g,&cached,"cached-review",day,false);if(idx>=0){u->entries[idx].settled=true;ui_entry_load(g,idx,true);}snprintf(u->status,256,"%s",ui_tr(g,"Offline archive review · No scoring","离线历史回看 · 不计分"));return;
     }
     Puzzle p;char reason[128]="";bool ok;
     if(day){workspace_daily_fill(u->store,g->puzzles,workspace_today());ok=day<=workspace_today()&&workspace_daily(u->store,day,&p);}
-    else ok=workspace_pick(u->store,g->puzzles,u->owner,g->puzzle_rating,u->smart,g->puzzle_theme>0?PUZZLE_THEMES[g->puzzle_theme]:NULL,&p,reason);
+    else if(u->smart)ok=workspace_pick(u->store,g->puzzles,u->owner,g->puzzle_rating,true,g->puzzle_theme>0?PUZZLE_THEMES[g->puzzle_theme]:NULL,&p,reason);
+    else ok=workspace_pick_level(g->puzzles,g->puzzle_rating,g->puzzle_band,g->puzzle_theme>0?PUZZLE_THEMES[g->puzzle_theme]:NULL,&p);
     if(!ok){snprintf(u->status,256,"%s",ui_tr(g,"Puzzle unavailable.","该日期或条件下没有题目。"));return;}
     unsigned char bytes[16];sqlite3_randomness(16,bytes);char id[40];for(int k=0;k<16;k++)snprintf(id+2*k,3,"%02x",bytes[k]);
     bool rated=u->rated&&!day&&strncmp(reason,"Review:",7);workspace_issue(u->store,u->owner,id,&p,rated,day);int index=ui_entry_add(g,&p,id,day,rated);if(index>=0)ui_entry_load(g,index,false);snprintf(u->status,256,"%s",reason);
@@ -344,8 +361,8 @@ static void ui_shell(Gui *g)
     Ui21 *u=g->ui;SDL_RenderSetClipRect(g->ren,NULL);apply_render_scale(g);ui_round(g->ren,(SDL_Rect){0,0,208,g->win_h},(SDL_Color){218,234,247,255},0);
     if(u->logo)SDL_RenderCopy(g->ren,u->logo,NULL,&(SDL_Rect){18,22,36,36});
     render_text(g,g->font_ui,"OpenChess",60,27,ui_ink);
-    ui_text(g,"2.1.0",24,68,ui_muted);
-    for(int k=0;k<6;k++){SDL_Rect r={12,112+k*58,184,48};if(k==u->nav_hover)ui_round(g->ren,r,(SDL_Color){192,216,240,255},10);ui_icon(g,k%5,r.x+12,r.y+14,ui_muted);ui_text(g,ui_nav_name(g,k),r.x+42,r.y+14,ui_ink);}
+    ui_text(g,OPENCHESS_VERSION,24,68,ui_muted);
+    for(int k=0;k<6;k++){SDL_Rect r={12,112+k*58,184,48};if(k==u->nav_hover)ui_round(g->ren,r,(SDL_Color){192,216,240,255},10);ui_icon(g,(int[]){10,11,12,13,7,14}[k],r.x+12,r.y+14,ui_muted);ui_text(g,ui_nav_name(g,k),r.x+42,r.y+14,ui_ink);}
     ui_round(g->ren,(SDL_Rect){16,g->win_h-140,40,40},(SDL_Color){123+(u->avatar%3)*28,166,207,255},12);
     render_piece_box(g,g->ren,(Piece)(WP+u->avatar%12),36,g->win_h-120,32,1);
     SDL_Rect clip={62,g->win_h-143,134,47};SDL_RenderSetClipRect(g->ren,&clip);ui_text(g,u->nickname,64,g->win_h-136,ui_ink);SDL_RenderSetClipRect(g->ren,NULL);
@@ -517,7 +534,11 @@ static void ui_preferences_render(Gui *g)
 {
     Ui21 *u=g->ui;render_text(g,g->font_ui,ui_tr(g,"Preferences","偏好设置"),240,40,ui_ink);ui_card(g,(SDL_Rect){240,110,g->win_w-280,700});
     const char *labels[]={ui_tr(g,"Language: English / 中文","界面语言：中文 / English"),ui_tr(g,"Choose background image","选择背景图片"),ui_tr(g,u->background_fit?"Image fit: Contain":"Image fit: Cover",u->background_fit?"背景缩放：适应":"背景缩放：铺满"),ui_tr(g,"Background overlay −","减弱背景遮罩"),ui_tr(g,"Background overlay +","增强背景遮罩"),ui_tr(g,"Reset background","恢复默认背景"),ui_tr(g,"Engine & game settings","引擎与对局设置"),ui_tr(g,"Board & pieces","棋盘与棋子外观"),ui_tr(g,"Account / Log in","账号与登录")};
-    for(int k=0;k<9;k++)ui_button(g,(SDL_Rect){264,136+k*65,g->win_w-328,50},labels[k],k==1?4:-1,k==0);
+    int width=(g->win_w-352)/2;
+    for(int k=0;k<9;k++)ui_button(g,(SDL_Rect){264+(k%2)*(width+24),136+(k/2)*65,width,50},labels[k],k==1?4:-1,k==0);
+    ui_button(g,(SDL_Rect){264+width+24,396,width,50},ui_tr(g,u->dark_mode?"Dark mode: On":"Dark mode: Off",u->dark_mode?"深色模式：开启":"深色模式：关闭"),-1,u->dark_mode);
+    ui_text(g,ui_tr(g,"Application themes","应用主题"),264,486,ui_ink);int tile=(g->win_w-352)/5;
+    for(int k=0;k<10;k++){SDL_Rect r={264+(k%5)*(tile+5),530+(k/5)*72,tile,54};ui_button(g,r,u->zh?ui_theme_zh[k]:ui_theme_names[k],-1,u->app_theme==k);SDL_Color swatch=ui_accents[k];SDL_SetRenderDrawColor(g->ren,swatch.r,swatch.g,swatch.b,255);SDL_RenderFillRect(g->ren,&(SDL_Rect){r.x+8,r.y+12,4,r.h-24});}
 }
 static void ui_library_render(Gui *g)
 {
@@ -619,7 +640,9 @@ static bool ui_click(Gui *g)
         if(my>=658&&my<706){Board b;if(!fen_parse(u->setup_fen,&b)){snprintf(p->error,sizeof p->error,"%s",ui_tr(g,"Invalid FEN or missing kings.","FEN 无效或缺少双方的王。"));return true;}if(!position_validate(&b,p->error))return true;u->analysis_preview=b;start_analysis(g);ui_metadata_apply(g);load_fen(g,u->setup_fen);return true;}
         if(my>=718&&my<758){g->scene=SCENE_ANALYSIS_HOME;return true;}if(my>=810&&my<840){ui_metadata_begin(g);return true;}return true;
     }
-    if(g->scene==SCENE_PREFERENCES){if(my>=136&&my<721){int k=(my-136)/65;
+    if(g->scene==SCENE_PREFERENCES){
+        if(my>=530&&my<656){int tile=(g->win_w-352)/5,k=((my-530)/72)*5+(mx-264)/(tile+5);if(mx>=264&&k>=0&&k<10){u->app_theme=k;g->config_dirty=true;}return true;}
+        if(my>=136&&my<446){int width=(g->win_w-352)/2,k=((my-136)/65)*2+(mx>=264+width+24);if(k==9){u->dark_mode=!u->dark_mode;g->config_dirty=true;return true;}
         if(k==0)u->zh=!u->zh;else if(k==1)ui_background_choose(g);else if(k==2)u->background_fit=!u->background_fit;else if(k==3)u->background_mask=clampi(u->background_mask-25,0,255);else if(k==4)u->background_mask=clampi(u->background_mask+25,0,255);else if(k==5){SDL_DestroyTexture(u->background);u->background=NULL;u->background_file[0]=0;}else if(k==6)open_settings_scene(g,SCENE_PREFERENCES);else if(k==7)open_appearance(g,SCENE_PREFERENCES);else open_account(g);g->config_dirty=true;}return true;
     }
     if(g->scene==SCENE_PROFILE){

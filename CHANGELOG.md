@@ -6,6 +6,18 @@ All notable changes to OpenChess. The format follows
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-10-16
+
+### Changed
+- Ten application themes and an independent, persistent dark-mode switch.
+- Improved text contrast, vector sidebar icons, centered compact buttons and
+  tooltips; small text-only actions fit their available space.
+- Square piece-style previews preserve each king's original aspect ratio.
+- Animation previews share the live move transforms, trails and 380 ms cadence.
+- Ordinary puzzles offer five difficulties relative to the current rating:
+  Very Easy (-600), Easy (-300), Normal (0), Hard (+300), Very Hard (+600).
+  Settlement uses actual puzzle rating: harder puzzles earn more and lose less.
+
 ## [2.1.0] - 2026-10-16
 
 ### Added

@@ -25,6 +25,7 @@ bool workspace_pick(Workspace *w, const Puzzles *p, const char *owner, int ratin
                     bool smart, const char *theme, Puzzle *out, char reason[128]);
 /* Issuing and submitting the same attempt ID is idempotent. The stored puzzle
  * snapshot, not a claimed client rating/solution, controls every settlement. */
+bool workspace_pick_level(const Puzzles *p,int rating,int level,const char *theme,Puzzle *out);
 bool workspace_issue(Workspace *w, const char *owner, const char *id,
                      const Puzzle *p, bool rated, int daily_day);
 cJSON *workspace_submit(Workspace *w, const char *owner, const char *id,

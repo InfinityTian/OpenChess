@@ -28,3 +28,8 @@ engine_arrows = 1    # draw the engine's best move as a green arrow (0/1)
 # Audio and display.
 sound = 1            # play move sounds (0/1); needs SDL2_mixer at build time
 max_fps = 0          # 0 = vsync; or a cap such as 60/120/144/240/320
+
+# Application appearance (independent of chessboard and pieces).
+# 0 Sky, 1 Ocean, 2 Mint, 3 Forest, 4 Lavender, 5 Rose, 6 Peach, 7 Sand, 8 Slate, 9 Aqua.
+app_theme = 0
+dark_mode = 0        # 0 = light, 1 = dark

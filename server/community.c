@@ -77,7 +77,8 @@ cJSON *community_request(Workspace *w,Puzzles *p,int uid,const char *owner,const
     }else if(!strcmp(op,"puzzle.next")){
         Puzzle puzzle;char reason[128];int day=integer(q,"day",0);bool found;
         if(day){workspace_daily_fill(w,p,workspace_today());found=day<=workspace_today()&&workspace_daily(w,day,&puzzle);reason[0]=0;}
-        else found=workspace_pick(w,p,owner,workspace_rating(w,owner,4),boolean(q,"smart"),string(q,"theme"),&puzzle,reason);
+        else if(boolean(q,"smart"))found=workspace_pick(w,p,owner,workspace_rating(w,owner,4),true,string(q,"theme"),&puzzle,reason);
+        else {int level=integer(q,"difficulty",2);if(level<0||level>4)return error(r,"Invalid difficulty");found=workspace_pick_level(p,workspace_rating(w,owner,4),level,string(q,"theme"),&puzzle);snprintf(reason,sizeof reason,"Around my rating: %+d",(level-2)*300);}
         if(!found)return error(r,"No matching puzzle");
         char id[100];sqlite3_randomness(16,id);char attempt[40];for(int k=0;k<16;k++)snprintf(attempt+k*2,3,"%02x",(unsigned char)id[k]);
         bool rated=boolean(q,"rated")&&!day&&strncmp(reason,"Review:",7);workspace_issue(w,owner,attempt,&puzzle,rated,day);cJSON_AddBoolToObject(r,"rated",rated);cJSON_AddStringToObject(r,"attempt",attempt);cJSON_AddNumberToObject(r,"day",day);cJSON_AddStringToObject(r,"reason",reason);cJSON_AddItemToObject(r,"puzzle",workspace_puzzle_json(&puzzle));

@@ -197,6 +197,17 @@ bool workspace_pick(Workspace *w,const Puzzles *p,const char *owner,int rating,b
         snprintf(reason,128,"%s%s",smart?(selected[0]?"Practice: ":"Explore: "):"",filter&&*filter?filter:"balanced topics");return true;}
     return puzzles_pick(p,400,4000,theme,out);
 }
+/* Five relative difficulty bands. Fall back to the nearest available puzzle
+ * at pool boundaries, preserving theme filters where possible. */
+bool workspace_pick_level(const Puzzles *p,int rating,int level,const char *theme,Puzzle *out)
+{
+    if(level<0||level>4)level=2;int target=rating+(level-2)*300;
+    if(puzzles_pick(p,target-150,target+149,theme,out))return true;
+    int distance=2147483647,ties=0;bool found=false;
+    for(int k=0;k<puzzles_count(p);k++){Puzzle candidate;puzzles_get(p,k,&candidate);if(theme&&*theme&&!strstr(candidate.themes,theme))continue;
+        int d=abs(candidate.rating-target);if(d<distance){*out=candidate;distance=d;ties=1;found=true;}else if(d==distance&&rand()%++ties==0)*out=candidate;}
+    if(!found&&theme&&*theme)return workspace_pick_level(p,rating,level,NULL,out);return found;
+}
 bool workspace_issue(Workspace *w,const char *owner,const char *id,const Puzzle *p,bool rated,int day) {
     if(!w||!owner||!id||!*id)return false;
     cJSON *j=workspace_puzzle_json(p);char *snapshot=cJSON_PrintUnformatted(j);cJSON_Delete(j);

@@ -188,10 +188,13 @@ static int test_analysis_navigation(SDL_Renderer *ren)
     }
     gui_render(g, ren);
     SDL_Rect san_area = { g->panel_x + 68, g->board_y + 226, 60, 21 };
-    if (count_rgb(ren, san_area, 39, 194, 163) < 3) {
-        fprintf(stderr, "SAN text did not use its Brilliant grade colour\n");
+    if (count_rgb(ren, san_area, 27, 134, 112) < 3) {
+        fprintf(stderr, "SAN text did not use its light-theme Brilliant grade colour\n");
         return 1;
     }
+    g->ui->dark_mode=true;gui_render(g,ren);
+    if(count_rgb(ren,san_area,39,194,163)<3){fprintf(stderr,"SAN grade colour lost in dark mode\n");return 1;}
+    g->ui->dark_mode=false;gui_render(g,ren);
     SDL_Event click = {0};
     click.type = SDL_MOUSEBUTTONDOWN;
     click.button.button = SDL_BUTTON_LEFT;

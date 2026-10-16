@@ -65,7 +65,7 @@ endif
 
 all: $(BIN) $(SERVER_TARGET)
 
-$(BIN): src/ui21.inc src/ui21_dialogs.inc src/ui21.h src/main.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
+$(BIN): src/ui21.inc src/ui21_theme.inc src/ui21_dialogs.inc src/ui21.h src/main.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $(filter %.c %.o,$^) -o $@ $(SDL_LIBS)
 
 # The server compiles the shared rules engine so it can referee games.
@@ -80,10 +80,10 @@ $(SERVER): server/community_runtime.inc $(SERVER_SRC)
 tests/test_workspace: tests/test_workspace.c src/workspace.c src/puzzle.c src/cJSON.c server/community.c src/position.c src/board.c src/move.c src/fen.c
 	$(CC) $(CFLAGS) $(SQLITE_CFLAGS) $(filter %.c %.o,$^) -o $@$(EXE) $(SQLITE_LIBS) -lm
 
-tests/test_ui21: src/ui21.inc src/ui21_dialogs.inc src/ui21.h tests/test_ui21.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
+tests/test_ui21: src/ui21.inc src/ui21_theme.inc src/ui21_dialogs.inc src/ui21.h tests/test_ui21.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $(filter %.c %.o,$^) -o $@$(EXE) $(SDL_LIBS)
 
-tests/test_gui: src/ui21.inc src/ui21_dialogs.inc src/ui21.h tests/test_gui.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
+tests/test_gui: src/ui21.inc src/ui21_theme.inc src/ui21_dialogs.inc src/ui21.h tests/test_gui.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $(filter %.c %.o,$^) -o $@$(EXE) $(SDL_LIBS)
 
 tests/test_net: tests/test_net.c $(NET_SRC)
@@ -110,7 +110,7 @@ tests/test_movetree: tests/test_movetree.c $(OBJ_CORE)
 tests/test_online: tests/test_online.c src/net_ws.c src/transport.c src/proto.c src/cJSON.c
 	$(CC) $(CFLAGS) $(WS_CFLAGS) $(filter %.c %.o,$^) -o $@$(EXE) $(WS_LIBS)
 
-tests/test_local: src/ui21.inc src/ui21_dialogs.inc src/ui21.h tests/test_local.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
+tests/test_local: src/ui21.inc src/ui21_theme.inc src/ui21_dialogs.inc src/ui21.h tests/test_local.c src/gui.c $(NET_SRC) $(PROTO_SRC) $(ONLINE_SRC) $(PUZZLE_SRC) $(AUDIO_SRC) $(OBJ_CORE)
 	$(CC) $(CFLAGS) $(SDL_CFLAGS) $(filter %.c %.o,$^) -o $@$(EXE) $(SDL_LIBS)
 
 tests/test_rules: tests/test_rules.c $(OBJ_CORE)

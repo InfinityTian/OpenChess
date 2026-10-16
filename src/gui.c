@@ -60,6 +60,10 @@ static const char *ui_old_text(Gui *g,const char *s);
 static void ui_round(SDL_Renderer *r,SDL_Rect rect,SDL_Color color,int radius);
 static void ui_button(Gui *g,SDL_Rect r,const char *label,int icon,bool primary);
 static const char *ui_tr(Gui *g,const char *en,const char *zh);
+static void ui_apply_theme(Gui *g);
+static SDL_Color ui_surface_color(SDL_Color color);
+static SDL_Color ui_legacy_text_color(Gui *g,TTF_Font *font,SDL_Color color);
+static void ui_tooltip_render(Gui *g);
 
 
 /* ------------------------------------------------------------------ */
@@ -361,7 +365,7 @@ static void render_text(Gui *g, TTF_Font *font, const char *txt,
     if (!font || !txt || !*txt) return;
     SDL_Renderer *ren = g->ren;
     txt=ui_old_text(g,txt);
-    if(g->ui&&g->ui->legacy_paint&&col.r>200&&col.g>200&&col.b>200&&font!=g->font_piece[0]&&font!=g->font_piece[1])col=(SDL_Color){35,57,80,col.a};
+    col=ui_legacy_text_color(g,font,col);
     SDL_Surface *s = TTF_RenderUTF8_Blended(font, txt, col);
     if (!s) return;
     SDL_Texture *t = SDL_CreateTextureFromSurface(ren, s);
@@ -396,6 +400,7 @@ static void render_text_centered(Gui *g, TTF_Font *font, const char *txt,
                                  int cx, int y, SDL_Color col)
 {
     if (!font || !txt || !*txt) return;
+    txt=ui_old_text(g,txt);
     int w = 0, h = 0;
     if (TTF_SizeUTF8(font, txt, &w, &h) != 0) return;
     float sc = eff_scale(g);
@@ -1641,6 +1646,8 @@ void gui_load_config(Gui *g, const char *path)
         lower_in_place(key);
         lower_in_place(val);
         if(g->ui&&strcmp(key,"ui_language")==0)g->ui->zh=strcmp(val,"zh")==0;
+        else if(g->ui&&strcmp(key,"dark_mode")==0)g->ui->dark_mode=atoi(val)!=0;
+        else if(g->ui&&strcmp(key,"app_theme")==0)g->ui->app_theme=clampi(atoi(val),0,9);
         else if(g->ui&&strcmp(key,"background_file")==0)snprintf(g->ui->background_file,sizeof g->ui->background_file,"%s",rawval);
         else if(g->ui&&strcmp(key,"background_fit")==0)g->ui->background_fit=atoi(val)!=0;
         else if(g->ui&&strcmp(key,"background_mask")==0)g->ui->background_mask=clampi(atoi(val),0,255);
@@ -1734,6 +1741,7 @@ void gui_save_config(Gui *g)
     fprintf(f, "max_fps = %d\n", g->max_fps);
     fprintf(f, "puzzle_rating = %d\n", g->puzzle_rating);
     if(g->ui)fprintf(f,"ui_language = %s\nbackground_file = %s\nbackground_fit = %d\nbackground_mask = %d\navatar = %d\n",g->ui->zh?"zh":"en",g->ui->background_file,g->ui->background_fit,g->ui->background_mask,g->ui->avatar);
+    if(g->ui)fprintf(f,"dark_mode = %d\napp_theme = %d\n",g->ui->dark_mode,g->ui->app_theme);
     if (g->engine_path[0]) fprintf(f, "engine = %s\n", g->engine_path);
     if (g->online_url[0]) fprintf(f, "online_server = %s\n", g->online_url);
     if (g->online_nick[0]) fprintf(f, "nick = %s\n", g->online_nick);
@@ -1839,7 +1847,7 @@ Gui *gui_create(void)
     snprintf(g->net_port, sizeof g->net_port, "7777");
     snprintf(g->online_url, sizeof g->online_url, "ws://127.0.0.1:7681/ws");
     snprintf(g->online_nick, sizeof g->online_nick, "Player");
-    g->puzzle_band = 0;         /* Around my rating */
+    g->puzzle_band = 2;         /* Normal: around my current rating */
     g->puzzle_theme = 0;        /* any */
     g->puzzle_rating = 1500;
     g->local_rating = 1500;
@@ -2390,15 +2398,9 @@ static void handle_setup_mousedown(Gui *g)
 
 /* ---- puzzles ---- */
 
-/* rmin/rmax == 0 means "auto": a window around the user's puzzle rating. */
-typedef struct { const char *label; int rmin, rmax; } PuzzleBand;
+typedef struct { const char *label; int offset; } PuzzleBand;
 static const PuzzleBand PUZZLE_BANDS[] = {
-    { "Around my rating", 0, 0 },
-    { "Under 1000",   0,  999 },
-    { "1000-1400", 1000, 1400 },
-    { "1400-1800", 1400, 1800 },
-    { "1800-2200", 1800, 2200 },
-    { "2200+",     2200, 4000 },
+    {"Very Easy",-600},{"Easy",-300},{"Normal",0},{"Hard",300},{"Very Hard",600}
 };
 #define PUZZLE_BAND_COUNT ((int)(sizeof PUZZLE_BANDS / sizeof PUZZLE_BANDS[0]))
 
@@ -2458,13 +2460,8 @@ static void open_puzzle(Gui *g)
         if(day){int next=day<workspace_today()?day+1:day;g->ui->selected_day=g->ui->month_day=next;ui_next_puzzle(g,next);}else ui_next_puzzle(g,0);return;}
     if (!g->puzzles) return;
     const PuzzleBand *b = &PUZZLE_BANDS[g->puzzle_band];
-    int rmin = b->rmin, rmax = b->rmax;
-    if (rmin == 0 && rmax == 0) {           /* "Around my rating" */
-        rmin = g->puzzle_rating - 200;
-        rmax = g->puzzle_rating + 200;
-        if (rmin < 400) rmin = 400;
-        if (rmax > 4000) rmax = 4000;
-    }
+    int rmin=g->puzzle_rating+b->offset-150,rmax=g->puzzle_rating+b->offset+149;
+    if(rmin<400)rmin=400;if(rmax<400)rmax=400;if(rmax>4000)rmax=4000;
     const char *theme = g->puzzle_theme > 0 ? PUZZLE_THEMES[g->puzzle_theme] : NULL;
     if (!puzzles_pick(g->puzzles, rmin, rmax, theme, &g->puzzle_cur)) {
         snprintf(g->menu_msg, sizeof g->menu_msg, "No puzzle matches that filter");
@@ -2563,14 +2560,15 @@ static void puzzle_reveal(Gui *g)
 static void puzzle_setup_rects(const Gui *g, SDL_Rect bands[PUZZLE_BAND_COUNT],
                                SDL_Rect *theme, SDL_Rect *start, SDL_Rect *back)
 {
-    int bw = 150, bh = 46, gap = 12;
+    int bw = (g->win_w-248-4*12)/5, bh = 46, gap = 12;
+    if(bw>150)bw=150;
     int total = PUZZLE_BAND_COUNT * bw + (PUZZLE_BAND_COUNT - 1) * gap;
-    int x0 = (g->win_w - total) / 2;
+    int x0 = 208+(g->win_w-208-total)/2;
     for (int i = 0; i < PUZZLE_BAND_COUNT; i++)
         bands[i] = (SDL_Rect){ x0 + i * (bw + gap), 300, bw, bh };
-    theme->w = 320; theme->h = 44; theme->x = g->win_w / 2 - 160; theme->y = 400;
-    start->w = 150; start->h = 46; start->x = g->win_w / 2 - 160; start->y = 520;
-    back->w  = 150; back->h  = 46; back->x  = g->win_w / 2 + 10;  back->y  = 520;
+    theme->w = 320; theme->h = 44; theme->x = (208+(g->win_w-208)/2) - 160; theme->y = 400;
+    start->w = 150; start->h = 46; start->x = (208+(g->win_w-208)/2) - 160; start->y = 520;
+    back->w  = 150; back->h  = 46; back->x  = (208+(g->win_w-208)/2) + 10;  back->y  = 520;
 }
 
 static void handle_puzzle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
@@ -2611,48 +2609,37 @@ static void render_puzzle_setup(Gui *g, SDL_Renderer *ren)
 {
     set_render_color(ren, 22, 26, 34);
     ui_background(g,ren);
-    render_text_centered(g, g->font_ui, "Puzzles", g->win_w / 2, 150,
+    render_text_centered(g, g->font_ui, "Puzzles", (208+(g->win_w-208)/2), 150,
                          (SDL_Color){ 235, 225, 200, 255 });
 
     SDL_Rect bands[PUZZLE_BAND_COUNT], theme, start, back;
     puzzle_setup_rects(g, bands, &theme, &start, &back);
 
-    render_text_centered(g, g->font_small, "Rating", g->win_w / 2, 268,
-                         (SDL_Color){ 150, 180, 200, 255 });
-    for (int i = 0; i < PUZZLE_BAND_COUNT; i++) {
-        bool sel = (g->puzzle_band == i);
-        draw_rect(ren, &bands[i], sel ? 70 : 40, sel ? 80 : 50, sel ? 100 : 60, true);
-        if (sel && g->setup_field == 0) draw_rect(ren, &bands[i], 90, 150, 200, false);
-        render_text_centered(g, g->font_ui, PUZZLE_BANDS[i].label,
-                             bands[i].x + bands[i].w / 2, bands[i].y + 12,
-                             (SDL_Color){ 235, 235, 235, 255 });
-    }
+    bool smart=g->ui&&g->ui->smart;
+    char around[160];snprintf(around,sizeof around,ui_tr(g,"Around my rating · %d · Target %+d","围绕当前评分 · %d · 目标偏移 %+d"),g->puzzle_rating,PUZZLE_BANDS[g->puzzle_band].offset);
+    render_text_centered(g,g->font_small,smart?ui_tr(g,"Smart practice · Adaptive difficulty","智能练习 · 自动调整难度"):around,208+(g->win_w-208)/2,268,(SDL_Color){150,180,200,255});
+    if(!smart)for(int i=0;i<PUZZLE_BAND_COUNT;i++)ui_button(g,bands[i],ui_old_text(g,PUZZLE_BANDS[i].label),-1,g->puzzle_band==i);
+    if(!smart)render_text_centered(g,g->font_tiny,ui_tr(g,"Harder puzzles: larger gains, smaller losses. Easier puzzles: smaller gains, larger losses.","题目越难，解出加分越多、答错扣分越少；简单题则相反。"),208+(g->win_w-208)/2,350,(SDL_Color){150,180,200,255});
 
-    render_text_centered(g, g->font_small, "Theme", g->win_w / 2, 372,
+    render_text_centered(g, g->font_small, "Theme", (208+(g->win_w-208)/2), 372,
                          (SDL_Color){ 150, 180, 200, 255 });
     draw_rect(ren, &theme, 40, 44, 54, true);
     if (g->setup_field == 1) draw_rect(ren, &theme, 90, 150, 200, false);
     char tl[64];
-    snprintf(tl, sizeof tl, "<  %s  >", PUZZLE_THEMES[g->puzzle_theme]);
+    snprintf(tl, sizeof tl, "<  %s  >", ui_old_text(g,PUZZLE_THEMES[g->puzzle_theme]));
     render_text_centered(g, g->font_ui, tl, theme.x + theme.w / 2, theme.y + 8,
                          (SDL_Color){ 235, 235, 235, 255 });
 
-    draw_rect(ren, &start, 55, 90, 60, true);
-    draw_rect(ren, &start, 120, 120, 130, false);
-    render_text_centered(g, g->font_ui, "Start", start.x + start.w / 2, start.y + 10,
-                         (SDL_Color){ 235, 235, 235, 255 });
-    draw_rect(ren, &back, 45, 45, 50, true);
-    draw_rect(ren, &back, 120, 120, 130, false);
-    render_text_centered(g, g->font_ui, "Back", back.x + back.w / 2, back.y + 10,
-                         (SDL_Color){ 235, 235, 235, 255 });
+    ui_button(g,start,ui_old_text(g,"Start"),-1,true);
+    ui_button(g,back,ui_old_text(g,"Back"),-1,false);
 
     char info[128];
-    snprintf(info, sizeof info, "%d puzzles loaded    Your puzzle rating: %d",
+    snprintf(info, sizeof info, ui_tr(g,"%d puzzles loaded    Your puzzle rating: %d","已加载 %d 道题目    当前解题评分：%d"),
              puzzles_count(g->puzzles), g->puzzle_rating);
-    render_text_centered(g, g->font_small, info, g->win_w / 2, 620,
+    render_text_centered(g, g->font_small, info, (208+(g->win_w-208)/2), 620,
                          (SDL_Color){ 150, 210, 230, 255 });
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 650,
+        render_text_centered(g, g->font_small, g->menu_msg, (208+(g->win_w-208)/2), 650,
                              (SDL_Color){ 255, 170, 120, 255 });
 }
 
@@ -5281,8 +5268,8 @@ static void draw_capture_ring(Gui *g, SDL_Renderer *ren, int cx, int cy,
 
 /* Straight trail behind a sliding piece: grows to three squares and fades
  * on arrival. Cyan for White pieces, coral for Black. */
-static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
-                            float fx, float fy, float tx, float ty, float t)
+static void draw_move_trail(SDL_Renderer *ren, Piece piece,
+                            float fx, float fy, float tx, float ty, float t,float square_size)
 {
     if (!WHITE_PIECE(piece) && !BLACK_PIECE(piece)) return;
     bool white = WHITE_PIECE(piece);
@@ -5297,14 +5284,14 @@ static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
      * Let it fade behind the arriving piece, as in Trail.mov. */
     float e = 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
     float L = e * D;
-    float maxL = 3.0f * (float)g->sq;
+    float maxL = 3.0f * square_size;
     if (L > maxL) L = maxL;
     if (L < 1.0f) return;
 
     /* Head is the piece's current centre; tail is L back along the direction. */
     float hx = fx + ex * e, hy = fy + ey * e;
     float tlx = hx - ux * L, tly = hy - uy * L;
-    float hw = g->sq * 0.30f;
+    float hw = square_size * 0.30f;
     float px = -uy * hw, py = ux * hw;
     Uint8 opacity = (Uint8)(202.0f * (1.0f - t * t * t));
 
@@ -5325,7 +5312,7 @@ static void draw_move_trail(Gui *g, SDL_Renderer *ren, Piece piece,
     int idx[6] = { 0, 1, 2, 0, 2, 3 };
     SDL_RenderGeometry(ren, NULL, v, 4, idx, 6);
 #else
-    int N = (int)(L / (g->sq * 0.10f)) + 2;
+    int N = (int)(L / (square_size * 0.10f)) + 2;
     if (N > 64) N = 64;
     for (int i = 0; i <= N; i++) {
         float s = (float)i / (float)N;           /* 0 at head, 1 at tail */
@@ -5517,7 +5504,7 @@ static void draw_piece_layer(Gui *g, SDL_Renderer *ren, Uint32 now)
 
         /* Comet trail behind the sliding piece. */
         if (g->anim_style == ANIM_ARCADE && !s->fast)
-            draw_move_trail(g, ren, s->piece, fx, fy, tx, ty, t);
+            draw_move_trail(ren,s->piece,fx,fy,tx,ty,t,g->sq);
 
         anim_piece_transform(g, g->anim_style, t, fx, fy, tx, ty, &x, &y, &sc, &al);
         if (s->fast) sc *= 1.0f + (s->cursor_scale - 1.0f) * (1.0f - t);
@@ -7348,34 +7335,20 @@ static SDL_Texture *make_scaled_tex(Gui *g, const char *path, int px)
     return t;
 }
 
-/* Composite the set's white and black king onto one neutral thumbnail. */
-static SDL_Texture *make_piece_thumb(Gui *g, const char *dir, int px)
+/* Square 2x2 sample: kings on opposite corners, with aspect-preserving fit. */
+static SDL_Texture *make_piece_thumb(Gui *g,const char *dir,int px)
 {
-    char wp[THEME_PATH_MAX + 16], bp[THEME_PATH_MAX + 16];
-    snprintf(wp, sizeof wp, "%s/wk.png", dir);
-    snprintf(bp, sizeof bp, "%s/bk.png", dir);
-    SDL_Surface *w = IMG_Load(wp);
-    SDL_Surface *b = IMG_Load(bp);
-    if (!w || !b) {
-        if (w) SDL_FreeSurface(w);
-        if (b) SDL_FreeSurface(b);
-        return NULL;
-    }
-    SDL_Surface *dst = SDL_CreateRGBSurfaceWithFormat(0, px, px, 32, SDL_PIXELFORMAT_RGBA32);
-    if (!dst) { SDL_FreeSurface(w); SDL_FreeSurface(b); return NULL; }
-
-    SDL_FillRect(dst, NULL, SDL_MapRGBA(dst->format, 96, 100, 110, 255));
-    SDL_Rect l = { px / 8, px / 8, px * 3 / 8, px * 3 / 4 };
-    SDL_Rect rr = { px / 2, px / 8, px * 3 / 8, px * 3 / 4 };
-    SDL_BlitScaled(w, NULL, dst, &l);
-    SDL_BlitScaled(b, NULL, dst, &rr);
-
-    SDL_Texture *t = SDL_CreateTextureFromSurface(g->ren, dst);
-    if (t) SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
-    SDL_FreeSurface(w);
-    SDL_FreeSurface(b);
-    SDL_FreeSurface(dst);
-    return t;
+    char path[THEME_PATH_MAX+16];SDL_Surface *pieces[2]={NULL,NULL};const char *names[]={"wk.png","bk.png"};
+    for(int k=0;k<2;k++){snprintf(path,sizeof path,"%s/%s",dir,names[k]);pieces[k]=IMG_Load(path);}
+    if(!pieces[0]||!pieces[1]){for(int k=0;k<2;k++)if(pieces[k])SDL_FreeSurface(pieces[k]);return NULL;}
+    SDL_Surface *dst=SDL_CreateRGBSurfaceWithFormat(0,px,px,32,SDL_PIXELFORMAT_RGBA32);if(!dst){for(int k=0;k<2;k++)SDL_FreeSurface(pieces[k]);return NULL;}
+    for(int row=0;row<2;row++)for(int col=0;col<2;col++){SDL_Rect cell={col*px/2,row*px/2,(col+1)*px/2-col*px/2,(row+1)*px/2-row*px/2};SDL_FillRect(dst,&cell,SDL_MapRGBA(dst->format,(row+col)%2?125:222,(row+col)%2?153:233,(row+col)%2?174:240,255));}
+    for(int k=0;k<2;k++){SDL_Surface *piece=pieces[k];float fit=fminf(px*0.43f/piece->w,px*0.43f/piece->h);int width=lroundf(piece->w*fit),height=lroundf(piece->h*fit);SDL_Rect box={k*px/2+(px/2-width)/2,k*px/2+(px/2-height)/2,width,height};SDL_BlitScaled(piece,NULL,dst,&box);SDL_FreeSurface(piece);}
+    SDL_Texture *texture=SDL_CreateTextureFromSurface(g->ren,dst);SDL_FreeSurface(dst);if(texture){SDL_SetTextureBlendMode(texture,SDL_BLENDMODE_BLEND);
+#if SDL_VERSION_ATLEAST(2,0,12)
+        SDL_SetTextureScaleMode(texture,SDL_ScaleModeLinear);
+#endif
+    }return texture;
 }
 
 static SDL_Texture *board_thumb(Gui *g, int idx)
@@ -7448,12 +7421,15 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
                 else                  set_render_color(ren, 110, 112, 120);
                 SDL_RenderFillRect(ren, &q);
             }
-        float t = (float)((SDL_GetTicks() - g->ape_started) % 1400) / 1400.0f;
-        float fx = inner.x + side * 0.25f, fy = inner.y + side * 0.75f;
-        float tx = inner.x + side * 0.75f, ty = inner.y + side * 0.25f;
-        float x, y, sc, al;
-        anim_piece_transform(g, (AnimStyle)idx, t, fx, fy, tx, ty, &x, &y, &sc, &al);
-        render_piece_box(g, ren, WN, x, y, side * 0.34f * sc, al);
+        Uint32 elapsed=SDL_GetTicks()-g->ape_started,cycle=elapsed%1200;
+        Uint32 duration=ANIM_DURS[idx];float t=duration?fmaxf(0,fminf(1,((float)cycle-160)/duration)):1;
+        bool reverse=(elapsed/1200)%2;Piece piece=reverse?BN:WN;
+        float fx=inner.x+side*(reverse?0.75f:0.25f),fy=inner.y+side*0.75f;
+        float tx=inner.x+side*(reverse?0.25f:0.75f),ty=inner.y+side*0.25f;
+        float x,y,sc,al;anim_piece_transform(g,(AnimStyle)idx,t,fx,fy,tx,ty,&x,&y,&sc,&al);
+        if(idx==ANIM_ARCADE&&t>0&&t<1)draw_move_trail(ren,piece,fx,fy,tx,ty,t,side*0.25f);
+        render_piece_box(g,ren,piece,x,y,side*0.34f*sc,al);
+        char cadence[32];snprintf(cadence,sizeof cadence,duration?"%u ms":"Instant",duration);render_text_centered(g,g->font_tiny,cadence,inner.x+side/2,inner.y+side-16,(SDL_Color){235,239,245,255});
     }
 
     const char *label = (tab == 2) ? ANIM_LABELS[idx]
@@ -7743,7 +7719,7 @@ static void render_settings_engine(Gui *g, SDL_Renderer *ren)
         if ((i == 3 || i == 4) && v == 0) snprintf(val, sizeof val, "unlimited");
         else if (i == 0 && v == 0)        snprintf(val, sizeof val, "off");
         else                              snprintf(val, sizeof val, "%d", v);
-        render_text(g, g->font_small, val, 318, y + 6, (SDL_Color){ 220, 225, 235, 255 });
+        render_text_centered(g, g->font_small, val, 420, y + 6, (SDL_Color){ 220, 225, 235, 255 });
         draw_rect(ren, &minus[i], on ? 90 : 55, on ? 150 : 60, on ? 200 : 75, true);
         render_text_centered(g, g->font_small, "-", minus[i].x + minus[i].w / 2, y + 6,
                              (SDL_Color){ 235, 235, 235, 255 });
@@ -8691,6 +8667,7 @@ void gui_render(Gui *g, SDL_Renderer *ren)
     /* Keep the drawing scale in sync with the intended magnification even if
      * SDL reset it (e.g. after a window/display change). */
     apply_render_scale(g);
+    ui_apply_theme(g);if(g->ui)g->ui->tooltip[0]=0;
 
     bool new_page=ui_render_page(g);
     if(g->ui)g->ui->legacy_paint=!new_page;
@@ -8724,8 +8701,9 @@ void gui_render(Gui *g, SDL_Renderer *ren)
         ui_shell(g);
         ui_modal_render(g);
     }
-    if (g->account_open && g->scene != SCENE_ONLINE) render_account(g, ren);
+    if (g->account_open && g->scene != SCENE_ONLINE) {if(g->ui)g->ui->legacy_paint=true;render_account(g,ren);if(g->ui)g->ui->legacy_paint=false;}
 
+    ui_tooltip_render(g);
     draw_debug_overlay(g, ren);
     SDL_RenderPresent(ren);
 }

@@ -28,6 +28,22 @@ int main(void)
         for(char *t=strtok_r(line," ",&save);t;t=strtok_r(NULL," ",&save)){Move m;if(!uci_to_move(&board,t,&m)){ok=false;break;}make_move_plumb(&board,m);}
         if(ok)valid++;else {bad++;fprintf(stderr,"Invalid bundled puzzle: %s\n",puzzle.id);}
     }CHECK(bad==0);printf("Bundled puzzle legal lines: %d; invalid: %d\n",valid,bad);
+    /* Relative selection and settlement must agree locally and online. */
+    int previous_gain=-1,previous_loss=-100;
+    for(int level=0;level<5;level++){
+        int target=1500+(level-2)*300;Puzzle chosen;
+        for(int sample=0;sample<25;sample++){CHECK(workspace_pick_level(p,1500,level,NULL,&chosen));CHECK(chosen.rating>=target-150&&chosen.rating<=target+149);}
+        chosen.rating=target; /* Fix the rating to test settlement independently of sampling. */
+        char owner[32];snprintf(owner,sizeof owner,"win-level-%d",level);workspace_profile(w,owner,1500);
+        CHECK(workspace_issue(w,owner,"win",&chosen,true,0));cJSON *settled=workspace_submit(w,owner,"win",chosen.moves,false,false,100);
+        int gain=integer(settled,"delta");CHECK(gain>previous_gain);previous_gain=gain;cJSON_Delete(settled);
+        snprintf(owner,sizeof owner,"loss-level-%d",level);workspace_profile(w,owner,1500);
+        CHECK(workspace_issue(w,owner,"loss",&chosen,true,0));settled=workspace_submit(w,owner,"loss","",false,true,100);
+        int loss=integer(settled,"delta");CHECK(loss>previous_loss&&loss<0);previous_loss=loss;cJSON_Delete(settled);
+    }
+    Puzzle boundary;CHECK(workspace_pick_level(p,400,0,NULL,&boundary));CHECK(boundary.rating==600);
+    CHECK(workspace_pick_level(p,3000,4,NULL,&boundary));CHECK(boundary.rating==2799);
+    CHECK(workspace_pick_level(p,1500,2,"no-such-theme",&boundary));
     int start=workspace_day("2026-10-12"),end=start+6;
     CHECK(workspace_daily_fill(w,p,start));CHECK(workspace_daily_fill(w,p,end));
     cJSON *cal=workspace_calendar(w,"alice",start,end);CHECK(cJSON_GetArraySize(cal)==7);cJSON_Delete(cal);
@@ -55,5 +71,11 @@ int main(void)
     q=cJSON_Parse("{\"op\":\"message.send\",\"peer\":2,\"text\":\"你好，朋友\"}");result=community_request(w,p,1,"alice",q);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(result,"ok")));CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(result,"rows"))==1);cJSON_Delete(result);cJSON_Delete(q);
     q=cJSON_Parse("{\"op\":\"messages\",\"peer\":2}");result=community_request(w,p,3,"eve",q);CHECK(cJSON_IsFalse(cJSON_GetObjectItem(result,"ok")));cJSON_Delete(result);cJSON_Delete(q);
     q=cJSON_Parse("{\"op\":\"friend.action\",\"peer\":1,\"action\":\"block\"}");result=community_request(w,p,2,"bob",q);cJSON_Delete(result);cJSON_Delete(q);CHECK(community_blocked(w,1,2));
+    for(int level=0;level<5;level++){
+        q=cJSON_CreateObject();cJSON_AddStringToObject(q,"op","puzzle.next");cJSON_AddNumberToObject(q,"difficulty",level);
+        result=community_request(w,p,1,"alice",q);Puzzle issued;CHECK(cJSON_IsTrue(cJSON_GetObjectItem(result,"ok")));
+        CHECK(workspace_puzzle_parse(cJSON_GetObjectItem(result,"puzzle"),&issued));int target=1610+(level-2)*300;
+        CHECK(issued.rating>=target-150&&issued.rating<=target+149);cJSON_Delete(result);cJSON_Delete(q);
+    }
     puzzles_free(p);workspace_close(w);printf("Workspace, daily archive, immutable scoring, social permissions and setup: %s\n",failures?"FAILED":"PASSED");return failures!=0;
 }
