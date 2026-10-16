@@ -425,6 +425,7 @@ typedef struct {
 
     /* appearance picker (thumbnails are built lazily and cached) */
     int      ape_tab;           /* 0 = boards, 1 = pieces, 2 = animation */
+    int      ape_page[3];       /* Browsing pages do not change the applied style. */
     int      ape_sel[3];        /* selected item per tab */
     Uint32   ape_started;       /* for the animation preview loop */
     Scene    ape_return_scene;  /* where Back returns to */

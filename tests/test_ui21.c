@@ -21,6 +21,16 @@ int main(void)
  gui_save_config(g);g->ui->dark_mode=false;g->ui->app_theme=0;gui_load_config(g,path_config());if(!g->ui->dark_mode||g->ui->app_theme!=6)return 12;
  for(int mode=0;mode<2;mode++)for(int theme=0;theme<10;theme++){g->ui->dark_mode=mode!=0;g->ui->app_theme=theme;g->scene=SCENE_MENU;char name[64];snprintf(name,sizeof name,"theme-%d-%d",theme,mode);capture(g,r,name);}
  g->ui->app_theme=0;g->ui->dark_mode=false;g->scene=SCENE_APPEARANCE;g->ape_tab=1;capture(g,r,"piece-previews");g->ape_tab=2;g->ape_started=SDL_GetTicks()-300;capture(g,r,"animation-previews");
+ /* Both pickers browse independently without silently applying a new style. */
+ for(int tab=0;tab<2;tab++){
+   g->scene=SCENE_APPEARANCE;g->ape_tab=tab;g->ape_page[tab]=0;
+   int selected=g->ape_sel[tab],applied=tab?g->piece_index:g->board_index;
+   click(g,1040,672);if(g->ape_page[tab]!=1||g->ape_sel[tab]!=selected||(tab?g->piece_index:g->board_index)!=applied)return 13;
+   capture(g,r,tab?"pieces-page-two":"boards-page-two");
+   for(int i=0;i<10;i++)click(g,1040,672);
+   int last=((tab?g->pieces.count:g->boards.count)-1)/18;if(g->ape_page[tab]!=last)return 14;
+   for(int i=0;i<10;i++)click(g,550,672);if(g->ape_page[tab]!=0)return 15;
+ }
  g->ui->dark_mode=true;g->scene=SCENE_SETTINGS;capture(g,r,"dark-settings");g->scene=SCENE_GAME;capture(g,r,"dark-analysis");g->ui->dark_mode=false;g->scene=SCENE_GAME;capture(g,r,"light-analysis");
  g->ui->smart=false;g->scene=SCENE_PUZZLE_SETUP;capture(g,r,"puzzle-difficulty");
  gui_destroy(g);SDL_DestroyRenderer(r);SDL_FreeSurface(surface);

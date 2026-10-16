@@ -3511,6 +3511,12 @@ static void ape_back_rect(const Gui *g, SDL_Rect *r)
     r->x = g->win_w - 180; r->y = g->win_h - 70;
 }
 
+static void ape_page_rect(const Gui *g, int direction, SDL_Rect *r)
+{
+    int center = 208 + (g->win_w - 208) / 2;
+    *r = (SDL_Rect){ center + (direction < 0 ? -310 : 174), 654, 136, 38 };
+}
+
 static int appearance_count(Gui *g, int tab)
 {
     if (tab == 0) return g->boards.count;
@@ -3525,6 +3531,7 @@ static void open_appearance(Gui *g, Scene return_to)
     g->ape_sel[0] = g->board_index;
     g->ape_sel[1] = g->piece_index;
     g->ape_sel[2] = (int)g->anim_style;
+    for(int i=0;i<3;i++)g->ape_page[i]=g->ape_sel[i]/APE_PER_PAGE;
     g->ape_started = SDL_GetTicks();
     g->scene = SCENE_APPEARANCE;
 }
@@ -3547,7 +3554,15 @@ static void appearance_move(Gui *g, int delta)
     if (sel < 0) sel = 0;
     if (sel >= n) sel = n - 1;
     g->ape_sel[g->ape_tab] = sel;
+    g->ape_page[g->ape_tab] = sel / APE_PER_PAGE;
     appearance_apply(g);
+}
+
+static void appearance_page_move(Gui *g, int direction)
+{
+    if(g->ape_tab==2)return;
+    int count=appearance_count(g,g->ape_tab),last=count>0?(count-1)/APE_PER_PAGE:0;
+    g->ape_page[g->ape_tab]=clampi(g->ape_page[g->ape_tab]+direction,0,last);
 }
 
 static void handle_appearance_keydown(Gui *g, const SDL_KeyboardEvent *ke)
@@ -3557,6 +3572,8 @@ static void handle_appearance_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
     if (ctrl && k == SDLK_q) { g->quit = true; return; }
     if (k == SDLK_ESCAPE || k == SDLK_BACKSPACE) { g->scene = g->ape_return_scene; return; }
+    if (k == SDLK_PAGEUP) { appearance_page_move(g,-1); return; }
+    if (k == SDLK_PAGEDOWN) { appearance_page_move(g,1); return; }
     if (k == SDLK_LEFT)  { appearance_move(g, -1); return; }
     if (k == SDLK_RIGHT) { appearance_move(g, 1); return; }
     if (k == SDLK_UP)    { appearance_move(g, -APE_COLS); return; }
@@ -3587,7 +3604,11 @@ static void handle_appearance_mousedown(Gui *g)
 
     int tab = g->ape_tab;
     int n = appearance_count(g, tab);
-    int start = (g->ape_sel[tab] / APE_PER_PAGE) * APE_PER_PAGE;
+    if(tab<2)for(int direction=-1;direction<=1;direction+=2){
+        SDL_Rect r;ape_page_rect(g,direction,&r);
+        if(pt_in(&r,p.x,p.y)){appearance_page_move(g,direction);return;}
+    }
+    int start = g->ape_page[tab] * APE_PER_PAGE;
     for (int j = 0; j < APE_PER_PAGE; j++) {
         int idx = start + j;
         if (idx >= n) break;
@@ -7413,10 +7434,10 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
                                  (SDL_Color){ 235, 235, 235, 255 });
         }
     } else {
-        for (int r = 0; r < 8; r++)
-            for (int f = 0; f < 8; f++) {
-                SDL_Rect q = { inner.x + f * side / 8, inner.y + r * side / 8,
-                               side / 8 + 1, side / 8 + 1 };
+        for (int r = 0; r < 4; r++)
+            for (int f = 0; f < 4; f++) {
+                SDL_Rect q = { inner.x + f * side / 4, inner.y + r * side / 4,
+                               side / 4 + 1, side / 4 + 1 };
                 if ((r + f) % 2 == 0) set_render_color(ren, 180, 180, 186);
                 else                  set_render_color(ren, 110, 112, 120);
                 SDL_RenderFillRect(ren, &q);
@@ -7424,17 +7445,23 @@ static void draw_ape_cell(Gui *g, SDL_Renderer *ren, int tab, int idx,
         Uint32 elapsed=SDL_GetTicks()-g->ape_started,cycle=elapsed%1200;
         Uint32 duration=ANIM_DURS[idx];float t=duration?fmaxf(0,fminf(1,((float)cycle-160)/duration)):1;
         bool reverse=(elapsed/1200)%2;Piece piece=reverse?BN:WN;
-        float fx=inner.x+side*(reverse?0.75f:0.25f),fy=inner.y+side*0.75f;
-        float tx=inner.x+side*(reverse?0.25f:0.75f),ty=inner.y+side*0.25f;
+        /* Knight move between square centres on the 4x4 preview board. */
+        float fx=inner.x+side*(reverse?0.625f:0.125f),fy=inner.y+side*(reverse?0.625f:0.875f);
+        float tx=inner.x+side*(reverse?0.125f:0.625f),ty=inner.y+side*(reverse?0.875f:0.625f);
         float x,y,sc,al;anim_piece_transform(g,(AnimStyle)idx,t,fx,fy,tx,ty,&x,&y,&sc,&al);
         if(idx==ANIM_ARCADE&&t>0&&t<1)draw_move_trail(ren,piece,fx,fy,tx,ty,t,side*0.25f);
-        render_piece_box(g,ren,piece,x,y,side*0.34f*sc,al);
-        char cadence[32];snprintf(cadence,sizeof cadence,duration?"%u ms":"Instant",duration);render_text_centered(g,g->font_tiny,cadence,inner.x+side/2,inner.y+side-16,(SDL_Color){235,239,245,255});
+        render_piece_box(g,ren,piece,x,y,side*0.20f*sc,al);
     }
 
     const char *label = (tab == 2) ? ANIM_LABELS[idx]
                       : (tab == 0) ? g->boards.items[idx].label
                                    : g->pieces.items[idx].label;
+    char animation_label[80];
+    if(tab==2){
+        if(ANIM_DURS[idx])snprintf(animation_label,sizeof animation_label,"%s · %u ms",label,ANIM_DURS[idx]);
+        else snprintf(animation_label,sizeof animation_label,"%s · %s",label,ui_old_text(g,"Instant"));
+        label=animation_label;
+    }
     render_text_centered(g, g->font_small, label, cell->x + cell->w / 2,
                          cell->y + cell->h - 24, (SDL_Color){ 210, 215, 225, 255 });
 }
@@ -7461,7 +7488,7 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     int tab = g->ape_tab;
     int n = appearance_count(g, tab);
     int sel = g->ape_sel[tab];
-    int page = n > 0 ? sel / APE_PER_PAGE : 0;
+    int page = g->ape_page[tab];
     int start = page * APE_PER_PAGE;
     for (int j = 0; j < APE_PER_PAGE; j++) {
         int idx = start + j;
@@ -7475,7 +7502,14 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     if (pages < 1) pages = 1;
     char info[64];
     snprintf(info, sizeof info, "%d / %d    page %d/%d", sel + 1, n, page + 1, pages);
-    render_text_centered(g, g->font_small, info, g->win_w / 2, 662,
+    if(tab<2)for(int direction=-1;direction<=1;direction+=2){
+        SDL_Rect r;ape_page_rect(g,direction,&r);
+        bool enabled=direction<0?page>0:page+1<pages;
+        const char *label=direction<0?ui_tr(g,"‹ Previous page","‹ 上一页"):ui_tr(g,"Next page ›","下一页 ›");
+        if(enabled)ui_button(g,r,label,-1,false);
+        else {draw_rect(ren,&r,40,44,54,true);render_text_centered(g,g->font_small,label,r.x+r.w/2,r.y+10,(SDL_Color){110,120,130,255});}
+    }
+    render_text_centered(g, g->font_small, info, 208+(g->win_w-208)/2, 664,
                          (SDL_Color){ 150, 170, 190, 255 });
 
     SDL_Rect back;
@@ -7483,7 +7517,7 @@ static void render_appearance(Gui *g, SDL_Renderer *ren)
     render_text_centered_rect(g, ren, &back, "Back");
 
     render_text_centered(g, g->font_small,
-                         "Arrows select    Tab / 1-2-3 switch tab    Enter apply    Esc back",
+                         ui_tr(g,"Arrows select · PgUp/PgDn page · Tab switch · Enter apply · Esc back","方向键选择 · PgUp/PgDn 翻页 · Tab 切换 · 回车应用 · Esc 返回"),
                          g->win_w / 2, g->win_h - 40,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
