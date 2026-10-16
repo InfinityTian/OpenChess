@@ -75,6 +75,7 @@ static SDL_Color ui_surface_color(SDL_Color color);
 static SDL_Color ui_legacy_text_color(Gui *g,TTF_Font *font,SDL_Color color);
 static void ui_tooltip_render(Gui *g);
 static void ui_round_outline(SDL_Renderer *r,SDL_Rect rect,SDL_Color color);
+static void ui_panel_border(SDL_Renderer *r,SDL_Rect rect,int radius);
 static void ui_move_background(Gui *g,SDL_Rect rect,bool selected);
 static void ui_puzzle_rating(Gui *g);
 static void ui_caret_color(SDL_Renderer *ren);
@@ -381,7 +382,10 @@ static void draw_rect(SDL_Renderer *ren, SDL_Rect *rc, Uint8 r, Uint8 g, Uint8 b
 {
     if(r<110&&g<130&&b<150&&fill){r=242;g=248;b=253;}
     set_render_color(ren, r, g, b);
-    if (fill) ui_round(ren,*rc,(SDL_Color){r,g,b,255},6);
+    if (fill) {
+        ui_round(ren,*rc,(SDL_Color){r,g,b,255},6);
+        if(rc->w>=120&&rc->h>=50)ui_panel_border(ren,*rc,6);
+    }else if(abs((int)r-g)<24&&abs((int)g-b)<24)ui_panel_border(ren,*rc,6);
     else ui_round_outline(ren,*rc,(SDL_Color){r,g,b,255});
 }
 
@@ -6702,8 +6706,9 @@ static void render_engine_panel(Gui *g, SDL_Renderer *ren)
                      g->opening_name_cur);
         else
             snprintf(label, sizeof label, "%s", g->opening_name_cur);
+        SDL_Rect opening_clip={g->panel_x,y+4,PANEL_W,24};SDL_RenderSetClipRect(ren,&opening_clip);
         render_text(g, g->font_small, label, g->panel_x, y + 4,
-                    (SDL_Color){ 190, 200, 210, 255 });
+                    (SDL_Color){ 190, 200, 210, 255 });SDL_RenderSetClipRect(ren,NULL);
     }
 }
 
@@ -7159,6 +7164,7 @@ static void render_move_list(Gui *g)
     }
 
     SDL_RenderSetClipRect(ren, NULL);
+    ui_panel_border(ren,box,6);
 
     /* scrollbar */
     if (g->move_scroll_max > 0) {
@@ -7286,6 +7292,7 @@ static void render_analysis_graph(Gui *g, SDL_Renderer *ren)
                              box.x + box.w / 2, box.y + 14,
                              (SDL_Color){195, 194, 193, 255});
     SDL_RenderSetClipRect(ren, NULL);
+    ui_panel_border(ren,box,6);
 }
 
 static void render_san_hint(Gui *g)
@@ -8795,6 +8802,8 @@ static void render_game(Gui *g, SDL_Renderer *ren, Uint32 now)
     }
 
     if(viewing){g->board=live_board;g->ply=live_ply;g->state=live_state;g->selected=live_selected;g->targets.count=live_targets;g->anim_count=live_anims;g->check_anim=live_check;g->end_anim=live_end;}
+    SDL_Rect activity={g->panel_x-8,g->board_y-8,PANEL_W+16,g->mode==MODE_ANALYSIS?194:g->mode==MODE_PUZZLE?62:72};
+    ui_round(ren,activity,(SDL_Color){250,253,255,255},10);ui_panel_border(ren,activity,10);
     render_status(g);
     render_engine_panel(g, ren);
     render_review_bar(g, ren);

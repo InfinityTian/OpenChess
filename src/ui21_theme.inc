@@ -14,7 +14,7 @@ static void ui_apply_theme(Gui *g)
     if(ui_dark){
         ui_bg=ui_mix((SDL_Color){19,24,32,255},accent,0.20f);ui_surface=ui_mix((SDL_Color){29,36,46,255},accent,0.08f);
         ui_sidebar=ui_mix((SDL_Color){24,31,42,255},accent,0.10f);ui_control=ui_mix((SDL_Color){43,52,65,255},accent,0.12f);
-        ui_hover=ui_mix((SDL_Color){52,68,85,255},accent,0.20f);ui_border=(SDL_Color){79,97,116,255};
+        ui_hover=ui_mix((SDL_Color){52,68,85,255},accent,0.20f);ui_border=ui_mix((SDL_Color){79,97,116,255},accent,0.22f);
         ui_ink=(SDL_Color){233,240,248,255};ui_muted=(SDL_Color){174,190,208,255};ui_accent=ui_mix(accent,(SDL_Color){90,160,240,255},0.18f);
     }else{
         ui_bg=index?ui_mix((SDL_Color){250,251,252,255},accent,0.16f):(SDL_Color){234,243,251,255};

@@ -38,6 +38,7 @@ static void ui_card(Gui *g,SDL_Rect r)
     SDL_SetRenderDrawBlendMode(g->ren,SDL_BLENDMODE_BLEND);
     SDL_Rect shadow=r;shadow.y+=4;ui_round(g->ren,shadow,(SDL_Color){46,89,125,22},14);
     ui_round(g->ren,r,(SDL_Color){250,253,255,255},14);
+    ui_panel_border(g->ren,r,14);
     SDL_SetRenderDrawBlendMode(g->ren,SDL_BLENDMODE_NONE);
 }
 static void ui_line(SDL_Renderer *r,float x1,float y1,float x2,float y2)
@@ -69,6 +70,24 @@ static void ui_round_outline(SDL_Renderer *r,SDL_Rect box,SDL_Color color)
     ui_arc(r,box.x+box.w-radius,box.y+radius,radius,270,360);
     ui_arc(r,box.x+box.w-radius,box.y+box.h-radius,radius,0,90);
     ui_arc(r,box.x+radius,box.y+box.h-radius,radius,90,180);
+}
+/* Inset the shared, theme-colored stroke so adjacent clips never cut it off. */
+static void ui_panel_border(SDL_Renderer *r,SDL_Rect box,int radius)
+{
+    if(box.w<3||box.h<3)return;
+    SDL_Color old;SDL_GetRenderDrawColor(r,&old.r,&old.g,&old.b,&old.a);
+    box.x++;box.y++;box.w-=2;box.h-=2;
+    float rad=fminf(radius,fminf(box.w/2.0f,box.h/2.0f));
+    SDL_SetRenderDrawColor(r,ui_border.r,ui_border.g,ui_border.b,255);
+    ui_line(r,box.x+rad,box.y,box.x+box.w-rad,box.y);
+    ui_line(r,box.x+rad,box.y+box.h,box.x+box.w-rad,box.y+box.h);
+    ui_line(r,box.x,box.y+rad,box.x,box.y+box.h-rad);
+    ui_line(r,box.x+box.w,box.y+rad,box.x+box.w,box.y+box.h-rad);
+    ui_arc(r,box.x+rad,box.y+rad,rad,180,270);
+    ui_arc(r,box.x+box.w-rad,box.y+rad,rad,270,360);
+    ui_arc(r,box.x+box.w-rad,box.y+box.h-rad,rad,0,90);
+    ui_arc(r,box.x+rad,box.y+box.h-rad,rad,90,180);
+    SDL_SetRenderDrawColor(r,old.r,old.g,old.b,old.a);
 }
 static void ui_caret_color(SDL_Renderer *ren){SDL_SetRenderDrawColor(ren,ui_ink.r,ui_ink.g,ui_ink.b,255);}
 static void ui_move_background(Gui *g,SDL_Rect rect,bool selected)
