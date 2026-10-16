@@ -3,7 +3,7 @@ typedef struct {int id,from,to,base,inc,rated,color;uint64_t expires;} Challenge
 static Challenge challenges[256];
 static int challenge_sequence;
 static Session *user_session(int uid){for(int k=0;k<MAX_SESS;k++)if(sessions[k].used&&sessions[k].logged_in&&sessions[k].user_id==uid)return &sessions[k];return NULL;}
-static bool available(Session *s){return s&&!s->queued&&(s->room<0||rooms[s->room].over);}
+static bool available(Session *s){return s&&!account_busy(s)&&!s->queued&&(s->room<0||rooms[s->room].over);}
 static void handle_request(Session *s,const ProtoFrame *f)
 {
     const char *op=proto_field_str(f,"op");if(!op)return;
@@ -57,14 +57,14 @@ static void handle_request(Session *s,const ProtoFrame *f)
     if(!strcmp(op,"puzzle.submit")){
         s->puzzle_rating=workspace_rating(g_workspace,s->user,4);accounts_set_puzzle(g_accounts,s->user_id,s->puzzle_rating);send_auth(s,true,NULL);
     }
+    cJSON_AddStringToObject(response,"actor",s->logged_in?s->user:"");
     sess_send(response,s);
 }
 static void persist_game(Room *r,const char *result)
 {
     if(!g_workspace)return;
     char pgn[20000];int n=snprintf(pgn,sizeof pgn,"[White \"%s\"]\n[Black \"%s\"]\n[Result \"%s\"]\n\n",r->owner[0],r->owner[1],result);
-    /* Build movetext separately to keep integer and string arguments typed. */
-    n=snprintf(pgn,sizeof pgn,"[White \"%s\"]\n[Black \"%s\"]\n[Result \"%s\"]\n\n",r->owner[0],r->owner[1],result);
+
     for(int k=0;k<r->ply&&n<(int)sizeof pgn-40;k++){
         if(k%2==0)n+=snprintf(pgn+n,sizeof pgn-n,"%d. ",k/2+1);
         n+=snprintf(pgn+n,sizeof pgn-n,"%s ",r->san[k]);

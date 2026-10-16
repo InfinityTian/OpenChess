@@ -108,6 +108,12 @@ static void expect_move_both(Transport *t1, Transport *t2, const char *uci)
     proto_frame_free(&f);
 }
 
+static cJSON *rpc(Transport *transport,const char *json)
+{
+    cJSON *request=cJSON_Parse(json);cJSON_AddStringToObject(request,"type","request");send_json(transport,request);ProtoFrame frame={0};
+    if(!expect(transport,PROTO_S2C_RESPONSE,3000,&frame)){CHECK(false);return cJSON_CreateObject();}
+    cJSON *reply=frame.root;frame.root=NULL;return reply;
+}
 int main(void)
 {
     if (!net_ws_available()) {
@@ -531,6 +537,23 @@ int main(void)
             q=proto_new(PROTO_C2S_REQUEST);cJSON_AddStringToObject(q,"op","puzzle.submit");cJSON_AddStringToObject(q,"attempt",id);cJSON_AddStringToObject(q,"moves",moves);send_json(u1,q);
             CHECK(expect(u1,PROTO_S2C_AUTH,3000,&f));CHECK(proto_field_int(&f,"puzzle_rating",0)>1500);proto_frame_free(&f);
             CHECK(expect(u1,PROTO_S2C_RESPONSE,3000,&f));CHECK(cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetObjectItem(f.root,"result"),"solved")));proto_frame_free(&f);
+        }
+
+        /* Social RPCs travel over the actual authenticated sockets. */
+        {
+            cJSON *r=rpc(u1,"{\"op\":\"people\"}");int alice=cJSON_GetObjectItem(r,"self")->valueint;const cJSON *rows=cJSON_GetObjectItem(r,"rows");int bob=0;for(int k=0;k<cJSON_GetArraySize(rows);k++){const cJSON *row=cJSON_GetArrayItem(rows,k);if(!strcmp(cJSON_GetObjectItem(row,"name")->valuestring,"bob"))bob=cJSON_GetObjectItem(row,"id")->valueint;}CHECK(bob>0);cJSON_Delete(r);char json[512];
+            snprintf(json,sizeof json,"{\"op\":\"friend.action\",\"peer\":%d,\"action\":\"request\"}",bob);r=rpc(u1,json);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r,"ok")));cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"friend.action\",\"peer\":%d,\"action\":\"accept\"}",alice);r=rpc(u2,json);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r,"ok")));cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"message.send\",\"peer\":%d,\"text\":\"你好，OpenChess\"}",bob);r=rpc(u1,json);CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(r,"rows"))==1);cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"messages\",\"peer\":%d}",alice);r=rpc(u2,json);rows=cJSON_GetObjectItem(r,"rows");CHECK(cJSON_GetArraySize(rows)==1);int through=cJSON_GetObjectItem(cJSON_GetArrayItem(rows,0),"id")->valueint;cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"message.read\",\"peer\":%d,\"through\":%d}",alice,through);r=rpc(u2,json);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetArrayItem(cJSON_GetObjectItem(r,"rows"),0),"read"))||cJSON_GetObjectItem(cJSON_GetArrayItem(cJSON_GetObjectItem(r,"rows"),0),"read")->valueint==1);cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"challenge.create\",\"peer\":%d,\"time\":300000,\"inc\":3000,\"rated\":false}",bob);r=rpc(u1,json);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r,"ok")));cJSON_Delete(r);r=rpc(u2,"{\"op\":\"challenge.list\"}");rows=cJSON_GetObjectItem(r,"rows");CHECK(cJSON_GetArraySize(rows)==1);int invitation=cJSON_GetObjectItem(cJSON_GetArrayItem(rows,0),"id")->valueint;cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"challenge.cancel\",\"id\":%d}",invitation);r=rpc(u1,json);CHECK(cJSON_IsTrue(cJSON_GetObjectItem(r,"ok")));cJSON_Delete(r);
+            r=rpc(u2,"{\"op\":\"challenge.list\"}");CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(r,"rows"))==0);cJSON_Delete(r);
+            r=rpc(u1,"{\"op\":\"daily.get\"}");int day=cJSON_GetObjectItem(r,"day")->valueint;cJSON_Delete(r);snprintf(json,sizeof json,"{\"op\":\"puzzle.next\",\"day\":%d,\"rated\":true}",day);r=rpc(u1,json);CHECK(!cJSON_IsTrue(cJSON_GetObjectItem(r,"rated")));char attempt[80],line[256];snprintf(attempt,sizeof attempt,"%s",cJSON_GetObjectItem(r,"attempt")->valuestring);snprintf(line,sizeof line,"%s",cJSON_GetObjectItem(cJSON_GetObjectItem(r,"puzzle"),"moves")->valuestring);cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"puzzle.submit\",\"attempt\":\"%s\",\"moves\":\"%s\",\"hint\":true}",attempt,line);r=rpc(u1,json);const cJSON *result=cJSON_GetObjectItem(r,"result");CHECK(cJSON_IsTrue(cJSON_GetObjectItem(result,"solved")));CHECK(cJSON_GetObjectItem(result,"delta")->valueint==0);cJSON_Delete(r);
+            snprintf(json,sizeof json,"{\"op\":\"daily.calendar\",\"first\":%d,\"last\":%d}",day,day);r=rpc(u1,json);CHECK(cJSON_GetObjectItem(r,"current")->valueint==1);CHECK(cJSON_GetArraySize(cJSON_GetObjectItem(r,"rows"))==1);cJSON_Delete(r);
+            printf("v3 friends, private messages, invitations and daily completion  ok\n");
         }
 
         /* rated game: alice (White) resigns, Elo moves both ways */

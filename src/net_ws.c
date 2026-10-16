@@ -230,7 +230,7 @@ static bool ws_send(Transport *t, const char *line)
         return false;
     }
     size_t n = strlen(line);
-    if (n >= WS_LINELEN) n = WS_LINELEN - 1;
+    if (n >= WS_LINELEN) { pthread_mutex_unlock(&w->mu); return false; }
     memcpy(w->outq[w->out_tail], line, n);
     w->outq[w->out_tail][n] = '\0';
     w->out_tail = (w->out_tail + 1) % WS_QLEN;

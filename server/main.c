@@ -324,7 +324,7 @@ static void start_match(Room *r)
                 sessions[a].want_rated && sessions[b].want_rated);
     for(int k=0;k<2;k++){
         Session *player=&sessions[r->seat[k]];
-        snprintf(r->owner[k],40,"%s",player->logged_in?player->user:player->nick);
+        snprintf(r->owner[k],40,player->logged_in?"%s":"guest:%.32s",player->logged_in?player->user:player->token);
         player->pvp_rating=workspace_rating(g_workspace,r->owner[k],workspace_time_class(r->init_time,r->inc_ms));
     }
     unsigned char random[16];sqlite3_randomness(16,random);
@@ -496,7 +496,7 @@ static void apply_account(Session *s, const Account *ac)
     sqlite3_stmt *check=workspace_stmt(g_workspace,"SELECT 1 FROM oc_profiles WHERE owner=?");
     if(check){sqlite3_bind_text(check,1,ac->name,-1,SQLITE_TRANSIENT);fresh=sqlite3_step(check)!=SQLITE_ROW;sqlite3_finalize(check);}
     workspace_profile(g_workspace,ac->name,ac->pvp_rating);
-    if(fresh){check=workspace_stmt(g_workspace,"UPDATE oc_ratings SET value=? WHERE owner=? AND category=4");sqlite3_bind_int(check,1,ac->puzzle_rating);sqlite3_bind_text(check,2,ac->name,-1,SQLITE_TRANSIENT);sqlite3_step(check);sqlite3_finalize(check);}
+    if(fresh){check=workspace_stmt(g_workspace,"UPDATE oc_ratings SET value=? WHERE owner=? AND category=4");sqlite3_bind_int(check,1,ac->puzzle_rating);sqlite3_bind_text(check,2,ac->name,-1,SQLITE_TRANSIENT);sqlite3_step(check);sqlite3_finalize(check);check=workspace_stmt(g_workspace,"UPDATE oc_rating_events SET value=? WHERE owner=? AND category=4 AND source='initial'");sqlite3_bind_int(check,1,ac->puzzle_rating);sqlite3_bind_text(check,2,ac->name,-1,SQLITE_TRANSIENT);sqlite3_step(check);sqlite3_finalize(check);}
     s->logged_in = true;
     s->user_id = ac->id;
     snprintf(s->user, sizeof s->user, "%s", ac->name);
@@ -531,7 +531,9 @@ static void handle_register(Session *s, const ProtoFrame *f)
     const char *p = proto_field_str(f, "pass");
     Account ac;
     int r = accounts_register(g_accounts, u, p, &ac);
-    if (r == 1) { apply_account(s, &ac); send_auth(s, true, NULL); }
+    if (r == 1) {
+        if(s->room>=0&&rooms[s->room].started&&!rooms[s->room].over&&strcmp(rooms[s->room].owner[s->seat],ac.name)){send_reject(s,"Finish the current game before switching accounts");return;}
+        apply_account(s, &ac); send_auth(s, true, NULL); }
     else if (r == 0) send_auth(s, false, "name taken");
     else send_auth(s, false, "registration failed");
 }
@@ -543,19 +545,24 @@ static void handle_login(Session *s, const ProtoFrame *f)
     Account ac;
     if (tok && *tok) {
         int r = accounts_login_token(g_accounts, tok, &ac);
-        if (r == 1) { apply_account(s, &ac); send_auth(s, true, NULL); }
+        if (r == 1) {
+        if(s->room>=0&&rooms[s->room].started&&!rooms[s->room].over&&strcmp(rooms[s->room].owner[s->seat],ac.name)){send_reject(s,"Finish the current game before switching accounts");return;}
+        apply_account(s, &ac); send_auth(s, true, NULL); }
         else send_auth(s, false, "session expired");
         return;
     }
     const char *u = proto_field_str(f, "user");
     const char *p = proto_field_str(f, "pass");
     int r = accounts_login(g_accounts, u, p, &ac);
-    if (r == 1) { apply_account(s, &ac); send_auth(s, true, NULL); }
+    if (r == 1) {
+        if(s->room>=0&&rooms[s->room].started&&!rooms[s->room].over&&strcmp(rooms[s->room].owner[s->seat],ac.name)){send_reject(s,"Finish the current game before switching accounts");return;}
+        apply_account(s, &ac); send_auth(s, true, NULL); }
     else send_auth(s, false, "wrong user or password");
 }
 
 static void handle_logout(Session *s)
 {
+    if(s->room>=0&&!rooms[s->room].over){send_reject(s,"Finish the current game before logging out");return;}
     if (g_accounts && s->logged_in) accounts_logout(g_accounts, s->auth_token);
     s->logged_in = false;
     s->user_id = 0;
@@ -564,14 +571,27 @@ static void handle_logout(Session *s)
     send_auth(s, false, "logged out");
 }
 
+/* Account identity is shared by every connection, including reconnects. */
+static bool account_busy(Session *s)
+{
+    if(!s->logged_in)return false;
+    for(int k=0;k<MAX_SESS;k++){Session *other=&sessions[k];if(other==s||!other->used||!other->logged_in||other->user_id!=s->user_id)continue;
+        if(other->queued||(other->room>=0&&!rooms[other->room].over))return true;
+    }
+    return false;
+}
+static bool valid_clock(int base,int inc){return base>=0&&base<=10800000&&inc>=0&&inc<=60000&&(base>0||inc==0);}
+
 static void handle_create(Session *s, const ProtoFrame *f)
 {
+    if(account_busy(s)){send_reject(s,"Account already has an active game or queue");return;}
     if (s->room >= 0) {
         if (!rooms[s->room].over) { send_reject(s, "already in a game"); return; }
         leave_if_over(s);
     }
     int t = proto_field_int(f, "time", 0);
     int inc = proto_field_int(f, "inc", 0);
+    if(!valid_clock(t,inc)){send_reject(s,"Invalid time control");return;}
     s->want_rated = proto_field_bool(f, "rated", false);
     char code[CODE_LEN + 1];
     int ri = alloc_room(code, t, inc);
@@ -588,6 +608,7 @@ static void handle_create(Session *s, const ProtoFrame *f)
 
 static void handle_join(Session *s, const ProtoFrame *f)
 {
+    if(account_busy(s)){send_reject(s,"Account already has an active game or queue");return;}
     if (s->room >= 0) {
         if (!rooms[s->room].over) { send_reject(s, "already in a game"); return; }
         leave_if_over(s);
@@ -611,6 +632,7 @@ static void handle_join(Session *s, const ProtoFrame *f)
 
 static void handle_queue(Session *s, const ProtoFrame *f)
 {
+    if(account_busy(s)){send_reject(s,"Account already has an active game or queue");return;}
     if (s->queued) return;
     if (s->room >= 0) {
         if (!rooms[s->room].over) { send_reject(s, "already in a game"); return; }
@@ -620,6 +642,7 @@ static void handle_queue(Session *s, const ProtoFrame *f)
     s->want_inc = proto_field_int(f, "inc", 0);
     s->want_rated = proto_field_bool(f, "rated", false);
 
+    if(!valid_clock(s->want_time,s->want_inc)){send_reject(s,"Invalid time control");return;}
     s->queued = 1;
     queue_slots[queue_count++] = sidx(s);
 

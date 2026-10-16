@@ -53,7 +53,7 @@ Workspace *workspace_open(const char *file)
       "CREATE INDEX IF NOT EXISTS oc_rating_owner ON oc_rating_events(owner,category,created);"
       "CREATE TABLE IF NOT EXISTS oc_daily(day INTEGER PRIMARY KEY,puzzle TEXT NOT NULL);"
       "CREATE TABLE IF NOT EXISTS oc_daily_progress(owner TEXT,day INTEGER,completed INTEGER NOT NULL DEFAULT 0,practiced INTEGER NOT NULL DEFAULT 1,PRIMARY KEY(owner,day));"
-      "CREATE TABLE IF NOT EXISTS oc_attempts(owner TEXT,id TEXT,puzzle TEXT NOT NULL,rated INTEGER,day INTEGER NOT NULL DEFAULT 0,settled INTEGER DEFAULT 0,solved INTEGER DEFAULT 0,hint INTEGER DEFAULT 0,reveal INTEGER DEFAULT 0,elapsed INTEGER DEFAULT 0,delta INTEGER DEFAULT 0,created INTEGER NOT NULL,PRIMARY KEY(owner,id));"
+      "CREATE TABLE IF NOT EXISTS oc_attempts(owner TEXT,id TEXT,puzzle TEXT NOT NULL,rated INTEGER,day INTEGER NOT NULL DEFAULT 0,settled INTEGER DEFAULT 0,solved INTEGER DEFAULT 0,hint INTEGER DEFAULT 0,reveal INTEGER DEFAULT 0,elapsed INTEGER DEFAULT 0,delta INTEGER DEFAULT 0,created INTEGER NOT NULL,puzzle_id TEXT NOT NULL DEFAULT '',PRIMARY KEY(owner,id));"
       "CREATE INDEX IF NOT EXISTS oc_attempt_owner ON oc_attempts(owner,created);"
       "CREATE TABLE IF NOT EXISTS oc_friends(a INTEGER,b INTEGER,state INTEGER NOT NULL,requester INTEGER NOT NULL,PRIMARY KEY(a,b),CHECK(a<b));"
       "CREATE TABLE IF NOT EXISTS oc_blocks(owner INTEGER,target INTEGER,PRIMARY KEY(owner,target));"
@@ -62,6 +62,14 @@ Workspace *workspace_open(const char *file)
       "CREATE TABLE IF NOT EXISTS oc_games(id TEXT PRIMARY KEY,white TEXT,black TEXT,white_name TEXT,black_name TEXT,result TEXT,pgn TEXT,base INTEGER,inc INTEGER,category INTEGER,created INTEGER,rated INTEGER,series TEXT,plies INTEGER);"
       "INSERT OR IGNORE INTO oc_meta VALUES('schema','1');";
     if (sqlite3_exec(w->db,schema,NULL,NULL,NULL)!=SQLITE_OK) { workspace_close(w);return NULL; }
+    sqlite3_stmt *columns=workspace_stmt(w,"PRAGMA table_info(oc_attempts)");bool has_id=false;
+    while(sqlite3_step(columns)==SQLITE_ROW)if(!strcmp((const char *)sqlite3_column_text(columns,1),"puzzle_id"))has_id=true;
+    sqlite3_finalize(columns);
+    if(!has_id)sqlite3_exec(w->db,"ALTER TABLE oc_attempts ADD COLUMN puzzle_id TEXT NOT NULL DEFAULT ''",NULL,NULL,NULL);
+    sqlite3_stmt *old=workspace_stmt(w,"SELECT owner,id,puzzle FROM oc_attempts WHERE puzzle_id=''");
+    while(sqlite3_step(old)==SQLITE_ROW){cJSON *j=cJSON_Parse((const char *)sqlite3_column_text(old,2));sqlite3_stmt *update=workspace_stmt(w,"UPDATE oc_attempts SET puzzle_id=? WHERE owner=? AND id=?");text(update,1,str(j,"id"));text(update,2,(const char *)sqlite3_column_text(old,0));text(update,3,(const char *)sqlite3_column_text(old,1));sqlite3_step(update);sqlite3_finalize(update);cJSON_Delete(j);}
+    sqlite3_finalize(old);
+    sqlite3_exec(w->db,"CREATE INDEX IF NOT EXISTS oc_attempt_puzzle ON oc_attempts(owner,puzzle_id,settled);UPDATE oc_meta SET value='2' WHERE key='schema';",NULL,NULL,NULL);
     return w;
 }
 void workspace_close(Workspace *w) { if(w){sqlite3_close(w->db);free(w);} }
@@ -150,7 +158,7 @@ int workspace_rating(Workspace *w,const char *owner,int c) {
 bool workspace_pick(Workspace *w,const Puzzles *p,const char *owner,int rating,bool smart,const char *theme,Puzzle *out,char reason[128]) {
     reason[0]=0;char selected[64]="";int sample=0;
     if(smart&&w){
-        sqlite3_stmt *s=workspace_stmt(w,"SELECT puzzle,solved,elapsed FROM oc_attempts WHERE owner=? AND settled=1 AND day=0 AND created>=? ORDER BY created DESC LIMIT 1000");
+        sqlite3_stmt *s=workspace_stmt(w,"SELECT puzzle,CASE WHEN hint=1 OR reveal=1 THEN 0 ELSE solved END,elapsed FROM oc_attempts WHERE owner=? AND settled=1 AND day=0 AND created>=? AND rowid=(SELECT MIN(a.rowid) FROM oc_attempts a WHERE a.owner=oc_attempts.owner AND a.puzzle_id=oc_attempts.puzzle_id AND a.day=0 AND a.settled=1) ORDER BY created DESC LIMIT 1000");
         text(s,1,owner);sqlite3_bind_int64(s,2,time(NULL)-30*86400);
         struct {char name[64];int n,success;int64_t elapsed;} stats[64]={0};int nstats=0;
         while(sqlite3_step(s)==SQLITE_ROW){sample++;cJSON *j=cJSON_Parse((const char *)sqlite3_column_text(s,0));char tags[192];snprintf(tags,sizeof tags,"%s",str(j,"themes"));cJSON_Delete(j);
@@ -161,7 +169,10 @@ bool workspace_pick(Workspace *w,const Puzzles *p,const char *owner,int rating,b
                 if(stats[k].n<50){stats[k].n++;stats[k].success+=sqlite3_column_int(s,1);stats[k].elapsed+=sqlite3_column_int(s,2);}
             }
         }sqlite3_finalize(s);
+        static const char *topics[]={"fork","pin","skewer","discoveredAttack","deflection","attraction","sacrifice","defensiveMove","mateIn1","mateIn2","mateIn3","endgame","promotion","hangingPiece","backRankMate"};
+        for(size_t t=0;t<sizeof topics/sizeof topics[0];t++){int k=0;while(k<nstats&&strcmp(stats[k].name,topics[t]))k++;if(k==nstats&&nstats<64){snprintf(stats[nstats++].name,64,"%s",topics[t]);}}
         int roll=rand()%100;
+        if(sample<10&&nstats){int least=100000,best=0,ties=0;for(int k=0;k<nstats;k++){if(stats[k].n<least){least=stats[k].n;best=k;ties=1;}else if(stats[k].n==least&&rand()%++ties==0)best=k;}snprintf(selected,sizeof selected,"%s",stats[best].name);}
         if(sample>=10&&roll>=90){s=workspace_stmt(w,"SELECT puzzle FROM oc_attempts WHERE owner=? AND day=0 AND settled=1 AND solved=0 AND created<=? ORDER BY RANDOM() LIMIT 1");text(s,1,owner);sqlite3_bind_int64(s,2,time(NULL)-86400);bool found=false;
             if(sqlite3_step(s)==SQLITE_ROW){cJSON *j=cJSON_Parse((const char *)sqlite3_column_text(s,0));found=workspace_puzzle_parse(j,out);cJSON_Delete(j);}sqlite3_finalize(s);
             if(found){snprintf(reason,128,"Review: %s",out->themes);return true;}}
@@ -189,8 +200,9 @@ bool workspace_pick(Workspace *w,const Puzzles *p,const char *owner,int rating,b
 bool workspace_issue(Workspace *w,const char *owner,const char *id,const Puzzle *p,bool rated,int day) {
     if(!w||!owner||!id||!*id)return false;
     cJSON *j=workspace_puzzle_json(p);char *snapshot=cJSON_PrintUnformatted(j);cJSON_Delete(j);
-    sqlite3_stmt *s=workspace_stmt(w,"INSERT OR IGNORE INTO oc_attempts(owner,id,puzzle,rated,day,created) VALUES(?,?,?,?,?,?)");text(s,1,owner);text(s,2,id);text(s,3,snapshot);sqlite3_bind_int(s,4,rated&&day==0);sqlite3_bind_int(s,5,day);sqlite3_bind_int64(s,6,time(NULL));free(snapshot);
-    bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);return ok;
+    sqlite3_stmt *s=workspace_stmt(w,"INSERT OR IGNORE INTO oc_attempts(owner,id,puzzle,rated,day,created,puzzle_id) VALUES(?,?,?,?,?,?,?)");text(s,1,owner);text(s,2,id);text(s,3,snapshot);sqlite3_bind_int(s,4,rated&&day==0);sqlite3_bind_int(s,5,day);sqlite3_bind_int64(s,6,time(NULL));text(s,7,p->id);free(snapshot);
+    bool ok=sqlite3_step(s)==SQLITE_DONE;sqlite3_finalize(s);
+    if(ok&&day){s=workspace_stmt(w,"INSERT OR IGNORE INTO oc_daily_progress(owner,day,completed,practiced) VALUES(?,?,0,1)");text(s,1,owner);sqlite3_bind_int(s,2,day);sqlite3_step(s);sqlite3_finalize(s);}return ok;
 }
 static bool solution(const Puzzle *p,const char *moves) {
     /* The first UCI move belongs to the opponent; callers submit the complete
@@ -214,15 +226,16 @@ cJSON *workspace_submit(Workspace *w,const char *owner,const char *id,const char
     cJSON *j=cJSON_Parse((const char *)sqlite3_column_text(s,0));Puzzle p;bool valid=workspace_puzzle_parse(j,&p);cJSON_Delete(j);
     int rated=sqlite3_column_int(s,1),day=sqlite3_column_int(s,2),settled=sqlite3_column_int(s,3),delta=sqlite3_column_int(s,4),solved=sqlite3_column_int(s,5);sqlite3_finalize(s);
     if(!settled){solved=valid&&!reveal&&solution(&p,moves);int old=workspace_rating(w,owner,4),next=old;
+        if(rated){s=workspace_stmt(w,"SELECT 1 FROM oc_attempts WHERE owner=? AND puzzle_id=? AND day=0 AND settled=1 AND id!=? LIMIT 1");text(s,1,owner);text(s,2,p.id);text(s,3,id);if(sqlite3_step(s)==SQLITE_ROW)rated=0;sqlite3_finalize(s);}
         if(rated){double exp=1.0/(1.0+pow(10.0,(p.rating-old)/400.0));
             if(!solved||!hint)next=(int)lround(old+(old<2000?40:24)*((solved?1.0:0.0)-exp));
             if(next<400)next=400;if(next>3000)next=3000;delta=next-old;
         }
         if(elapsed<0)elapsed=0;if(elapsed>24*3600000)elapsed=24*3600000;
-        s=workspace_stmt(w,"UPDATE oc_attempts SET settled=1,solved=?,hint=?,reveal=?,elapsed=?,delta=? WHERE owner=? AND id=?");sqlite3_bind_int(s,1,solved);sqlite3_bind_int(s,2,hint);sqlite3_bind_int(s,3,reveal);sqlite3_bind_int(s,4,elapsed);sqlite3_bind_int(s,5,delta);text(s,6,owner);text(s,7,id);sqlite3_step(s);sqlite3_finalize(s);
+        s=workspace_stmt(w,"UPDATE oc_attempts SET settled=1,solved=?,hint=?,reveal=?,elapsed=?,delta=?,rated=? WHERE owner=? AND id=?");sqlite3_bind_int(s,1,solved);sqlite3_bind_int(s,2,hint);sqlite3_bind_int(s,3,reveal);sqlite3_bind_int(s,4,elapsed);sqlite3_bind_int(s,5,delta);sqlite3_bind_int(s,6,rated);text(s,7,owner);text(s,8,id);sqlite3_step(s);sqlite3_finalize(s);
         if(rated){s=workspace_stmt(w,"UPDATE oc_ratings SET value=? WHERE owner=? AND category=4");sqlite3_bind_int(s,1,next);text(s,2,owner);sqlite3_step(s);sqlite3_finalize(s);
             s=workspace_stmt(w,"INSERT OR IGNORE INTO oc_rating_events(owner,category,value,created,source) VALUES(?,4,?,?,?)");text(s,1,owner);sqlite3_bind_int(s,2,next);sqlite3_bind_int64(s,3,time(NULL));text(s,4,id);sqlite3_step(s);sqlite3_finalize(s);}
         if(day){s=workspace_stmt(w,"INSERT INTO oc_daily_progress(owner,day,completed) VALUES(?,?,?) ON CONFLICT(owner,day) DO UPDATE SET practiced=1,completed=MAX(completed,excluded.completed)");text(s,1,owner);sqlite3_bind_int(s,2,day);sqlite3_bind_int(s,3,solved);sqlite3_step(s);sqlite3_finalize(s);}
     }
-    sqlite3_exec(w->db,"COMMIT",NULL,NULL,NULL);cJSON_AddBoolToObject(r,"solved",solved);cJSON_AddNumberToObject(r,"delta",delta);cJSON_AddNumberToObject(r,"rating",workspace_rating(w,owner,4));return r;
+    sqlite3_exec(w->db,"COMMIT",NULL,NULL,NULL);cJSON_AddBoolToObject(r,"solved",solved);cJSON_AddBoolToObject(r,"rated",rated!=0);cJSON_AddNumberToObject(r,"delta",delta);cJSON_AddNumberToObject(r,"rating",workspace_rating(w,owner,4));return r;
 }
