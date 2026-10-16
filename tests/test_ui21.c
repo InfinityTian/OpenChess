@@ -16,9 +16,17 @@ static void puzzle_fixture(Gui *g,const char *id,const char *fen,const char *mov
 }
 static void square_click(Gui *g,const char *name){int file=name[0]-'a',rank=name[1]-'1';click(g,g->board_x+(g->flipped?7-file:file)*g->sq+g->sq/2,g->board_y+(g->flipped?rank:7-rank)*g->sq+g->sq/2);}
 static void promotion_click(Gui *g,int choice){int file=g->promo_to%8,rank=g->promo_to/8;int sx=g->board_x+(g->flipped?7-file:file)*g->sq,sy=g->board_y+(g->flipped?rank:7-rank)*g->sq;int x=sx-8,y=sy-90;if(y<g->board_y)y=sy+g->sq+10;if(x<g->board_x)x=sx;if(x+216>g->board_x+8*g->sq)x=g->board_x+8*g->sq-216;click(g,x+choice*54+25,y+23);}
-int main(void)
+static void game_fixture(Gui *g,GameMode mode,const char *fen,const char *line,const char *result){
+ fen_parse(fen,&g->board);g->ply=0;g->scene=SCENE_GAME;g->mode=mode;g->selected=-1;g->targets.count=0;g->anim_count=0;g->san_open=false;g->ui->local_game_saved=false;
+ char moves[256];snprintf(moves,sizeof moves,"%s",line);char *save=NULL;
+ for(char *uci=strtok_r(moves," ",&save);uci;uci=strtok_r(NULL," ",&save)){Move move;if(!uci_to_move(&g->board,uci,&move))abort();g->before[g->ply]=g->board;g->history[g->ply]=move;move_to_san(&g->board,move,g->move_san[g->ply],8);make_move_plumb(&g->board,move);g->ply++;}
+ g->state=game_state(&g->board);snprintf(g->override_result,sizeof g->override_result,"%s",result);g->online_over=mode==MODE_ONLINE;
+}
+int main(int argc,char **argv)
 {SDL_setenv("SDL_VIDEODRIVER","dummy",1);SDL_setenv("OPENCHESS_CONFIG","/tmp/openchess-ui21-test/chess.conf",1);SDL_setenv("XDG_DATA_HOME","/tmp/openchess-ui21-test",1);if(SDL_Init(SDL_INIT_VIDEO)||TTF_Init())return 1;IMG_Init(IMG_INIT_PNG);
- SDL_Surface *surface=SDL_CreateRGBSurfaceWithFormat(0,WIN_W,WIN_H,32,SDL_PIXELFORMAT_RGBA32);SDL_Renderer *r=SDL_CreateSoftwareRenderer(surface);Gui *g=gui_create();gui_init_assets(g,r);if(!g->ui||!g->ui->store||!g->font_ui||!g->puzzles)return 1;
+ SDL_Surface *surface=SDL_CreateRGBSurfaceWithFormat(0,WIN_W,WIN_H,32,SDL_PIXELFORMAT_RGBA32);SDL_Renderer *r=SDL_CreateSoftwareRenderer(surface);Gui *g=gui_create();
+ if(argc>1&&!strcmp(argv[1],"--random-probe")){Puzzle selected;bool ok=workspace_pick_level(g->puzzles,1500,2,NULL,&selected);if(ok)puts(selected.id);gui_destroy(g);SDL_DestroyRenderer(r);SDL_FreeSurface(surface);TTF_Quit();SDL_Quit();return ok?0:1;}
+ gui_init_assets(g,r);if(!g->ui||!g->ui->store||!g->font_ui||!g->puzzles)return 1;
  capture(g,r,"home");g->ui->zh=true;capture(g,r,"home-zh");g->ui->nav_hover=2;capture(g,r,"submenu");g->ui->nav_hover=-1;
  g->scene=SCENE_ANALYSIS_HOME;snprintf(g->ui->input,sizeof g->ui->input,"1. e4 Qh9");click(g,g->panel_x+40,260);if(g->scene!=SCENE_ANALYSIS_HOME||!g->ui->input[0]||!g->ui->status[0])return 7;g->ui->input[0]=g->ui->status[0]=0;capture(g,r,"analysis");click(g,g->panel_x+70,335);if(g->scene!=SCENE_POSITION_SETUP)return 2;capture(g,r,"setup");
  g->scene=SCENE_MENU;click(g,1150,800);if(g->mode!=MODE_PUZZLE||g->ui->current_entry<0)return 3;capture(g,r,"daily");
@@ -76,6 +84,17 @@ int main(void)
  SDL_Rect row=g->move_hit_rect[hit];click(g,row.x+row.w/2,row.y+10);capture(g,r,"puzzle-answer-rewind");if(g->puzzle_step!=1||g->move_hit_count!=4)return 40;
  Board root;fen_parse(start_fen,&root);Move first;uci_to_move(&root,"e2e4",&first);make_move_plumb(&root,first);
  click(g,g->panel_x+60,g->board_y+580);if(g->mode!=MODE_ANALYSIS||g->ply||!g->pgntree||!board_rep_equal(&root,&g->pgntree->board))return 41;capture(g,r,"puzzle-to-analysis");
+ /* Random-side selection is resolved afresh for each computer game. */
+ g->scene=SCENE_SINGLE_SETUP;g->setup_field=0;g->setup_side=1;keypress(g,SDLK_RIGHT);if(g->setup_side!=2)return 42;capture(g,r,"random-side-option");
+ keypress(g,SDLK_RIGHT);if(g->setup_side!=0)return 43;keypress(g,SDLK_LEFT);if(g->setup_side!=2)return 44;
+ if(g->engine_path[0]){unsigned colors=0;srand(12345);for(int k=0;k<32;k++){g->scene=SCENE_SINGLE_SETUP;g->setup_field=0;keypress(g,SDLK_RETURN);if(g->mode!=MODE_SINGLE||g->human_color<WHITE||g->human_color>BLACK||g->setup_side!=2)return 45;colors|=1u<<g->human_color;}if(colors!=3)return 46;}
+ game_fixture(g,MODE_SINGLE,start_fen,"","");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_SINGLE)return 47;
+ game_fixture(g,MODE_SINGLE,start_fen,"e2e4 e7e5 f1c4 b8c6 d1h5 g8f6 h5f7","");capture(g,r,"finished-game-analysis-option");
+ Board final=g->board;click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=7||mt_depth(g->tree_cur)!=7||strcmp(g->pgn_hdr.result,"1-0")||!board_rep_equal(&final,&g->board))return 48;
+ keypress(g,SDLK_LEFT);if(g->ply!=6)return 49;keypress(g,SDLK_RIGHT);if(g->ply!=7)return 50;capture(g,r,"finished-game-analysis");
+ game_fixture(g,MODE_ONLINE,start_fen,"e2e4 e7e5","0-1");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||strcmp(g->pgn_hdr.result,"0-1"))return 51;
+ const char *custom="7k/8/8/8/8/8/R7/K7 w - - 0 23";Board initial;fen_parse(custom,&initial);
+ game_fixture(g,MODE_LOCAL,custom,"a2a3 h8g8","1/2-1/2");click(g,g->panel_x+216,g->win_h-100);if(g->mode!=MODE_ANALYSIS||g->ply!=2||!board_rep_equal(&initial,&g->pgntree->board)||strcmp(g->pgn_hdr.result,"1/2-1/2"))return 52;
  gui_destroy(g);SDL_DestroyRenderer(r);SDL_FreeSurface(surface);
  SDL_Window *window=SDL_CreateWindow("UI test",0,0,1024,720,SDL_WINDOW_HIDDEN);r=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);g=gui_create();gui_init_assets(g,r);SDL_SetWindowSize(window,1024,720);g->board_driven_resize=false;SDL_Event resize={0};resize.type=SDL_WINDOWEVENT;resize.window.event=SDL_WINDOWEVENT_SIZE_CHANGED;resize.window.data1=1024;resize.window.data2=720;gui_handle_event(g,&resize);g->scene=SCENE_MENU;capture(g,r,"compact-top");g->mouse.x=600;SDL_Event wheel={0};wheel.type=SDL_MOUSEWHEEL;wheel.wheel.y=-8;gui_handle_event(g,&wheel);if(g->ui->home_scroll<=0)return 6;capture(g,r,"compact-scroll");gui_destroy(g);SDL_DestroyRenderer(r);SDL_DestroyWindow(window);
  TTF_Quit();SDL_Quit();puts("V2.1 UI screens rendered and navigation passed.");return 0;}

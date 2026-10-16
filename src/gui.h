@@ -155,7 +155,7 @@ typedef struct {
 
     /* singleplayer (Stockfish) setup + state */
     int    setup_field;         /* 0 = side, 1 = difficulty */
-    int    setup_side;          /* 0 = white, 1 = black */
+    int    setup_side;          /* 0 = white, 1 = black, 2 = random */
     int    setup_level;         /* index into AI_LEVELS */
     char   engine_path[512];
     AiEngine *ai;

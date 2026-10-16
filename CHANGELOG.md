@@ -9,6 +9,11 @@ All notable changes to OpenChess. The format follows
 ## [2.1.1] - 2026-10-16
 
 ### Changed
+- Desktop random selection is seeded from OS-backed entropy once per launch,
+  fixing identical first puzzles across application starts.
+- Computer games offer White, Black or Random; Random draws a new side per game.
+- Finished computer, LAN and online games provide an Analysis shortcut that
+  keeps the initial position, complete move tree, player names and result.
 - Maple Mono NF CN is bundled as the default UI font, with its OFL license;
   Appearance adds a Fonts tab with persistent Maple/Noto selection.
 - Puzzle retries support Left-arrow and move-row navigation without repeated

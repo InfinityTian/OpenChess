@@ -31,6 +31,8 @@ static void puzzle_rewind(Gui *g,int step);
 static void ui_puzzle_feedback(Gui *g);
 static void ui_result_icon(Gui *g,float x,float y,float radius,bool correct,bool disc);
 static void ui_disabled_button(Gui *g,SDL_Rect rect,const char *label);
+static bool ui_finished_game(Gui *g);
+static void ui_game_analyse(Gui *g);
 static void review_start(Gui *g);
 static void review_step(Gui *g);
 static void open_account(Gui *g);
@@ -1509,7 +1511,7 @@ static void start_single(Gui *g)
     eval_stop(g);
     g->scene = SCENE_GAME;
     g->mode = MODE_SINGLE;
-    g->human_color = (g->setup_side == 1) ? BLACK : WHITE;
+    g->human_color = g->setup_side==2?(Color)(rand()%2):(g->setup_side==1?BLACK:WHITE);
     if (g->human_color == WHITE) {
         snprintf(g->white_name, sizeof g->white_name, "You");
         snprintf(g->black_name, sizeof g->black_name, "Stockfish");
@@ -1829,6 +1831,10 @@ void gui_cycle_anim(Gui *g)
 
 Gui *gui_create(void)
 {
+    /* Seed once per desktop process, before home previews or puzzle selection.
+     * OS-backed SQLite entropy also distinguishes launches within one second. */
+    static bool seeded=false;
+    if(!seeded){unsigned seed;sqlite3_randomness(sizeof seed,&seed);srand(seed);seeded=true;}
     Gui *g = calloc(1, sizeof *g);
     if (!g) return NULL;
     g->ui_scale = 1.0f;
@@ -2365,27 +2371,26 @@ static void handle_menu_mousemotion(Gui *g)
 
 /* ---- singleplayer setup ---- */
 
-static void setup_rects(const Gui *g, SDL_Rect sides[2], SDL_Rect levels[3],
+static void setup_rects(const Gui *g, SDL_Rect sides[3], SDL_Rect levels[3],
                         SDL_Rect *start, SDL_Rect *back)
 {
     int bw = 120, bh = 48, gap = 20;
-    int x0 = (g->win_w - (2 * bw + gap)) / 2;
-    sides[0] = (SDL_Rect){ x0, 300, bw, bh };
-    sides[1] = (SDL_Rect){ x0 + bw + gap, 300, bw, bh };
+    int x0 = 208+(g->win_w-208-(3*bw+2*gap))/2;
+    for(int i=0;i<3;i++)sides[i]=(SDL_Rect){x0+i*(bw+gap),300,bw,bh};
 
     int lg = 16;
-    int lx = (g->win_w - (3 * bw + 2 * lg)) / 2;
+    int lx = 208+(g->win_w-208-(3*bw+2*lg))/2;
     for (int i = 0; i < 3; i++)
         levels[i] = (SDL_Rect){ lx + i * (bw + lg), 420, bw, bh };
 
-    start->w = 150; start->h = 46; start->x = g->win_w / 2 - 160; start->y = 540;
-    back->w  = 150; back->h  = 46; back->x  = g->win_w / 2 + 10;  back->y  = 540;
+    start->w = 150; start->h = 46; start->x = (208+(g->win_w-208)/2) - 160; start->y = 540;
+    back->w  = 150; back->h  = 46; back->x  = (208+(g->win_w-208)/2) + 10;  back->y  = 540;
 }
 
 static void setup_change(Gui *g, int dir)
 {
     if (g->setup_field == 0)
-        g->setup_side = (g->setup_side + dir + 2) % 2;
+        g->setup_side = (g->setup_side + dir + 3) % 3;
     else
         g->setup_level = (g->setup_level + dir + AI_LEVEL_COUNT) % AI_LEVEL_COUNT;
 }
@@ -2414,11 +2419,11 @@ static void handle_setup_keydown(Gui *g, const SDL_KeyboardEvent *ke)
 
 static void handle_setup_mousedown(Gui *g)
 {
-    SDL_Rect sides[2], levels[3], start, back;
+    SDL_Rect sides[3], levels[3], start, back;
     setup_rects(g, sides, levels, &start, &back);
     SDL_Point p = g->mouse;
 
-    for (int i = 0; i < 2; i++)
+    for (int i = 0; i < 3; i++)
         if (pt_in(&sides[i], p.x, p.y)) { g->setup_field = 0; g->setup_side = i; return; }
     for (int i = 0; i < 3; i++)
         if (pt_in(&levels[i], p.x, p.y)) { g->setup_field = 1; g->setup_level = i; return; }
@@ -4661,7 +4666,7 @@ static void handle_game_mousedown(Gui *g)
     if (pt_in(&styles, p.x, p.y)) {
         if (g->mode == MODE_PUZZLE) open_puzzle(g);
         else if (g->mode == MODE_ANALYSIS) pgn_import_open(g);
-        else return;
+        else if(ui_finished_game(g))ui_game_analyse(g);
         return;
     }
     if (pt_in(&pgn, p.x, p.y)) { pgn_open_prompt(g); return; }
@@ -7277,6 +7282,7 @@ static void render_buttons(Gui *g, SDL_Renderer *ren)
                              : (g->mode == MODE_ANALYSIS) ? "Import" : "Styles";
     if(g->mode==MODE_PUZZLE&&!g->puzzle_done&&!g->puzzle_failed&&!g->puzzle_solution_visible)ui_disabled_button(g,styles,ui_old_text(g,"Next"));
     else if(g->mode==MODE_PUZZLE||g->mode==MODE_ANALYSIS)render_text_centered_rect(g, ren, &styles, styles_label);
+    else if(ui_finished_game(g))render_text_centered_rect_f(g,ren,&styles,g->font_small,"Analysis");
     render_text_centered_rect_f(g, ren, &pgn, g->font_small, "Save PGN");
     render_text_centered_rect(g, ren, &menu, "Menu");
     const char *legend;
@@ -7297,16 +7303,16 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     ui_background(g,ren);
 
-    render_text_centered(g, g->font_ui, "Singleplayer", g->win_w / 2, 150,
+    render_text_centered(g, g->font_ui, "Singleplayer", (208+(g->win_w-208)/2), 150,
                          (SDL_Color){ 235, 225, 200, 255 });
 
-    SDL_Rect sides[2], levels[3], start, back;
+    SDL_Rect sides[3], levels[3], start, back;
     setup_rects(g, sides, levels, &start, &back);
 
-    render_text_centered(g, g->font_small, "Play as", g->win_w / 2, 268,
+    render_text_centered(g, g->font_small, "Play as", (208+(g->win_w-208)/2), 268,
                          (SDL_Color){ 150, 180, 200, 255 });
-    const char *side_labels[2] = { "White", "Black" };
-    for (int i = 0; i < 2; i++) {
+    const char *side_labels[3] = { "White", "Black", "Random" };
+    for (int i = 0; i < 3; i++) {
         bool chosen = (g->setup_side == i);
         bool focus  = chosen && g->setup_field == 0;
         draw_rect(ren, &sides[i], chosen ? 70 : 40, chosen ? 80 : 50,
@@ -7319,7 +7325,7 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
                              (SDL_Color){ 235, 235, 235, 255 });
     }
 
-    render_text_centered(g, g->font_small, "Difficulty", g->win_w / 2, 388,
+    render_text_centered(g, g->font_small, "Difficulty", (208+(g->win_w-208)/2), 388,
                          (SDL_Color){ 150, 180, 200, 255 });
     for (int i = 0; i < AI_LEVEL_COUNT; i++) {
         bool chosen = (g->setup_level == i);
@@ -7348,14 +7354,14 @@ static void render_setup(Gui *g, SDL_Renderer *ren)
     if (!engine_ok)
         render_text_centered(g, g->font_small,
                              g->engine_install_status[0] ? g->engine_install_status : "Stockfish unavailable. Open Settings > Engine to install.",
-                             g->win_w / 2, 610, (SDL_Color){ 255, 140, 120, 255 });
+                             (208+(g->win_w-208)/2), 610, (SDL_Color){ 255, 140, 120, 255 });
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 640,
+        render_text_centered(g, g->font_small, g->menu_msg, (208+(g->win_w-208)/2), 640,
                              (SDL_Color){ 255, 170, 120, 255 });
 
     render_text_centered(g, g->font_small,
                          "Left/Right change    Up/Down field    Enter start    Esc back",
-                         g->win_w / 2, g->win_h - 80,
+                         (208+(g->win_w-208)/2), g->win_h - 80,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
@@ -7376,7 +7382,7 @@ static void render_hostjoin(Gui *g, SDL_Renderer *ren)
     set_render_color(ren, 22, 26, 34);
     ui_background(g,ren);
 
-    render_text_centered(g, g->font_ui, "Local Multiplayer", g->win_w / 2, 150,
+    render_text_centered(g, g->font_ui, "Local Multiplayer", (208+(g->win_w-208)/2), 150,
                          (SDL_Color){ 235, 225, 200, 255 });
 
     SDL_Rect addr, port, host, join, back;
@@ -7405,15 +7411,15 @@ static void render_hostjoin(Gui *g, SDL_Renderer *ren)
 
     render_text_centered(g, g->font_small,
                          "Host = White, Join = Black.  Start the host first.",
-                         g->win_w / 2, 560, (SDL_Color){ 140, 170, 190, 255 });
+                         (208+(g->win_w-208)/2), 560, (SDL_Color){ 140, 170, 190, 255 });
 
     if (g->menu_msg[0])
-        render_text_centered(g, g->font_small, g->menu_msg, g->win_w / 2, 600,
+        render_text_centered(g, g->font_small, g->menu_msg, (208+(g->win_w-208)/2), 600,
                              (SDL_Color){ 255, 180, 120, 255 });
 
     render_text_centered(g, g->font_small,
                          "Tab/Up/Down field    type to edit    Enter activate    Esc back",
-                         g->win_w / 2, g->win_h - 80,
+                         (208+(g->win_w-208)/2), g->win_h - 80,
                          (SDL_Color){ 110, 120, 130, 255 });
 }
 
